@@ -12,7 +12,13 @@ A lattice gas on a hexagonal lattice with:
 - Proper thermalization (unlike HPP)
 
 Usage:
-    python fhp_iii_simulation.py [size] [--test] [--save]
+    python fhp_iii_simulation.py [size] [--test] [--save] [--gradient]
+
+Modes:
+    (default)   Interactive visualization with blob initialization
+    --test      Quick physics verification
+    --save      Save frames to disk
+    --gradient  Gradient mode: inject particles left, absorb right
 """
 
 import numpy as np
@@ -64,29 +70,37 @@ COLLISION_TABLE_ODD = np.array([0, 1, 2, 3, 4, 66, 6, 7, 8, 36, 68, 69, 12, 74, 
 class FHPLattice:
     """FHP-III Lattice Gas Simulation."""
     
-    def __init__(self, Lx, Ly, boundary='periodic'):
+    def __init__(self, Lx, Ly, boundary='periodic', p_inject=0.0, p_absorb=0.0):
         """
         Initialize lattice.
-        
+
         Args:
             Lx: Width (number of sites in x)
             Ly: Height (number of sites in y)
-            boundary: 'periodic' or 'walls'
+            boundary: 'periodic', 'walls', or 'gradient'
+            p_inject: Probability to inject eastward particle at left boundary (gradient mode)
+            p_absorb: Probability to absorb particles at right boundary (gradient mode)
         """
         self.Lx = Lx
         self.Ly = Ly
         self.boundary = boundary
-        
+        self.p_inject = p_inject
+        self.p_absorb = p_absorb
+
         # State array: 7 bits per site packed into uint8
         self.state = np.zeros((Lx, Ly), dtype=np.uint8)
-        
+
         # Pre-compute parity mask
         x_idx, y_idx = np.meshgrid(np.arange(Lx), np.arange(Ly), indexing='ij')
         self.parity = (x_idx + y_idx) % 2
-        
+
         # Pre-compute row parity for streaming
         self.row_parity = np.arange(Ly) % 2
-        
+
+        # Track particles injected/absorbed for statistics
+        self.particles_injected = 0
+        self.particles_absorbed = 0
+
         self.time = 0
     
     def get_density(self):
@@ -106,7 +120,12 @@ class FHPLattice:
     def get_rest_count(self):
         """Get rest particle count (direction 6)."""
         return (self.state >> R) & 1
-    
+
+    def get_density_profile(self):
+        """Get average density at each x position (useful for gradient visualization)."""
+        density = self.get_density()
+        return density.mean(axis=1)  # Average over y
+
     def get_momentum(self):
         """Get momentum field at each site."""
         px = np.zeros((self.Lx, self.Ly), dtype=np.int32)
@@ -133,7 +152,40 @@ class FHPLattice:
     def total_rest(self):
         """Total rest particles."""
         return self.get_rest_count().sum()
-    
+
+    def boundary_driving_step(self):
+        """
+        Apply boundary driving for gradient mode.
+
+        - Left boundary (x=0): Inject eastward particles with probability p_inject
+        - Right boundary (x=Lx-1): Absorb particles with probability p_absorb
+
+        This creates a steady-state density gradient that can drive "work".
+        """
+        if self.boundary != 'gradient':
+            return
+
+        # Left boundary: inject eastward (E) particles
+        for y in range(self.Ly):
+            # Only inject if there's no E particle already
+            if not (self.state[0, y] & (1 << E)):
+                if np.random.random() < self.p_inject:
+                    self.state[0, y] |= (1 << E)
+                    self.particles_injected += 1
+
+        # Right boundary: absorb particles
+        for y in range(self.Ly):
+            site_state = int(self.state[self.Lx - 1, y])
+            if site_state != 0:
+                # Absorb each particle with probability p_absorb
+                new_state = site_state
+                for d in range(7):
+                    if site_state & (1 << d):
+                        if np.random.random() < self.p_absorb:
+                            new_state ^= (1 << d)  # XOR to clear bit
+                            self.particles_absorbed += 1
+                self.state[self.Lx - 1, y] = np.uint8(new_state)
+
     def collision_step(self):
         """Apply collision rules via parity-dependent lookup."""
         even_result = COLLISION_TABLE_EVEN[self.state]
@@ -143,42 +195,53 @@ class FHPLattice:
     def streaming_step(self):
         """Move particles to neighboring sites on hexagonal lattice."""
         new_state = np.zeros_like(self.state)
-        
+
         # Process each direction separately
         for d in range(6):
             particles = (self.state >> d) & 1
-            
+
             # Create shifted arrays for even and odd rows
             shifted = np.zeros_like(particles)
-            
+
             for y in range(self.Ly):
                 if y % 2 == 0:
                     dx, dy = NEIGHBORS_EVEN[d]
                 else:
                     dx, dy = NEIGHBORS_ODD[d]
-                
+
                 for x in range(self.Lx):
                     if particles[x, y]:
                         # Target position
-                        nx = (x + dx) % self.Lx
-                        ny = (y + dy) % self.Ly
-                        
+                        nx = x + dx
+                        ny = y + dy
+
                         if self.boundary == 'periodic':
+                            nx = nx % self.Lx
+                            ny = ny % self.Ly
                             shifted[nx, ny] = 1
                         elif self.boundary == 'walls':
-                            # Bounce back at walls
-                            if 0 <= x + dx < self.Lx and 0 <= y + dy < self.Ly:
+                            # Bounce back at all walls
+                            if 0 <= nx < self.Lx and 0 <= ny < self.Ly:
                                 shifted[nx, ny] = 1
                             else:
                                 # Reflect: particle stays at (x,y) but reverses direction
                                 opp_d = (d + 3) % 6  # Opposite direction
                                 new_state[x, y] |= (1 << opp_d)
-            
+                        elif self.boundary == 'gradient':
+                            # Gradient mode: periodic in y, walls in x
+                            ny = ny % self.Ly  # Periodic in y
+                            if 0 <= nx < self.Lx:
+                                shifted[nx, ny] = 1
+                            else:
+                                # Bounce back at left/right walls
+                                opp_d = (d + 3) % 6
+                                new_state[x, y] |= (1 << opp_d)
+
             new_state |= (shifted << d)
-        
+
         # Rest particles don't move
         new_state |= (self.state & (1 << R))
-        
+
         self.state = new_state.astype(np.uint8)
     
     def streaming_step_vectorized(self):
@@ -223,6 +286,7 @@ class FHPLattice:
         """One full timestep."""
         self.collision_step()
         self.streaming_step()  # Use non-vectorized for correctness
+        self.boundary_driving_step()  # Apply injection/absorption for gradient mode
         self.time += 1
     
     def initialize_blob(self, cx, cy, radius, density=0.5, rest_fraction=0.0):
@@ -479,16 +543,111 @@ def run_test():
         print("\n✗ Some tests failed!")
 
 
+def run_gradient(Lx=64, Ly=64, steps=500, p_inject=0.3, p_absorb=0.5):
+    """
+    Run simulation with gradient boundary driving.
+
+    Particles are injected on the left (moving East) and absorbed on the right,
+    creating a steady-state density gradient.
+    """
+    print(f"Creating FHP-III lattice with gradient: {Lx}x{Ly}")
+    print(f"  p_inject={p_inject}, p_absorb={p_absorb}")
+
+    lattice = FHPLattice(Lx, Ly, boundary='gradient',
+                         p_inject=p_inject, p_absorb=p_absorb)
+    # Start with low uniform density
+    lattice.initialize_uniform(density=0.1, rest_fraction=0.05)
+
+    print(f"Initial particles: {lattice.total_particles()}")
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig.suptitle(f'FHP-III Gradient Mode ({Lx}x{Ly})', fontsize=14)
+
+    # Density plot
+    ax_density = axes[0, 0]
+    density = lattice.get_density()
+    im_density = ax_density.imshow(density.T, origin='lower', cmap='hot',
+                                    vmin=0, vmax=7, interpolation='nearest')
+    ax_density.set_title('Particle Density')
+    ax_density.set_xlabel('x (left=inject, right=absorb)')
+    plt.colorbar(im_density, ax=ax_density)
+
+    # Density profile (x-averaged)
+    ax_profile = axes[0, 1]
+    profile = lattice.get_density_profile()
+    line_profile, = ax_profile.plot(profile, 'b-', linewidth=2)
+    ax_profile.set_xlim(0, Lx)
+    ax_profile.set_ylim(0, 4)
+    ax_profile.set_xlabel('x position')
+    ax_profile.set_ylabel('Average density')
+    ax_profile.set_title('Density Profile (should show gradient)')
+    ax_profile.grid(True, alpha=0.3)
+
+    # Particle count history
+    ax_count = axes[1, 0]
+    total_history = []
+    inject_history = []
+    absorb_history = []
+
+    # Net flux
+    ax_flux = axes[1, 1]
+    flux_history = []
+
+    def update(frame):
+        for _ in range(5):
+            lattice.step()
+
+        density = lattice.get_density()
+        im_density.set_array(density.T)
+        ax_density.set_title(f'Particle Density (t={lattice.time})')
+
+        profile = lattice.get_density_profile()
+        line_profile.set_ydata(profile)
+
+        total_history.append(lattice.total_particles())
+        inject_history.append(lattice.particles_injected)
+        absorb_history.append(lattice.particles_absorbed)
+
+        ax_count.clear()
+        ax_count.plot(total_history, 'k-', label=f'Total: {total_history[-1]}')
+        ax_count.plot(inject_history, 'g-', label=f'Injected: {inject_history[-1]}')
+        ax_count.plot(absorb_history, 'r-', label=f'Absorbed: {absorb_history[-1]}')
+        ax_count.legend(loc='upper left')
+        ax_count.set_xlabel('Frame')
+        ax_count.set_ylabel('Count')
+        ax_count.set_title('Particle Statistics')
+        ax_count.grid(True, alpha=0.3)
+
+        # Net flux = injected - absorbed
+        net_flux = lattice.particles_injected - lattice.particles_absorbed
+        flux_history.append(net_flux)
+
+        ax_flux.clear()
+        ax_flux.plot(flux_history, 'b-', linewidth=2)
+        ax_flux.axhline(y=0, color='k', linestyle='--', alpha=0.5)
+        ax_flux.set_xlabel('Frame')
+        ax_flux.set_ylabel('Net flux (injected - absorbed)')
+        ax_flux.set_title('Net Particle Flux')
+        ax_flux.grid(True, alpha=0.3)
+
+        return [im_density, line_profile]
+
+    ani = animation.FuncAnimation(fig, update, frames=steps//5,
+                                   interval=100, blit=False)
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     import sys
-    
+
     Lx = Ly = 64
     args = sys.argv[1:]
-    
+
     if '--test' in args:
         run_test()
         sys.exit(0)
-    
+
     if '--save' in args:
         args.remove('--save')
         if args:
@@ -498,12 +657,22 @@ if __name__ == "__main__":
                 pass
         save_frames(Lx=Lx, Ly=Ly, n_frames=50, steps_per_frame=10)
         sys.exit(0)
-    
+
+    if '--gradient' in args:
+        args.remove('--gradient')
+        if args:
+            try:
+                Lx = Ly = int(args[0])
+            except ValueError:
+                pass
+        run_gradient(Lx=Lx, Ly=Ly, steps=500)
+        sys.exit(0)
+
     if args:
         try:
             Lx = Ly = int(args[0])
         except ValueError:
-            print(f"Usage: {sys.argv[0]} [size] [--test] [--save]")
+            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient]")
             sys.exit(1)
-    
+
     run_visualization(Lx=Lx, Ly=Ly, steps=500)
