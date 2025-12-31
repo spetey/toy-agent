@@ -26,6 +26,22 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
+# Try to import numba for performance
+try:
+    from numba import njit, prange
+    NUMBA_AVAILABLE = True
+    print("Numba available - using parallel acceleration")
+except ImportError:
+    NUMBA_AVAILABLE = False
+    print("Numba not available - using pure Python (slower)")
+    # Provide dummy decorators
+    def njit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+    def prange(x):
+        return range(x)
+
 # Direction indices
 E, NE, NW, W, SW, SE, R = 0, 1, 2, 3, 4, 5, 6
 DIR_NAMES = ['E', 'NE', 'NW', 'W', 'SW', 'SE', 'R']
@@ -66,6 +82,88 @@ NEIGHBORS_ODD = np.array([
 COLLISION_TABLE_EVEN = np.array([0, 1, 2, 3, 4, 66, 6, 7, 8, 18, 68, 38, 12, 22, 14, 15, 16, 96, 36, 37, 72, 42, 74, 75, 24, 52, 44, 45, 28, 90, 30, 110, 32, 33, 65, 35, 9, 98, 69, 39, 80, 50, 21, 83, 84, 54, 77, 87, 48, 49, 81, 51, 104, 105, 27, 107, 56, 57, 89, 117, 60, 122, 93, 63, 64, 34, 5, 67, 10, 11, 70, 71, 20, 82, 13, 102, 76, 86, 78, 79, 40, 41, 100, 101, 26, 106, 46, 47, 88, 116, 108, 109, 92, 62, 94, 95, 17, 97, 19, 99, 73, 43, 23, 103, 25, 114, 85, 55, 29, 118, 31, 111, 112, 113, 53, 115, 58, 59, 91, 119, 120, 121, 61, 123, 124, 125, 126, 127], dtype=np.uint8)
 
 COLLISION_TABLE_ODD = np.array([0, 1, 2, 3, 4, 66, 6, 7, 8, 36, 68, 69, 12, 74, 14, 15, 16, 96, 9, 98, 72, 42, 13, 102, 24, 104, 84, 54, 28, 108, 30, 110, 32, 33, 65, 35, 18, 19, 11, 39, 80, 81, 21, 101, 26, 27, 86, 87, 48, 49, 41, 51, 25, 114, 45, 107, 56, 57, 116, 117, 60, 122, 93, 63, 64, 34, 5, 67, 10, 38, 70, 71, 20, 100, 22, 23, 76, 46, 78, 79, 40, 50, 73, 43, 44, 106, 77, 47, 88, 58, 29, 118, 92, 62, 94, 95, 17, 97, 37, 99, 82, 83, 75, 103, 52, 53, 85, 55, 90, 91, 31, 111, 112, 113, 105, 115, 89, 59, 109, 119, 120, 121, 61, 123, 124, 125, 126, 127], dtype=np.uint8)
+
+
+# Numba-accelerated streaming kernel
+@njit(parallel=True, cache=True)
+def _streaming_kernel_gradient(state, obstacles, Lx, Ly, neighbors_even, neighbors_odd):
+    """
+    JIT-compiled streaming step for gradient boundary mode.
+    Parallel over y (rows) for best cache utilization.
+    """
+    new_state = np.zeros((Lx, Ly), dtype=np.uint8)
+
+    # Process each direction
+    for d in range(6):
+        opp_d = (d + 3) % 6
+        bit_mask = np.uint8(1 << d)
+        opp_mask = np.uint8(1 << opp_d)
+
+        # Parallel over y
+        for y in prange(Ly):
+            if y % 2 == 0:
+                dx, dy = neighbors_even[d, 0], neighbors_even[d, 1]
+            else:
+                dx, dy = neighbors_odd[d, 0], neighbors_odd[d, 1]
+
+            for x in range(Lx):
+                if state[x, y] & bit_mask:
+                    # Target position
+                    nx = x + dx
+                    ny = (y + dy) % Ly  # Periodic in y
+
+                    if 0 <= nx < Lx:
+                        if obstacles[nx, ny]:
+                            # Bounce back from obstacle
+                            new_state[x, y] |= opp_mask
+                        else:
+                            new_state[nx, ny] |= bit_mask
+                    else:
+                        # Bounce back from x walls
+                        new_state[x, y] |= opp_mask
+
+    # Rest particles don't move
+    for y in prange(Ly):
+        for x in range(Lx):
+            if state[x, y] & np.uint8(64):  # bit 6 = rest particle
+                new_state[x, y] |= np.uint8(64)
+
+    return new_state
+
+
+@njit(parallel=True, cache=True)
+def _streaming_kernel_periodic(state, obstacles, Lx, Ly, neighbors_even, neighbors_odd):
+    """JIT-compiled streaming step for periodic boundary mode."""
+    new_state = np.zeros((Lx, Ly), dtype=np.uint8)
+
+    for d in range(6):
+        opp_d = (d + 3) % 6
+        bit_mask = np.uint8(1 << d)
+        opp_mask = np.uint8(1 << opp_d)
+
+        for y in prange(Ly):
+            if y % 2 == 0:
+                dx, dy = neighbors_even[d, 0], neighbors_even[d, 1]
+            else:
+                dx, dy = neighbors_odd[d, 0], neighbors_odd[d, 1]
+
+            for x in range(Lx):
+                if state[x, y] & bit_mask:
+                    nx = (x + dx) % Lx
+                    ny = (y + dy) % Ly
+
+                    if obstacles[nx, ny]:
+                        new_state[x, y] |= opp_mask
+                    else:
+                        new_state[nx, ny] |= bit_mask
+
+    # Rest particles
+    for y in prange(Ly):
+        for x in range(Lx):
+            if state[x, y] & np.uint8(64):
+                new_state[x, y] |= np.uint8(64)
+
+    return new_state
 
 
 class FHPLattice:
@@ -275,6 +373,26 @@ class FHPLattice:
     
     def streaming_step(self):
         """Move particles to neighboring sites on hexagonal lattice."""
+        # Use numba-accelerated kernel if available
+        if NUMBA_AVAILABLE:
+            if self.boundary == 'gradient':
+                self.state = _streaming_kernel_gradient(
+                    self.state, self.obstacles, self.Lx, self.Ly,
+                    NEIGHBORS_EVEN, NEIGHBORS_ODD
+                )
+            elif self.boundary == 'periodic':
+                self.state = _streaming_kernel_periodic(
+                    self.state, self.obstacles, self.Lx, self.Ly,
+                    NEIGHBORS_EVEN, NEIGHBORS_ODD
+                )
+            else:
+                # Fallback for 'walls' mode (less common)
+                self._streaming_step_python()
+        else:
+            self._streaming_step_python()
+
+    def _streaming_step_python(self):
+        """Pure Python streaming step (fallback when numba unavailable)."""
         new_state = np.zeros_like(self.state)
 
         # Process each direction separately
