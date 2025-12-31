@@ -12,13 +12,14 @@ A lattice gas on a hexagonal lattice with:
 - Proper thermalization (unlike HPP)
 
 Usage:
-    python fhp_iii_simulation.py [size] [--test] [--save] [--gradient]
+    python fhp_iii_simulation.py [size] [--test] [--save] [--gradient] [--vortex]
 
 Modes:
     (default)   Interactive visualization with blob initialization
     --test      Quick physics verification
     --save      Save frames to disk
     --gradient  Gradient mode: inject particles left, absorb right
+    --vortex    Vortex experiment: obstacle in flow, measure EPR and vorticity
 """
 
 import numpy as np
@@ -101,7 +102,29 @@ class FHPLattice:
         self.particles_injected = 0
         self.particles_absorbed = 0
 
+        # Obstacle mask (True = obstacle site, particles bounce back)
+        self.obstacles = np.zeros((Lx, Ly), dtype=bool)
+
+        # For EPR calculation: track per-step statistics
+        self.last_injected = 0
+        self.last_absorbed = 0
+
         self.time = 0
+
+    def add_obstacle_circle(self, cx, cy, radius):
+        """Add a circular obstacle centered at (cx, cy)."""
+        for x in range(self.Lx):
+            for y in range(self.Ly):
+                if (x - cx)**2 + (y - cy)**2 <= radius**2:
+                    self.obstacles[x, y] = True
+                    self.state[x, y] = 0  # Clear any particles
+
+    def add_obstacle_rect(self, x0, y0, width, height):
+        """Add a rectangular obstacle."""
+        x1 = min(x0 + width, self.Lx)
+        y1 = min(y0 + height, self.Ly)
+        self.obstacles[x0:x1, y0:y1] = True
+        self.state[x0:x1, y0:y1] = 0
     
     def get_density(self):
         """Get total particle count at each site (0-7)."""
@@ -135,7 +158,65 @@ class FHPLattice:
             px += mask * VELOCITY[d, 0]
             py += mask * VELOCITY[d, 1]
         return px, py
-    
+
+    def get_vorticity(self):
+        """
+        Calculate vorticity (curl of velocity field).
+
+        ω = ∂v_y/∂x - ∂v_x/∂y
+
+        Positive = counterclockwise rotation
+        Negative = clockwise rotation
+        """
+        px, py = self.get_momentum()
+        # Convert to float for derivatives
+        vx = px.astype(float)
+        vy = py.astype(float)
+
+        # Finite differences (central difference where possible)
+        dvx_dy = np.zeros_like(vx)
+        dvy_dx = np.zeros_like(vy)
+
+        # ∂v_y/∂x
+        dvy_dx[1:-1, :] = (vy[2:, :] - vy[:-2, :]) / 2.0
+        dvy_dx[0, :] = vy[1, :] - vy[0, :]
+        dvy_dx[-1, :] = vy[-1, :] - vy[-2, :]
+
+        # ∂v_x/∂y
+        dvx_dy[:, 1:-1] = (vx[:, 2:] - vx[:, :-2]) / 2.0
+        dvx_dy[:, 0] = vx[:, 1] - vx[:, 0]
+        dvx_dy[:, -1] = vx[:, -1] - vx[:, -2]
+
+        vorticity = dvy_dx - dvx_dy
+        return vorticity
+
+    def get_epr(self):
+        """
+        Calculate entropy production rate (EPR).
+
+        EPR ≈ throughput_rate × density_gradient
+
+        In steady-state non-equilibrium thermodynamics:
+        - Throughput = particles flowing through the system per timestep
+        - Gradient = density difference (left - right)
+
+        Returns (epr, throughput_rate, gradient)
+        """
+        # Throughput: rate of particles absorbed (= injected in steady state)
+        throughput_rate = self.particles_absorbed - self.last_absorbed
+
+        # Density gradient: left side vs right side
+        profile = self.get_density_profile()
+        n_edge = max(1, self.Lx // 8)
+        density_left = profile[:n_edge].mean()
+        density_right = profile[-n_edge:].mean()
+        gradient = density_left - density_right
+
+        # EPR ≈ flux × gradient (thermodynamic force)
+        epr = throughput_rate * gradient
+
+        return epr, throughput_rate, gradient
+
     def total_particles(self):
         """Total particle count."""
         return self.get_density().sum()
@@ -218,11 +299,20 @@ class FHPLattice:
                         if self.boundary == 'periodic':
                             nx = nx % self.Lx
                             ny = ny % self.Ly
-                            shifted[nx, ny] = 1
+                            # Check for obstacle at target
+                            if self.obstacles[nx, ny]:
+                                opp_d = (d + 3) % 6
+                                new_state[x, y] |= (1 << opp_d)
+                            else:
+                                shifted[nx, ny] = 1
                         elif self.boundary == 'walls':
                             # Bounce back at all walls
                             if 0 <= nx < self.Lx and 0 <= ny < self.Ly:
-                                shifted[nx, ny] = 1
+                                if self.obstacles[nx, ny]:
+                                    opp_d = (d + 3) % 6
+                                    new_state[x, y] |= (1 << opp_d)
+                                else:
+                                    shifted[nx, ny] = 1
                             else:
                                 # Reflect: particle stays at (x,y) but reverses direction
                                 opp_d = (d + 3) % 6  # Opposite direction
@@ -231,7 +321,11 @@ class FHPLattice:
                             # Gradient mode: periodic in y, walls in x
                             ny = ny % self.Ly  # Periodic in y
                             if 0 <= nx < self.Lx:
-                                shifted[nx, ny] = 1
+                                if self.obstacles[nx, ny]:
+                                    opp_d = (d + 3) % 6
+                                    new_state[x, y] |= (1 << opp_d)
+                                else:
+                                    shifted[nx, ny] = 1
                             else:
                                 # Bounce back at left/right walls
                                 opp_d = (d + 3) % 6
@@ -284,6 +378,10 @@ class FHPLattice:
     
     def step(self):
         """One full timestep."""
+        # Track for EPR calculation
+        self.last_injected = self.particles_injected
+        self.last_absorbed = self.particles_absorbed
+
         self.collision_step()
         self.streaming_step()  # Use non-vectorized for correctness
         self.boundary_driving_step()  # Apply injection/absorption for gradient mode
@@ -638,6 +736,136 @@ def run_gradient(Lx=64, Ly=64, steps=500, p_inject=0.3, p_absorb=0.5):
     plt.show()
 
 
+def run_vortex(Lx=128, Ly=64, steps=1000, p_inject=0.5, p_absorb=0.3):
+    """
+    Run simulation with obstacle to generate vortices (von Kármán street).
+
+    Tests morphodynamic hypothesis: do flow structures increase EPR?
+    """
+    print(f"Creating FHP-III vortex experiment: {Lx}x{Ly}")
+    print(f"  p_inject={p_inject}, p_absorb={p_absorb}")
+
+    lattice = FHPLattice(Lx, Ly, boundary='gradient',
+                         p_inject=p_inject, p_absorb=p_absorb)
+
+    # Add circular obstacle in the flow
+    obstacle_x = Lx // 4
+    obstacle_y = Ly // 2
+    obstacle_r = Ly // 8
+    lattice.add_obstacle_circle(obstacle_x, obstacle_y, obstacle_r)
+    print(f"  Obstacle at ({obstacle_x}, {obstacle_y}), radius={obstacle_r}")
+
+    # Start with low uniform density
+    lattice.initialize_uniform(density=0.15, rest_fraction=0.05)
+
+    print(f"Initial particles: {lattice.total_particles()}")
+
+    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    fig.suptitle(f'FHP-III Vortex Experiment ({Lx}x{Ly})', fontsize=14)
+
+    # Density plot
+    ax_density = axes[0, 0]
+    density = lattice.get_density()
+    # Mask obstacles for display
+    density_display = np.ma.masked_where(lattice.obstacles, density)
+    im_density = ax_density.imshow(density_display.T, origin='lower', cmap='hot',
+                                    vmin=0, vmax=5, interpolation='nearest')
+    ax_density.set_title('Particle Density')
+    plt.colorbar(im_density, ax=ax_density)
+
+    # Vorticity plot
+    ax_vorticity = axes[0, 1]
+    vorticity = lattice.get_vorticity()
+    vort_display = np.ma.masked_where(lattice.obstacles, vorticity)
+    im_vorticity = ax_vorticity.imshow(vort_display.T, origin='lower', cmap='RdBu_r',
+                                        vmin=-2, vmax=2, interpolation='nearest')
+    ax_vorticity.set_title('Vorticity (red=CW, blue=CCW)')
+    plt.colorbar(im_vorticity, ax=ax_vorticity)
+
+    # Density profile
+    ax_profile = axes[0, 2]
+    profile = lattice.get_density_profile()
+    line_profile, = ax_profile.plot(profile, 'b-', linewidth=2)
+    ax_profile.set_xlim(0, Lx)
+    ax_profile.set_ylim(0, 3)
+    ax_profile.axvline(x=obstacle_x, color='gray', linestyle='--', alpha=0.5)
+    ax_profile.set_xlabel('x position')
+    ax_profile.set_ylabel('Average density')
+    ax_profile.set_title('Density Profile')
+    ax_profile.grid(True, alpha=0.3)
+
+    # EPR history
+    ax_epr = axes[1, 0]
+    epr_history = []
+
+    # Throughput history
+    ax_throughput = axes[1, 1]
+    throughput_history = []
+
+    # Total vorticity (absolute)
+    ax_vort_total = axes[1, 2]
+    vort_total_history = []
+
+    def update(frame):
+        for _ in range(5):
+            lattice.step()
+
+        # Update density
+        density = lattice.get_density()
+        density_display = np.ma.masked_where(lattice.obstacles, density)
+        im_density.set_array(density_display.T)
+        ax_density.set_title(f'Particle Density (t={lattice.time})')
+
+        # Update vorticity
+        vorticity = lattice.get_vorticity()
+        vort_display = np.ma.masked_where(lattice.obstacles, vorticity)
+        im_vorticity.set_array(vort_display.T)
+
+        # Update profile
+        profile = lattice.get_density_profile()
+        line_profile.set_ydata(profile)
+
+        # Calculate EPR
+        epr, throughput, gradient = lattice.get_epr()
+        epr_history.append(epr)
+        throughput_history.append(throughput)
+
+        # Total absolute vorticity (measure of rotation in system)
+        vort_total = np.abs(vorticity[~lattice.obstacles]).sum()
+        vort_total_history.append(vort_total)
+
+        # Plot EPR
+        ax_epr.clear()
+        ax_epr.plot(epr_history, 'g-', linewidth=2)
+        ax_epr.set_xlabel('Frame')
+        ax_epr.set_ylabel('EPR (throughput × gradient)')
+        ax_epr.set_title(f'Entropy Production Rate: {epr:.1f}')
+        ax_epr.grid(True, alpha=0.3)
+
+        # Plot throughput
+        ax_throughput.clear()
+        ax_throughput.plot(throughput_history, 'r-', linewidth=2)
+        ax_throughput.set_xlabel('Frame')
+        ax_throughput.set_ylabel('Throughput (particles/step)')
+        ax_throughput.set_title(f'Throughput: {throughput:.0f}')
+        ax_throughput.grid(True, alpha=0.3)
+
+        # Plot total vorticity
+        ax_vort_total.clear()
+        ax_vort_total.plot(vort_total_history, 'purple', linewidth=2)
+        ax_vort_total.set_xlabel('Frame')
+        ax_vort_total.set_ylabel('Total |vorticity|')
+        ax_vort_total.set_title(f'Total Rotation: {vort_total:.0f}')
+        ax_vort_total.grid(True, alpha=0.3)
+
+        return [im_density, im_vorticity, line_profile]
+
+    ani = animation.FuncAnimation(fig, update, frames=steps//5,
+                                   interval=100, blit=False)
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     import sys
 
@@ -668,11 +896,23 @@ if __name__ == "__main__":
         run_gradient(Lx=Lx, Ly=Ly, steps=500)
         sys.exit(0)
 
+    if '--vortex' in args:
+        args.remove('--vortex')
+        Lx, Ly = 128, 64  # Default wider aspect for vortex street
+        if args:
+            try:
+                size = int(args[0])
+                Lx, Ly = size * 2, size  # Keep 2:1 aspect ratio
+            except ValueError:
+                pass
+        run_vortex(Lx=Lx, Ly=Ly, steps=1000)
+        sys.exit(0)
+
     if args:
         try:
             Lx = Ly = int(args[0])
         except ValueError:
-            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient]")
+            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient] [--vortex]")
             sys.exit(1)
 
     run_visualization(Lx=Lx, Ly=Ly, steps=500)
