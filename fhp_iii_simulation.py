@@ -736,7 +736,7 @@ def run_gradient(Lx=64, Ly=64, steps=500, p_inject=0.3, p_absorb=0.5):
     plt.show()
 
 
-def run_vortex(Lx=128, Ly=64, steps=1000, p_inject=0.5, p_absorb=0.3):
+def run_vortex(Lx=128, Ly=64, steps=1000, p_inject=0.8, p_absorb=0.15):
     """
     Run simulation with obstacle to generate vortices (von Kármán street).
 
@@ -748,15 +748,15 @@ def run_vortex(Lx=128, Ly=64, steps=1000, p_inject=0.5, p_absorb=0.3):
     lattice = FHPLattice(Lx, Ly, boundary='gradient',
                          p_inject=p_inject, p_absorb=p_absorb)
 
-    # Add circular obstacle in the flow
+    # Add flat plate obstacle (perpendicular to flow) - creates sharper separation
     obstacle_x = Lx // 4
-    obstacle_y = Ly // 2
-    obstacle_r = Ly // 8
-    lattice.add_obstacle_circle(obstacle_x, obstacle_y, obstacle_r)
-    print(f"  Obstacle at ({obstacle_x}, {obstacle_y}), radius={obstacle_r}")
+    plate_height = Ly // 3
+    plate_y0 = (Ly - plate_height) // 2
+    lattice.add_obstacle_rect(obstacle_x, plate_y0, 3, plate_height)  # thin plate
+    print(f"  Flat plate at x={obstacle_x}, y={plate_y0} to {plate_y0 + plate_height}")
 
-    # Start with low uniform density
-    lattice.initialize_uniform(density=0.15, rest_fraction=0.05)
+    # Start with higher density for lower effective viscosity
+    lattice.initialize_uniform(density=0.35, rest_fraction=0.05)
 
     print(f"Initial particles: {lattice.total_particles()}")
 
@@ -787,8 +787,8 @@ def run_vortex(Lx=128, Ly=64, steps=1000, p_inject=0.5, p_absorb=0.3):
     profile = lattice.get_density_profile()
     line_profile, = ax_profile.plot(profile, 'b-', linewidth=2)
     ax_profile.set_xlim(0, Lx)
-    ax_profile.set_ylim(0, 3)
-    ax_profile.axvline(x=obstacle_x, color='gray', linestyle='--', alpha=0.5)
+    ax_profile.set_ylim(0, 5)
+    ax_profile.axvline(x=obstacle_x, color='gray', linestyle='--', alpha=0.5, label='plate')
     ax_profile.set_xlabel('x position')
     ax_profile.set_ylabel('Average density')
     ax_profile.set_title('Density Profile')
