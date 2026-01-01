@@ -27,6 +27,7 @@ Modes:
 Options for vortex/batch modes:
     --inject=X  Injection probability at left boundary (default: 0.5)
     --absorb=X  Absorption probability at right boundary (default: 0.5)
+    --cuda      Use GPU acceleration (requires CUDA-capable GPU)
 """
 
 import numpy as np
@@ -48,6 +49,22 @@ except ImportError:
         return decorator
     def prange(x):
         return range(x)
+
+# Try to import CUDA
+try:
+    from numba import cuda
+    import math
+    # Check if CUDA is actually available
+    if cuda.is_available():
+        CUDA_AVAILABLE = True
+        print(f"CUDA available - GPU: {cuda.get_current_device().name}")
+    else:
+        CUDA_AVAILABLE = False
+        print("CUDA not available (no GPU detected)")
+except ImportError:
+    CUDA_AVAILABLE = False
+    cuda = None
+    print("CUDA not available (numba.cuda not installed)")
 
 # Direction indices
 E, NE, NW, W, SW, SE, R = 0, 1, 2, 3, 4, 5, 6
@@ -215,11 +232,174 @@ def _streaming_kernel_benard(state, obstacles, Lx, Ly, neighbors_even, neighbors
     return new_state
 
 
+# =============================================================================
+# CUDA Kernels (GPU acceleration)
+# =============================================================================
+# These use a "gather" approach: each cell collects particles FROM neighbors
+# instead of scattering TO neighbors, avoiding race conditions.
+
+if CUDA_AVAILABLE:
+    @cuda.jit
+    def _cuda_streaming_kernel_gradient(state, new_state, obstacles, Lx, Ly,
+                                         neighbors_even, neighbors_odd):
+        """
+        CUDA kernel for gradient boundary streaming.
+        Each thread handles one cell.
+        """
+        x, y = cuda.grid(2)
+        if x >= Lx or y >= Ly:
+            return
+
+        result = np.uint8(0)
+
+        # Check if we're an obstacle
+        if obstacles[x, y]:
+            new_state[x, y] = 0
+            return
+
+        # For each direction, check if we RECEIVE a particle from that direction
+        # A particle moving in direction d comes FROM the cell in direction (d+3)%6
+        for d in range(6):
+            opp_d = (d + 3) % 6
+            bit_mask = np.uint8(1 << d)
+            opp_mask = np.uint8(1 << opp_d)
+
+            # Where does a particle in direction d come from?
+            if y % 2 == 0:
+                src_dx = neighbors_even[opp_d, 0]
+                src_dy = neighbors_even[opp_d, 1]
+            else:
+                src_dx = neighbors_odd[opp_d, 0]
+                src_dy = neighbors_odd[opp_d, 1]
+
+            src_x = x + src_dx
+            src_y = (y + src_dy) % Ly  # Periodic in y
+
+            # Check boundary conditions (walls in x)
+            if src_x < 0 or src_x >= Lx:
+                # Particle would come from outside - check if WE sent one that bounced
+                if state[x, y] & bit_mask:
+                    result |= opp_mask  # Bounce back
+            elif obstacles[src_x, src_y]:
+                # Source is obstacle - check if we sent a particle that bounced
+                if state[x, y] & bit_mask:
+                    result |= opp_mask  # Bounce back
+            else:
+                # Normal case: receive particle from source if it has one going our way
+                if state[src_x, src_y] & bit_mask:
+                    result |= bit_mask
+
+        # Rest particles don't move
+        if state[x, y] & np.uint8(64):
+            result |= np.uint8(64)
+
+        new_state[x, y] = result
+
+    @cuda.jit
+    def _cuda_streaming_kernel_periodic(state, new_state, obstacles, Lx, Ly,
+                                         neighbors_even, neighbors_odd):
+        """CUDA kernel for periodic boundary streaming."""
+        x, y = cuda.grid(2)
+        if x >= Lx or y >= Ly:
+            return
+
+        result = np.uint8(0)
+
+        if obstacles[x, y]:
+            new_state[x, y] = 0
+            return
+
+        for d in range(6):
+            opp_d = (d + 3) % 6
+            bit_mask = np.uint8(1 << d)
+            opp_mask = np.uint8(1 << opp_d)
+
+            if y % 2 == 0:
+                src_dx = neighbors_even[opp_d, 0]
+                src_dy = neighbors_even[opp_d, 1]
+            else:
+                src_dx = neighbors_odd[opp_d, 0]
+                src_dy = neighbors_odd[opp_d, 1]
+
+            src_x = (x + src_dx) % Lx
+            src_y = (y + src_dy) % Ly
+
+            if obstacles[src_x, src_y]:
+                if state[x, y] & bit_mask:
+                    result |= opp_mask
+            else:
+                if state[src_x, src_y] & bit_mask:
+                    result |= bit_mask
+
+        if state[x, y] & np.uint8(64):
+            result |= np.uint8(64)
+
+        new_state[x, y] = result
+
+    @cuda.jit
+    def _cuda_streaming_kernel_benard(state, new_state, obstacles, Lx, Ly,
+                                       neighbors_even, neighbors_odd):
+        """CUDA kernel for Bénard boundary streaming (periodic x, walls y)."""
+        x, y = cuda.grid(2)
+        if x >= Lx or y >= Ly:
+            return
+
+        result = np.uint8(0)
+
+        if obstacles[x, y]:
+            new_state[x, y] = 0
+            return
+
+        for d in range(6):
+            opp_d = (d + 3) % 6
+            bit_mask = np.uint8(1 << d)
+            opp_mask = np.uint8(1 << opp_d)
+
+            if y % 2 == 0:
+                src_dx = neighbors_even[opp_d, 0]
+                src_dy = neighbors_even[opp_d, 1]
+            else:
+                src_dx = neighbors_odd[opp_d, 0]
+                src_dy = neighbors_odd[opp_d, 1]
+
+            src_x = (x + src_dx) % Lx  # Periodic in x
+            src_y = y + src_dy
+
+            if src_y < 0 or src_y >= Ly:
+                # Bounce from y walls
+                if state[x, y] & bit_mask:
+                    result |= opp_mask
+            elif obstacles[src_x, src_y]:
+                if state[x, y] & bit_mask:
+                    result |= opp_mask
+            else:
+                if state[src_x, src_y] & bit_mask:
+                    result |= bit_mask
+
+        if state[x, y] & np.uint8(64):
+            result |= np.uint8(64)
+
+        new_state[x, y] = result
+
+    @cuda.jit
+    def _cuda_collision_kernel(state, collision_even, collision_odd, Lx, Ly):
+        """CUDA kernel for collision step."""
+        x, y = cuda.grid(2)
+        if x >= Lx or y >= Ly:
+            return
+
+        old_state = state[x, y]
+        if (x + y) % 2 == 0:
+            state[x, y] = collision_even[old_state]
+        else:
+            state[x, y] = collision_odd[old_state]
+
+
 class FHPLattice:
     """FHP-III Lattice Gas Simulation."""
     
     def __init__(self, Lx, Ly, boundary='periodic', p_inject=0.0, p_absorb=0.0,
-                 gravity=0.0, T_hot=0.0, T_cold=0.0):
+                 gravity=0.0, T_hot=0.0, T_cold=0.0, use_cuda=False):
         """
         Initialize lattice.
 
@@ -232,6 +412,7 @@ class FHPLattice:
             gravity: Gravity strength for Bénard mode (probability of downward momentum bias)
             T_hot: Hot boundary temperature proxy (bottom, for Bénard)
             T_cold: Cold boundary temperature proxy (top, for Bénard)
+            use_cuda: Use CUDA GPU acceleration if available
         """
         self.Lx = Lx
         self.Ly = Ly
@@ -265,6 +446,41 @@ class FHPLattice:
 
         self.time = 0
 
+        # CUDA setup
+        self.use_cuda = use_cuda and CUDA_AVAILABLE
+        if self.use_cuda:
+            print(f"  CUDA enabled for {Lx}x{Ly} lattice")
+            # Calculate grid/block dimensions
+            self.threads_per_block = (16, 16)
+            self.blocks_per_grid_x = (Lx + self.threads_per_block[0] - 1) // self.threads_per_block[0]
+            self.blocks_per_grid_y = (Ly + self.threads_per_block[1] - 1) // self.threads_per_block[1]
+            self.blocks_per_grid = (self.blocks_per_grid_x, self.blocks_per_grid_y)
+
+            # Allocate GPU arrays
+            self.d_state = cuda.device_array((Lx, Ly), dtype=np.uint8)
+            self.d_new_state = cuda.device_array((Lx, Ly), dtype=np.uint8)
+            self.d_obstacles = cuda.device_array((Lx, Ly), dtype=np.bool_)
+            self.d_neighbors_even = cuda.to_device(NEIGHBORS_EVEN)
+            self.d_neighbors_odd = cuda.to_device(NEIGHBORS_ODD)
+            self.d_collision_even = cuda.to_device(COLLISION_TABLE_EVEN)
+            self.d_collision_odd = cuda.to_device(COLLISION_TABLE_ODD)
+
+            # Track if GPU state is dirty (needs sync to CPU)
+            self._gpu_dirty = False
+
+    def _sync_to_gpu(self):
+        """Copy CPU state to GPU."""
+        if self.use_cuda:
+            cuda.to_device(self.state, to=self.d_state)
+            cuda.to_device(self.obstacles.astype(np.bool_), to=self.d_obstacles)
+            self._gpu_dirty = False
+
+    def _sync_from_gpu(self):
+        """Copy GPU state to CPU."""
+        if self.use_cuda and self._gpu_dirty:
+            self.d_state.copy_to_host(self.state)
+            self._gpu_dirty = False
+
     def add_obstacle_circle(self, cx, cy, radius):
         """Add a circular obstacle centered at (cx, cy)."""
         for x in range(self.Lx):
@@ -272,6 +488,9 @@ class FHPLattice:
                 if (x - cx)**2 + (y - cy)**2 <= radius**2:
                     self.obstacles[x, y] = True
                     self.state[x, y] = 0  # Clear any particles
+        # Sync obstacles to GPU
+        if self.use_cuda:
+            self._sync_to_gpu()
 
     def add_obstacle_rect(self, x0, y0, width, height):
         """Add a rectangular obstacle."""
@@ -279,9 +498,14 @@ class FHPLattice:
         y1 = min(y0 + height, self.Ly)
         self.obstacles[x0:x1, y0:y1] = True
         self.state[x0:x1, y0:y1] = 0
+        # Sync obstacles to GPU
+        if self.use_cuda:
+            self._sync_to_gpu()
     
     def get_density(self):
         """Get total particle count at each site (0-7)."""
+        if self.use_cuda:
+            self._sync_from_gpu()
         density = np.zeros((self.Lx, self.Ly), dtype=np.int32)
         for d in range(7):
             density += (self.state >> d) & 1
@@ -539,14 +763,46 @@ class FHPLattice:
 
     def collision_step(self):
         """Apply collision rules via parity-dependent lookup."""
-        even_result = COLLISION_TABLE_EVEN[self.state]
-        odd_result = COLLISION_TABLE_ODD[self.state]
-        self.state = np.where(self.parity == 0, even_result, odd_result)
+        if self.use_cuda:
+            _cuda_collision_kernel[self.blocks_per_grid, self.threads_per_block](
+                self.d_state, self.d_collision_even, self.d_collision_odd,
+                self.Lx, self.Ly
+            )
+        else:
+            even_result = COLLISION_TABLE_EVEN[self.state]
+            odd_result = COLLISION_TABLE_ODD[self.state]
+            self.state = np.where(self.parity == 0, even_result, odd_result)
     
     def streaming_step(self):
         """Move particles to neighboring sites on hexagonal lattice."""
+        # Use CUDA if enabled
+        if self.use_cuda:
+            if self.boundary == 'gradient':
+                _cuda_streaming_kernel_gradient[self.blocks_per_grid, self.threads_per_block](
+                    self.d_state, self.d_new_state, self.d_obstacles,
+                    self.Lx, self.Ly, self.d_neighbors_even, self.d_neighbors_odd
+                )
+            elif self.boundary == 'benard':
+                _cuda_streaming_kernel_benard[self.blocks_per_grid, self.threads_per_block](
+                    self.d_state, self.d_new_state, self.d_obstacles,
+                    self.Lx, self.Ly, self.d_neighbors_even, self.d_neighbors_odd
+                )
+            elif self.boundary == 'periodic':
+                _cuda_streaming_kernel_periodic[self.blocks_per_grid, self.threads_per_block](
+                    self.d_state, self.d_new_state, self.d_obstacles,
+                    self.Lx, self.Ly, self.d_neighbors_even, self.d_neighbors_odd
+                )
+            else:
+                # Fallback for 'walls' mode
+                self._sync_from_gpu()
+                self._streaming_step_python()
+                self._sync_to_gpu()
+                return
+            # Swap state buffers
+            self.d_state, self.d_new_state = self.d_new_state, self.d_state
+            self._gpu_dirty = True
         # Use numba-accelerated kernel if available
-        if NUMBA_AVAILABLE:
+        elif NUMBA_AVAILABLE:
             if self.boundary == 'gradient':
                 self.state = _streaming_kernel_gradient(
                     self.state, self.obstacles, self.Lx, self.Ly,
@@ -692,9 +948,19 @@ class FHPLattice:
 
         self.collision_step()
         self.streaming_step()
+
+        # Boundary operations run on CPU - sync if using CUDA
+        if self.use_cuda:
+            self._sync_from_gpu()
+
         self.boundary_driving_step()  # Apply injection/absorption for gradient mode
         self.gravity_step()  # Apply gravity for Bénard mode
         self.thermal_boundary_step()  # Apply thermal boundaries for Bénard mode
+
+        # Sync back to GPU if we modified state
+        if self.use_cuda and (self.boundary in ('gradient', 'benard')):
+            self._sync_to_gpu()
+
         self.time += 1
     
     def initialize_blob(self, cx, cy, radius, density=0.5, rest_fraction=0.0):
@@ -705,7 +971,7 @@ class FHPLattice:
                 dx = x - cx
                 dy = y - cy
                 dist_sq = dx*dx + dy*dy
-                
+
                 if dist_sq < radius * radius:
                     state = 0
                     for d in range(6):
@@ -714,6 +980,10 @@ class FHPLattice:
                     if np.random.random() < rest_fraction:
                         state |= (1 << R)
                     self.state[x, y] = state
+
+        # Sync to GPU if using CUDA
+        if self.use_cuda:
+            self._sync_to_gpu()
     
     def initialize_uniform(self, density=0.3, rest_fraction=0.1):
         """Initialize with uniform random particles."""
@@ -726,6 +996,10 @@ class FHPLattice:
                 if np.random.random() < rest_fraction:
                     state |= (1 << R)
                 self.state[x, y] = state
+
+        # Sync to GPU if using CUDA
+        if self.use_cuda:
+            self._sync_to_gpu()
 
 
 def coarse_grain_entropy(lattice, block_size=8):
@@ -1046,17 +1320,17 @@ def run_gradient(Lx=64, Ly=64, steps=500, p_inject=0.3, p_absorb=0.5):
     plt.show()
 
 
-def run_vortex(Lx=128, Ly=64, steps=1000, p_inject=0.8, p_absorb=0.15):
+def run_vortex(Lx=128, Ly=64, steps=1000, p_inject=0.8, p_absorb=0.15, use_cuda=False):
     """
     Run simulation with obstacle to generate vortices (von Kármán street).
 
     Tests morphodynamic hypothesis: do flow structures increase EPR?
     """
     print(f"Creating FHP-III vortex experiment: {Lx}x{Ly}")
-    print(f"  p_inject={p_inject}, p_absorb={p_absorb}")
+    print(f"  p_inject={p_inject}, p_absorb={p_absorb}, cuda={use_cuda}")
 
     lattice = FHPLattice(Lx, Ly, boundary='gradient',
-                         p_inject=p_inject, p_absorb=p_absorb)
+                         p_inject=p_inject, p_absorb=p_absorb, use_cuda=use_cuda)
 
     # Add flat plate obstacle (perpendicular to flow) - creates sharper separation
     obstacle_x = Lx // 4
@@ -1177,7 +1451,7 @@ def run_vortex(Lx=128, Ly=64, steps=1000, p_inject=0.8, p_absorb=0.15):
 
 
 def run_vortex_batch(Lx=512, Ly=256, total_steps=10000, snapshot_interval=500,
-                     p_inject=0.8, p_absorb=0.15, output_dir='vortex_batch'):
+                     p_inject=0.8, p_absorb=0.15, output_dir='vortex_batch', use_cuda=False):
     """
     Run vortex experiment in batch mode (no live visualization).
 
@@ -1190,11 +1464,11 @@ def run_vortex_batch(Lx=512, Ly=256, total_steps=10000, snapshot_interval=500,
     print(f"FHP-III Vortex Batch Experiment")
     print(f"  Lattice: {Lx}x{Ly}")
     print(f"  Steps: {total_steps}, snapshots every {snapshot_interval}")
-    print(f"  p_inject={p_inject}, p_absorb={p_absorb}")
+    print(f"  p_inject={p_inject}, p_absorb={p_absorb}, cuda={use_cuda}")
     print(f"  Output: {output_dir}/")
 
     lattice = FHPLattice(Lx, Ly, boundary='gradient',
-                         p_inject=p_inject, p_absorb=p_absorb)
+                         p_inject=p_inject, p_absorb=p_absorb, use_cuda=use_cuda)
 
     # Add flat plate obstacle
     obstacle_x = Lx // 4
@@ -1299,7 +1573,7 @@ def run_vortex_batch(Lx=512, Ly=256, total_steps=10000, snapshot_interval=500,
     print(f"Snapshots saved to {output_dir}/")
 
 
-def run_benard(Lx=64, Ly=64, steps=1000, gravity=0.02, T_hot=0.4, T_cold=0.6):
+def run_benard(Lx=64, Ly=64, steps=1000, gravity=0.02, T_hot=0.4, T_cold=0.6, use_cuda=False):
     """
     Run Bénard convection simulation.
 
@@ -1311,12 +1585,13 @@ def run_benard(Lx=64, Ly=64, steps=1000, gravity=0.02, T_hot=0.4, T_cold=0.6):
         gravity: Strength of downward bias (0.01-0.05 typical)
         T_hot: Probability of injecting upward particles at bottom
         T_cold: Probability of absorbing upward particles at top
+        use_cuda: Use GPU acceleration if available
     """
     print(f"Creating FHP-III Bénard convection: {Lx}x{Ly}")
-    print(f"  gravity={gravity}, T_hot={T_hot}, T_cold={T_cold}")
+    print(f"  gravity={gravity}, T_hot={T_hot}, T_cold={T_cold}, cuda={use_cuda}")
 
     lattice = FHPLattice(Lx, Ly, boundary='benard',
-                         gravity=gravity, T_hot=T_hot, T_cold=T_cold)
+                         gravity=gravity, T_hot=T_hot, T_cold=T_cold, use_cuda=use_cuda)
 
     # Initialize with uniform medium density
     lattice.initialize_uniform(density=0.25, rest_fraction=0.15)
@@ -1432,7 +1707,7 @@ def run_benard(Lx=64, Ly=64, steps=1000, gravity=0.02, T_hot=0.4, T_cold=0.6):
 
 
 def run_benard_batch(Lx=128, Ly=128, total_steps=5000, snapshot_interval=250,
-                     gravity=0.02, T_hot=0.4, T_cold=0.6, output_dir='benard_batch'):
+                     gravity=0.02, T_hot=0.4, T_cold=0.6, output_dir='benard_batch', use_cuda=False):
     """
     Run Bénard convection in batch mode (no live visualization).
     """
@@ -1440,13 +1715,13 @@ def run_benard_batch(Lx=128, Ly=128, total_steps=5000, snapshot_interval=250,
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"FHP-III Bénard Batch Experiment")
-    print(f"  Lattice: {Lx}x{Ly}")
+    print(f"  Lattice: {Lx}x{Ly}, cuda={use_cuda}")
     print(f"  Steps: {total_steps}, snapshots every {snapshot_interval}")
     print(f"  gravity={gravity}, T_hot={T_hot}, T_cold={T_cold}")
     print(f"  Output: {output_dir}/")
 
     lattice = FHPLattice(Lx, Ly, boundary='benard',
-                         gravity=gravity, T_hot=T_hot, T_cold=T_cold)
+                         gravity=gravity, T_hot=T_hot, T_cold=T_cold, use_cuda=use_cuda)
 
     lattice.initialize_uniform(density=0.25, rest_fraction=0.15)
     print(f"  Initial particles: {lattice.total_particles()}")
@@ -1557,6 +1832,14 @@ if __name__ == "__main__":
         run_gradient(Lx=Lx, Ly=Ly, steps=500)
         sys.exit(0)
 
+    # Parse CUDA flag
+    use_cuda = '--cuda' in args
+    if use_cuda:
+        args.remove('--cuda')
+        if not CUDA_AVAILABLE:
+            print("Warning: --cuda requested but CUDA not available, using CPU")
+            use_cuda = False
+
     # Parse injection/absorption rates (used by vortex modes)
     p_inject = 0.5  # Default balanced
     p_absorb = 0.5
@@ -1577,7 +1860,7 @@ if __name__ == "__main__":
                 Lx, Ly = size * 2, size  # Keep 2:1 aspect ratio
             except ValueError:
                 pass
-        run_vortex(Lx=Lx, Ly=Ly, steps=1000, p_inject=p_inject, p_absorb=p_absorb)
+        run_vortex(Lx=Lx, Ly=Ly, steps=1000, p_inject=p_inject, p_absorb=p_absorb, use_cuda=use_cuda)
         sys.exit(0)
 
     if '--batch' in args:
@@ -1597,7 +1880,7 @@ if __name__ == "__main__":
             except ValueError:
                 pass
         run_vortex_batch(Lx=Lx, Ly=Ly, total_steps=total_steps,
-                         p_inject=p_inject, p_absorb=p_absorb)
+                         p_inject=p_inject, p_absorb=p_absorb, use_cuda=use_cuda)
         sys.exit(0)
 
     if '--benard' in args:
@@ -1619,16 +1902,16 @@ if __name__ == "__main__":
                     total_steps = int(args[0])
                 except ValueError:
                     pass
-            run_benard_batch(Lx=Lx, Ly=Ly, total_steps=total_steps)
+            run_benard_batch(Lx=Lx, Ly=Ly, total_steps=total_steps, use_cuda=use_cuda)
         else:
-            run_benard(Lx=Lx, Ly=Ly, steps=1000)
+            run_benard(Lx=Lx, Ly=Ly, steps=1000, use_cuda=use_cuda)
         sys.exit(0)
 
     if args:
         try:
             Lx = Ly = int(args[0])
         except ValueError:
-            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient] [--vortex] [--batch] [--benard] [--inject=X] [--absorb=X]")
+            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient] [--vortex] [--batch] [--benard] [--cuda] [--inject=X] [--absorb=X]")
             sys.exit(1)
 
     run_visualization(Lx=Lx, Ly=Ly, steps=500)
