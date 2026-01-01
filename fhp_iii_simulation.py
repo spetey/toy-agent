@@ -13,6 +13,7 @@ A lattice gas on a hexagonal lattice with:
 
 Usage:
     python fhp_iii_simulation.py [size] [--test] [--save] [--gradient] [--vortex] [--batch] [--benard]
+    python fhp_iii_simulation.py --batch 2048 10000 --inject=0.5 --absorb=0.5
 
 Modes:
     (default)   Interactive visualization with blob initialization
@@ -22,6 +23,10 @@ Modes:
     --vortex    Vortex experiment: obstacle in flow, measure EPR and vorticity
     --batch     Headless batch mode: fast, saves snapshots (e.g., --batch 256 10000)
     --benard    Bénard convection: hot bottom, cold top, gravity → convection cells
+
+Options for vortex/batch modes:
+    --inject=X  Injection probability at left boundary (default: 0.5)
+    --absorb=X  Absorption probability at right boundary (default: 0.5)
 """
 
 import numpy as np
@@ -1552,6 +1557,17 @@ if __name__ == "__main__":
         run_gradient(Lx=Lx, Ly=Ly, steps=500)
         sys.exit(0)
 
+    # Parse injection/absorption rates (used by vortex modes)
+    p_inject = 0.5  # Default balanced
+    p_absorb = 0.5
+    for i, arg in enumerate(args[:]):
+        if arg.startswith('--inject='):
+            p_inject = float(arg.split('=')[1])
+            args.remove(arg)
+        elif arg.startswith('--absorb='):
+            p_absorb = float(arg.split('=')[1])
+            args.remove(arg)
+
     if '--vortex' in args:
         args.remove('--vortex')
         Lx, Ly = 128, 64  # Default wider aspect for vortex street
@@ -1561,7 +1577,7 @@ if __name__ == "__main__":
                 Lx, Ly = size * 2, size  # Keep 2:1 aspect ratio
             except ValueError:
                 pass
-        run_vortex(Lx=Lx, Ly=Ly, steps=1000)
+        run_vortex(Lx=Lx, Ly=Ly, steps=1000, p_inject=p_inject, p_absorb=p_absorb)
         sys.exit(0)
 
     if '--batch' in args:
@@ -1580,7 +1596,8 @@ if __name__ == "__main__":
                 total_steps = int(args[0])
             except ValueError:
                 pass
-        run_vortex_batch(Lx=Lx, Ly=Ly, total_steps=total_steps)
+        run_vortex_batch(Lx=Lx, Ly=Ly, total_steps=total_steps,
+                         p_inject=p_inject, p_absorb=p_absorb)
         sys.exit(0)
 
     if '--benard' in args:
@@ -1611,7 +1628,7 @@ if __name__ == "__main__":
         try:
             Lx = Ly = int(args[0])
         except ValueError:
-            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient] [--vortex] [--batch] [--benard]")
+            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient] [--vortex] [--batch] [--benard] [--inject=X] [--absorb=X]")
             sys.exit(1)
 
     run_visualization(Lx=Lx, Ly=Ly, steps=500)
