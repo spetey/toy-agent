@@ -12,7 +12,7 @@ A lattice gas on a hexagonal lattice with:
 - Proper thermalization (unlike HPP)
 
 Usage:
-    python fhp_iii_simulation.py [size] [--test] [--save] [--gradient] [--vortex]
+    python fhp_iii_simulation.py [size] [--test] [--save] [--gradient] [--vortex] [--batch]
 
 Modes:
     (default)   Interactive visualization with blob initialization
@@ -20,6 +20,7 @@ Modes:
     --save      Save frames to disk
     --gradient  Gradient mode: inject particles left, absorb right
     --vortex    Vortex experiment: obstacle in flow, measure EPR and vorticity
+    --batch     Headless batch mode: fast, saves snapshots (e.g., --batch 256 10000)
 """
 
 import numpy as np
@@ -984,6 +985,129 @@ def run_vortex(Lx=128, Ly=64, steps=1000, p_inject=0.8, p_absorb=0.15):
     plt.show()
 
 
+def run_vortex_batch(Lx=512, Ly=256, total_steps=10000, snapshot_interval=500,
+                     p_inject=0.8, p_absorb=0.15, output_dir='vortex_batch'):
+    """
+    Run vortex experiment in batch mode (no live visualization).
+
+    Saves snapshots every snapshot_interval steps for later analysis.
+    Much faster than live visualization.
+    """
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"FHP-III Vortex Batch Experiment")
+    print(f"  Lattice: {Lx}x{Ly}")
+    print(f"  Steps: {total_steps}, snapshots every {snapshot_interval}")
+    print(f"  p_inject={p_inject}, p_absorb={p_absorb}")
+    print(f"  Output: {output_dir}/")
+
+    lattice = FHPLattice(Lx, Ly, boundary='gradient',
+                         p_inject=p_inject, p_absorb=p_absorb)
+
+    # Add flat plate obstacle
+    obstacle_x = Lx // 4
+    plate_height = Ly // 3
+    plate_y0 = (Ly - plate_height) // 2
+    lattice.add_obstacle_rect(obstacle_x, plate_y0, 3, plate_height)
+    print(f"  Obstacle: plate at x={obstacle_x}")
+
+    # Higher density for lower viscosity
+    lattice.initialize_uniform(density=0.4, rest_fraction=0.05)
+
+    print(f"  Initial particles: {lattice.total_particles()}")
+    print()
+
+    # Track history for final plots
+    epr_history = []
+    throughput_history = []
+    vort_history = []
+    time_history = []
+
+    import time
+    start_time = time.time()
+
+    snapshot_num = 0
+    for step in range(total_steps):
+        lattice.step()
+
+        # Record stats every step for smooth curves
+        if step % 10 == 0:
+            epr, throughput, gradient = lattice.get_epr()
+            vorticity = lattice.get_vorticity()
+            vort_total = np.abs(vorticity[~lattice.obstacles]).sum()
+            epr_history.append(epr)
+            throughput_history.append(throughput)
+            vort_history.append(vort_total)
+            time_history.append(lattice.time)
+
+        # Save snapshot
+        if step % snapshot_interval == 0:
+            elapsed = time.time() - start_time
+            steps_per_sec = (step + 1) / elapsed if elapsed > 0 else 0
+            print(f"  Step {step}/{total_steps} ({steps_per_sec:.0f} steps/s) - saving snapshot...")
+
+            fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+            fig.suptitle(f'FHP-III Vortex ({Lx}x{Ly}, t={lattice.time})', fontsize=14)
+
+            # Density
+            density = lattice.get_density()
+            density_display = np.ma.masked_where(lattice.obstacles, density)
+            im = axes[0, 0].imshow(density_display.T, origin='lower', cmap='hot',
+                                   vmin=0, vmax=6, interpolation='nearest')
+            axes[0, 0].set_title('Particle Density')
+            plt.colorbar(im, ax=axes[0, 0])
+
+            # Vorticity
+            vorticity = lattice.get_vorticity()
+            vort_display = np.ma.masked_where(lattice.obstacles, vorticity)
+            im2 = axes[0, 1].imshow(vort_display.T, origin='lower', cmap='RdBu_r',
+                                    vmin=-3, vmax=3, interpolation='nearest')
+            axes[0, 1].set_title('Vorticity')
+            plt.colorbar(im2, ax=axes[0, 1])
+
+            # Density profile
+            profile = lattice.get_density_profile()
+            axes[0, 2].plot(profile, 'b-', linewidth=2)
+            axes[0, 2].axvline(x=obstacle_x, color='gray', linestyle='--', alpha=0.5)
+            axes[0, 2].set_xlim(0, Lx)
+            axes[0, 2].set_ylim(0, 5)
+            axes[0, 2].set_xlabel('x')
+            axes[0, 2].set_ylabel('Density')
+            axes[0, 2].set_title('Density Profile')
+            axes[0, 2].grid(True, alpha=0.3)
+
+            # EPR history
+            axes[1, 0].plot(time_history, epr_history, 'g-', linewidth=1)
+            axes[1, 0].set_xlabel('Time')
+            axes[1, 0].set_ylabel('EPR')
+            axes[1, 0].set_title('Entropy Production Rate')
+            axes[1, 0].grid(True, alpha=0.3)
+
+            # Throughput history
+            axes[1, 1].plot(time_history, throughput_history, 'r-', linewidth=1)
+            axes[1, 1].set_xlabel('Time')
+            axes[1, 1].set_ylabel('Throughput')
+            axes[1, 1].set_title('Throughput')
+            axes[1, 1].grid(True, alpha=0.3)
+
+            # Vorticity history
+            axes[1, 2].plot(time_history, vort_history, 'purple', linewidth=1)
+            axes[1, 2].set_xlabel('Time')
+            axes[1, 2].set_ylabel('Total |vorticity|')
+            axes[1, 2].set_title('Total Rotation')
+            axes[1, 2].grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            plt.savefig(f'{output_dir}/snapshot_{snapshot_num:04d}.png', dpi=120)
+            plt.close()
+            snapshot_num += 1
+
+    elapsed = time.time() - start_time
+    print(f"\nDone! {total_steps} steps in {elapsed:.1f}s ({total_steps/elapsed:.0f} steps/s)")
+    print(f"Snapshots saved to {output_dir}/")
+
+
 if __name__ == "__main__":
     import sys
 
@@ -1026,11 +1150,30 @@ if __name__ == "__main__":
         run_vortex(Lx=Lx, Ly=Ly, steps=1000)
         sys.exit(0)
 
+    if '--batch' in args:
+        args.remove('--batch')
+        Lx, Ly = 512, 256  # Default large size for batch
+        total_steps = 10000
+        if args:
+            try:
+                size = int(args[0])
+                Lx, Ly = size * 2, size
+                args = args[1:]
+            except (ValueError, IndexError):
+                pass
+        if args:
+            try:
+                total_steps = int(args[0])
+            except ValueError:
+                pass
+        run_vortex_batch(Lx=Lx, Ly=Ly, total_steps=total_steps)
+        sys.exit(0)
+
     if args:
         try:
             Lx = Ly = int(args[0])
         except ValueError:
-            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient] [--vortex]")
+            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient] [--vortex] [--batch]")
             sys.exit(1)
 
     run_visualization(Lx=Lx, Ly=Ly, steps=500)
