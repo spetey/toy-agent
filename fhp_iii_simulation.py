@@ -12,7 +12,7 @@ A lattice gas on a hexagonal lattice with:
 - Proper thermalization (unlike HPP)
 
 Usage:
-    python fhp_iii_simulation.py [size] [--test] [--save] [--gradient] [--vortex] [--batch]
+    python fhp_iii_simulation.py [size] [--test] [--save] [--gradient] [--vortex] [--batch] [--benard]
 
 Modes:
     (default)   Interactive visualization with blob initialization
@@ -21,6 +21,7 @@ Modes:
     --gradient  Gradient mode: inject particles left, absorb right
     --vortex    Vortex experiment: obstacle in flow, measure EPR and vorticity
     --batch     Headless batch mode: fast, saves snapshots (e.g., --batch 256 10000)
+    --benard    Bénard convection: hot bottom, cold top, gravity → convection cells
 """
 
 import numpy as np
@@ -167,25 +168,74 @@ def _streaming_kernel_periodic(state, obstacles, Lx, Ly, neighbors_even, neighbo
     return new_state
 
 
+@njit(parallel=True, cache=True)
+def _streaming_kernel_benard(state, obstacles, Lx, Ly, neighbors_even, neighbors_odd):
+    """
+    JIT-compiled streaming step for Bénard convection mode.
+    Periodic in x, walls (bounce-back) in y.
+    """
+    new_state = np.zeros((Lx, Ly), dtype=np.uint8)
+
+    for d in range(6):
+        opp_d = (d + 3) % 6
+        bit_mask = np.uint8(1 << d)
+        opp_mask = np.uint8(1 << opp_d)
+
+        for y in prange(Ly):
+            if y % 2 == 0:
+                dx, dy = neighbors_even[d, 0], neighbors_even[d, 1]
+            else:
+                dx, dy = neighbors_odd[d, 0], neighbors_odd[d, 1]
+
+            for x in range(Lx):
+                if state[x, y] & bit_mask:
+                    nx = (x + dx) % Lx  # Periodic in x
+                    ny = y + dy
+
+                    if 0 <= ny < Ly:
+                        if obstacles[nx, ny]:
+                            new_state[x, y] |= opp_mask
+                        else:
+                            new_state[nx, ny] |= bit_mask
+                    else:
+                        # Bounce back at top/bottom walls
+                        new_state[x, y] |= opp_mask
+
+    # Rest particles
+    for y in prange(Ly):
+        for x in range(Lx):
+            if state[x, y] & np.uint8(64):
+                new_state[x, y] |= np.uint8(64)
+
+    return new_state
+
+
 class FHPLattice:
     """FHP-III Lattice Gas Simulation."""
     
-    def __init__(self, Lx, Ly, boundary='periodic', p_inject=0.0, p_absorb=0.0):
+    def __init__(self, Lx, Ly, boundary='periodic', p_inject=0.0, p_absorb=0.0,
+                 gravity=0.0, T_hot=0.0, T_cold=0.0):
         """
         Initialize lattice.
 
         Args:
             Lx: Width (number of sites in x)
             Ly: Height (number of sites in y)
-            boundary: 'periodic', 'walls', or 'gradient'
+            boundary: 'periodic', 'walls', 'gradient', or 'benard'
             p_inject: Probability to inject eastward particle at left boundary (gradient mode)
             p_absorb: Probability to absorb particles at right boundary (gradient mode)
+            gravity: Gravity strength for Bénard mode (probability of downward momentum bias)
+            T_hot: Hot boundary temperature proxy (bottom, for Bénard)
+            T_cold: Cold boundary temperature proxy (top, for Bénard)
         """
         self.Lx = Lx
         self.Ly = Ly
         self.boundary = boundary
         self.p_inject = p_inject
         self.p_absorb = p_absorb
+        self.gravity = gravity
+        self.T_hot = T_hot
+        self.T_cold = T_cold
 
         # State array: 7 bits per site packed into uint8
         self.state = np.zeros((Lx, Ly), dtype=np.uint8)
@@ -316,6 +366,122 @@ class FHPLattice:
 
         return epr, throughput_rate, gradient
 
+    def get_temperature(self):
+        """
+        Get local temperature field.
+
+        Temperature proxy: T = moving_particles / total_particles
+        Hot = more moving, Cold = more rest particles
+
+        Returns array of temperature values (0-1).
+        """
+        moving = self.get_moving_count().astype(float)
+        total = self.get_density().astype(float)
+        # Avoid division by zero
+        temp = np.divide(moving, total, out=np.zeros_like(moving), where=total > 0)
+        return temp
+
+    def get_vertical_momentum(self):
+        """Get vertical component of momentum field."""
+        py = np.zeros((self.Lx, self.Ly), dtype=np.int32)
+        for d in range(6):
+            mask = (self.state >> d) & 1
+            py += mask * VELOCITY[d, 1]
+        return py
+
+    def gravity_step(self):
+        """
+        Apply gravity: bias momentum downward.
+
+        With probability `gravity`, flip upward-moving particles to downward.
+        This models buoyancy: hot (fast) particles want to rise, but gravity pulls down.
+        """
+        if self.boundary != 'benard' or self.gravity <= 0:
+            return
+
+        # Upward directions: NE (1), NW (2)
+        # Downward directions: SW (4), SE (5)
+        for x in range(self.Lx):
+            for y in range(1, self.Ly - 1):  # Skip boundaries
+                site = int(self.state[x, y])
+
+                # Try to flip NE → SE (1 → 5)
+                if (site & (1 << NE)) and not (site & (1 << SE)):
+                    if np.random.random() < self.gravity:
+                        site ^= (1 << NE)  # Remove NE
+                        site |= (1 << SE)  # Add SE
+
+                # Try to flip NW → SW (2 → 4)
+                if (site & (1 << NW)) and not (site & (1 << SW)):
+                    if np.random.random() < self.gravity:
+                        site ^= (1 << NW)  # Remove NW
+                        site |= (1 << SW)  # Add SW
+
+                self.state[x, y] = np.uint8(site)
+
+    def thermal_boundary_step(self):
+        """
+        Apply thermal boundary conditions for Bénard convection.
+
+        Bottom (y=0): Hot - inject energy (convert rest→moving, prefer upward)
+        Top (y=Ly-1): Cold - remove energy (convert moving→rest, absorb upward)
+        """
+        if self.boundary != 'benard':
+            return
+
+        # Bottom boundary: HOT
+        # - Convert rest particles to upward-moving (NE or NW)
+        # - Inject upward particles with probability T_hot
+        for x in range(self.Lx):
+            site = int(self.state[x, 0])
+
+            # Convert rest to upward motion
+            if site & (1 << R):
+                if np.random.random() < self.T_hot:
+                    site ^= (1 << R)  # Remove rest
+                    # Add NE or NW randomly
+                    if np.random.random() < 0.5:
+                        if not (site & (1 << NE)):
+                            site |= (1 << NE)
+                    else:
+                        if not (site & (1 << NW)):
+                            site |= (1 << NW)
+
+            # Also inject upward particles
+            if np.random.random() < self.T_hot * 0.5:
+                if not (site & (1 << NE)):
+                    site |= (1 << NE)
+            if np.random.random() < self.T_hot * 0.5:
+                if not (site & (1 << NW)):
+                    site |= (1 << NW)
+
+            self.state[x, 0] = np.uint8(site)
+
+        # Top boundary: COLD
+        # - Convert moving particles to rest
+        # - Absorb upward-moving particles
+        for x in range(self.Lx):
+            site = int(self.state[x, self.Ly - 1])
+
+            # Absorb upward particles (they hit the cold ceiling)
+            if site & (1 << NE):
+                if np.random.random() < self.T_cold:
+                    site ^= (1 << NE)
+            if site & (1 << NW):
+                if np.random.random() < self.T_cold:
+                    site ^= (1 << NW)
+
+            # Convert some moving particles to rest (cooling)
+            for d in range(6):
+                if site & (1 << d):
+                    if np.random.random() < self.T_cold * 0.3:
+                        if not (site & (1 << R)):  # Only if no rest particle yet
+                            site ^= (1 << d)
+                            site |= (1 << R)
+                            break  # Only one conversion per step
+
+            self.state[x, self.Ly - 1] = np.uint8(site)
+
     def total_particles(self):
         """Total particle count."""
         return self.get_density().sum()
@@ -378,6 +544,11 @@ class FHPLattice:
         if NUMBA_AVAILABLE:
             if self.boundary == 'gradient':
                 self.state = _streaming_kernel_gradient(
+                    self.state, self.obstacles, self.Lx, self.Ly,
+                    NEIGHBORS_EVEN, NEIGHBORS_ODD
+                )
+            elif self.boundary == 'benard':
+                self.state = _streaming_kernel_benard(
                     self.state, self.obstacles, self.Lx, self.Ly,
                     NEIGHBORS_EVEN, NEIGHBORS_ODD
                 )
@@ -449,6 +620,19 @@ class FHPLattice:
                                 # Bounce back at left/right walls
                                 opp_d = (d + 3) % 6
                                 new_state[x, y] |= (1 << opp_d)
+                        elif self.boundary == 'benard':
+                            # Bénard mode: periodic in x, walls in y
+                            nx = nx % self.Lx  # Periodic in x
+                            if 0 <= ny < self.Ly:
+                                if self.obstacles[nx, ny]:
+                                    opp_d = (d + 3) % 6
+                                    new_state[x, y] |= (1 << opp_d)
+                                else:
+                                    shifted[nx, ny] = 1
+                            else:
+                                # Bounce back at top/bottom walls
+                                opp_d = (d + 3) % 6
+                                new_state[x, y] |= (1 << opp_d)
 
             new_state |= (shifted << d)
 
@@ -502,8 +686,10 @@ class FHPLattice:
         self.last_absorbed = self.particles_absorbed
 
         self.collision_step()
-        self.streaming_step()  # Use non-vectorized for correctness
+        self.streaming_step()
         self.boundary_driving_step()  # Apply injection/absorption for gradient mode
+        self.gravity_step()  # Apply gravity for Bénard mode
+        self.thermal_boundary_step()  # Apply thermal boundaries for Bénard mode
         self.time += 1
     
     def initialize_blob(self, cx, cy, radius, density=0.5, rest_fraction=0.0):
@@ -1108,6 +1294,234 @@ def run_vortex_batch(Lx=512, Ly=256, total_steps=10000, snapshot_interval=500,
     print(f"Snapshots saved to {output_dir}/")
 
 
+def run_benard(Lx=64, Ly=64, steps=1000, gravity=0.02, T_hot=0.4, T_cold=0.6):
+    """
+    Run Bénard convection simulation.
+
+    Hot bottom, cold top, with gravity. Should produce convection cells
+    (Rayleigh-Bénard instability) if parameters are right.
+
+    Args:
+        Lx, Ly: Lattice size
+        gravity: Strength of downward bias (0.01-0.05 typical)
+        T_hot: Probability of injecting upward particles at bottom
+        T_cold: Probability of absorbing upward particles at top
+    """
+    print(f"Creating FHP-III Bénard convection: {Lx}x{Ly}")
+    print(f"  gravity={gravity}, T_hot={T_hot}, T_cold={T_cold}")
+
+    lattice = FHPLattice(Lx, Ly, boundary='benard',
+                         gravity=gravity, T_hot=T_hot, T_cold=T_cold)
+
+    # Initialize with uniform medium density
+    lattice.initialize_uniform(density=0.25, rest_fraction=0.15)
+
+    print(f"Initial particles: {lattice.total_particles()}")
+
+    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    fig.suptitle(f'FHP-III Bénard Convection ({Lx}x{Ly})', fontsize=14)
+
+    # Temperature field
+    ax_temp = axes[0, 0]
+    temp = lattice.get_temperature()
+    im_temp = ax_temp.imshow(temp.T, origin='lower', cmap='hot',
+                              vmin=0.5, vmax=1.0, interpolation='nearest')
+    ax_temp.set_title('Temperature (moving/total)')
+    ax_temp.set_xlabel('x')
+    ax_temp.set_ylabel('y (bottom=hot, top=cold)')
+    plt.colorbar(im_temp, ax=ax_temp)
+
+    # Vertical momentum (shows convection currents)
+    ax_vy = axes[0, 1]
+    vy = lattice.get_vertical_momentum()
+    im_vy = ax_vy.imshow(vy.T, origin='lower', cmap='RdBu_r',
+                          vmin=-2, vmax=2, interpolation='nearest')
+    ax_vy.set_title('Vertical Momentum (red=up, blue=down)')
+    plt.colorbar(im_vy, ax=ax_vy)
+
+    # Density
+    ax_density = axes[0, 2]
+    density = lattice.get_density()
+    im_density = ax_density.imshow(density.T, origin='lower', cmap='viridis',
+                                    vmin=0, vmax=5, interpolation='nearest')
+    ax_density.set_title('Particle Density')
+    plt.colorbar(im_density, ax=ax_density)
+
+    # Temperature profile (y-averaged)
+    ax_profile = axes[1, 0]
+    temp_profile = temp.mean(axis=0)  # Average over x
+    line_profile, = ax_profile.plot(temp_profile, range(Ly), 'r-', linewidth=2)
+    ax_profile.set_xlim(0.5, 1.0)
+    ax_profile.set_ylim(0, Ly)
+    ax_profile.set_xlabel('Temperature')
+    ax_profile.set_ylabel('y (height)')
+    ax_profile.set_title('Temperature Profile')
+    ax_profile.grid(True, alpha=0.3)
+
+    # Vertical momentum profile
+    ax_vy_profile = axes[1, 1]
+    vy_profile = vy.mean(axis=0)
+    line_vy, = ax_vy_profile.plot(vy_profile, range(Ly), 'b-', linewidth=2)
+    ax_vy_profile.axvline(x=0, color='k', linestyle='--', alpha=0.5)
+    ax_vy_profile.set_xlim(-1, 1)
+    ax_vy_profile.set_ylim(0, Ly)
+    ax_vy_profile.set_xlabel('Mean vertical momentum')
+    ax_vy_profile.set_ylabel('y (height)')
+    ax_vy_profile.set_title('Vertical Flow Profile')
+    ax_vy_profile.grid(True, alpha=0.3)
+
+    # Statistics
+    ax_stats = axes[1, 2]
+    total_vy_history = []
+    temp_diff_history = []
+
+    def update(frame):
+        for _ in range(5):
+            lattice.step()
+
+        # Update temperature
+        temp = lattice.get_temperature()
+        im_temp.set_array(temp.T)
+        ax_temp.set_title(f'Temperature (t={lattice.time})')
+
+        # Update vertical momentum
+        vy = lattice.get_vertical_momentum()
+        im_vy.set_array(vy.T)
+
+        # Update density
+        density = lattice.get_density()
+        im_density.set_array(density.T)
+
+        # Update profiles
+        temp_profile = temp.mean(axis=0)
+        line_profile.set_xdata(temp_profile)
+
+        vy_profile = vy.mean(axis=0)
+        line_vy.set_xdata(vy_profile)
+
+        # Track statistics
+        total_vy = np.abs(vy).sum()
+        total_vy_history.append(total_vy)
+
+        # Temperature difference (bottom - top)
+        temp_bottom = temp[:, :Ly//4].mean()
+        temp_top = temp[:, -Ly//4:].mean()
+        temp_diff = temp_bottom - temp_top
+        temp_diff_history.append(temp_diff)
+
+        # Plot statistics
+        ax_stats.clear()
+        ax_stats.plot(total_vy_history, 'b-', label=f'Total |vy|: {total_vy:.0f}')
+        ax_stats.set_xlabel('Frame')
+        ax_stats.set_ylabel('Total vertical motion')
+        ax_stats.set_title(f'Convection Strength (ΔT={temp_diff:.3f})')
+        ax_stats.legend()
+        ax_stats.grid(True, alpha=0.3)
+
+        return [im_temp, im_vy, im_density, line_profile, line_vy]
+
+    ani = animation.FuncAnimation(fig, update, frames=steps//5,
+                                   interval=100, blit=False)
+    plt.tight_layout()
+    plt.show()
+
+
+def run_benard_batch(Lx=128, Ly=128, total_steps=5000, snapshot_interval=250,
+                     gravity=0.02, T_hot=0.4, T_cold=0.6, output_dir='benard_batch'):
+    """
+    Run Bénard convection in batch mode (no live visualization).
+    """
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"FHP-III Bénard Batch Experiment")
+    print(f"  Lattice: {Lx}x{Ly}")
+    print(f"  Steps: {total_steps}, snapshots every {snapshot_interval}")
+    print(f"  gravity={gravity}, T_hot={T_hot}, T_cold={T_cold}")
+    print(f"  Output: {output_dir}/")
+
+    lattice = FHPLattice(Lx, Ly, boundary='benard',
+                         gravity=gravity, T_hot=T_hot, T_cold=T_cold)
+
+    lattice.initialize_uniform(density=0.25, rest_fraction=0.15)
+    print(f"  Initial particles: {lattice.total_particles()}")
+    print()
+
+    import time
+    start_time = time.time()
+
+    convection_history = []
+    temp_diff_history = []
+    time_history = []
+
+    snapshot_num = 0
+    for step in range(total_steps):
+        lattice.step()
+
+        if step % 10 == 0:
+            vy = lattice.get_vertical_momentum()
+            temp = lattice.get_temperature()
+            convection = np.abs(vy).sum()
+            temp_diff = temp[:, :Ly//4].mean() - temp[:, -Ly//4:].mean()
+            convection_history.append(convection)
+            temp_diff_history.append(temp_diff)
+            time_history.append(lattice.time)
+
+        if step % snapshot_interval == 0:
+            elapsed = time.time() - start_time
+            steps_per_sec = (step + 1) / elapsed if elapsed > 0 else 0
+            print(f"  Step {step}/{total_steps} ({steps_per_sec:.0f} steps/s)")
+
+            fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+            fig.suptitle(f'FHP-III Bénard ({Lx}x{Ly}, t={lattice.time})', fontsize=14)
+
+            temp = lattice.get_temperature()
+            im = axes[0, 0].imshow(temp.T, origin='lower', cmap='hot',
+                                   vmin=0.5, vmax=1.0, interpolation='nearest')
+            axes[0, 0].set_title('Temperature')
+            plt.colorbar(im, ax=axes[0, 0])
+
+            vy = lattice.get_vertical_momentum()
+            im2 = axes[0, 1].imshow(vy.T, origin='lower', cmap='RdBu_r',
+                                    vmin=-2, vmax=2, interpolation='nearest')
+            axes[0, 1].set_title('Vertical Momentum')
+            plt.colorbar(im2, ax=axes[0, 1])
+
+            density = lattice.get_density()
+            im3 = axes[0, 2].imshow(density.T, origin='lower', cmap='viridis',
+                                    vmin=0, vmax=5, interpolation='nearest')
+            axes[0, 2].set_title('Density')
+            plt.colorbar(im3, ax=axes[0, 2])
+
+            axes[1, 0].plot(time_history, convection_history, 'b-')
+            axes[1, 0].set_xlabel('Time')
+            axes[1, 0].set_ylabel('Total |vy|')
+            axes[1, 0].set_title('Convection Strength')
+            axes[1, 0].grid(True, alpha=0.3)
+
+            axes[1, 1].plot(time_history, temp_diff_history, 'r-')
+            axes[1, 1].set_xlabel('Time')
+            axes[1, 1].set_ylabel('ΔT (bottom - top)')
+            axes[1, 1].set_title('Temperature Gradient')
+            axes[1, 1].grid(True, alpha=0.3)
+
+            temp_profile = temp.mean(axis=0)
+            axes[1, 2].plot(temp_profile, range(Ly), 'r-', linewidth=2)
+            axes[1, 2].set_xlabel('Temperature')
+            axes[1, 2].set_ylabel('Height (y)')
+            axes[1, 2].set_title('Temperature Profile')
+            axes[1, 2].grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            plt.savefig(f'{output_dir}/snapshot_{snapshot_num:04d}.png', dpi=120)
+            plt.close()
+            snapshot_num += 1
+
+    elapsed = time.time() - start_time
+    print(f"\nDone! {total_steps} steps in {elapsed:.1f}s ({total_steps/elapsed:.0f} steps/s)")
+    print(f"Snapshots saved to {output_dir}/")
+
+
 if __name__ == "__main__":
     import sys
 
@@ -1169,11 +1583,35 @@ if __name__ == "__main__":
         run_vortex_batch(Lx=Lx, Ly=Ly, total_steps=total_steps)
         sys.exit(0)
 
+    if '--benard' in args:
+        args.remove('--benard')
+        Lx = Ly = 64  # Default square for convection cells
+        batch_mode = '--batch' in args
+        if batch_mode:
+            args.remove('--batch')
+        if args:
+            try:
+                Lx = Ly = int(args[0])
+                args = args[1:]
+            except (ValueError, IndexError):
+                pass
+        if batch_mode:
+            total_steps = 5000
+            if args:
+                try:
+                    total_steps = int(args[0])
+                except ValueError:
+                    pass
+            run_benard_batch(Lx=Lx, Ly=Ly, total_steps=total_steps)
+        else:
+            run_benard(Lx=Lx, Ly=Ly, steps=1000)
+        sys.exit(0)
+
     if args:
         try:
             Lx = Ly = int(args[0])
         except ValueError:
-            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient] [--vortex] [--batch]")
+            print(f"Usage: {sys.argv[0]} [size] [--test] [--save] [--gradient] [--vortex] [--batch] [--benard]")
             sys.exit(1)
 
     run_visualization(Lx=Lx, Ly=Ly, steps=500)
