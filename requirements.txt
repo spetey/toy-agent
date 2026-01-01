@@ -1,3 +1,8 @@
 numpy>=1.24.0
 matplotlib>=3.7.0
+<<<<<<< HEAD
 PyQt5>=5.15.0  # GUI backend for matplotlib visualization
+||||||| 3ca1e2c
+=======
+numba>=0.57.0  # Optional but recommended - ~400x speedup
+>>>>>>> claude/vortex-morphodynamics-y22Cm
