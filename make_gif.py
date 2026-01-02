@@ -19,16 +19,7 @@ def make_gif_ffmpeg(input_dir, output, fps=5, scale=None):
     """Use ffmpeg to create GIF (best quality/size ratio)."""
     pattern = str(Path(input_dir) / "snapshot_*.png")
 
-    # Build filter chain
-    filters = []
-    if scale:
-        filters.append(f"scale=iw*{scale}/100:-1")
-    filters.append(f"fps={fps}")
-    filters.append("split[s0][s1];[s0]palettegen=stats_mode=diff[p];[s1][p]paletteuse=dither=bayer")
-
-    filter_str = ",".join(filters[:2]) + "," + filters[2]  # palettegen needs special handling
-
-    # Simpler approach - just scale and set fps
+    # Build filter
     if scale:
         vf = f"fps={fps},scale=iw*{scale}/100:-1:flags=lanczos"
     else:
