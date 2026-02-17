@@ -1,0 +1,18 @@
+size 10 10
+cell 1 4 /
+cell 1 8 \
+cell 2 4 !
+cell 3 4 +
+cell 4 4 E
+cell 5 4 >
+cell 5 8 <
+cell 6 4 -
+cell 6 8 W
+cell 7 4 \
+cell 7 8 %
+data 0 0 0
+data 0 1 5
+ip 2 3
+dir E
+h0 0 0
+cl 0 0

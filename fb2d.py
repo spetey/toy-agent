@@ -2,7 +2,8 @@
 """
 F***brain 2D Grid Simulator v1
 Authored or modified by Claude
-Version: 2026-02-15 v1.5 — added Z (swap grid[H0] with grid[GP])
+Version: 2026-02-17 v1.6 — bit-level ops (x=XOR, r/l rotate, f bit-Fredkin, z bit-GP-swap)
+                            x→X rename for byte swap; load/save defaults to ./programs
 
 A 2D reversible programming model where the instruction pointer moves
 on a toroidal grid and bounces off mirrors for control flow.
@@ -67,10 +68,10 @@ OPCODES = {
     '-':  16,  # grid[H0]--
     '.':  17,  # grid[H0] += grid[H1]  (accumulate add)
     ',':  18,  # grid[H0] -= grid[H1]  (accumulate sub)
-    'x':  19,  # swap(grid[H0], grid[H1])
-    'F':  20,  # if grid[CL]≠0: swap(grid[H0], grid[H1])  (Fredkin)
-    'G':  21,  # swap(H1_register, grid[H0])  (indirect H1)
-    'T':  22,  # swap(grid[CL], grid[H0])     (bridge)
+    'X':  19,  # swap([H0], [H1])  (byte swap — was 'x' before v1.6)
+    'F':  20,  # if [CL]≠0: swap([H0], [H1])  (Fredkin gate)
+    'G':  21,  # swap(H1_register, [H0])  (indirect H1)
+    'T':  22,  # swap([CL], [H0])     (bridge)
     '>':  23,  # CL East  (col+1)
     '<':  24,  # CL West  (col-1)
     '^':  25,  # CL North (row-1)
@@ -89,7 +90,13 @@ OPCODES = {
     '#':  36,  # / reflect if grid[GP] = 0, else pass through
     '$':  37,  # / reflect if grid[GP] ≠ 0, else pass through
     # Data/GP swap for efficient variable zeroing
-    'Z':  38,  # swap(grid[H0], grid[GP])
+    'Z':  38,  # swap([H0], [GP])  (byte-level GP swap)
+    # ── Bit-level operations (v1.6) ──
+    'x':  39,  # [H0] ^= [H1]  (XOR-accumulate, self-inverse)
+    'r':  40,  # [H0] rotate right 1 bit  (bit0→bit7, inverse: l)
+    'l':  41,  # [H0] rotate left 1 bit   (bit7→bit0, inverse: r)
+    'f':  42,  # if [CL]&1: swap([H0], [H1])  (bit-0 Fredkin, self-inverse)
+    'z':  43,  # swap(bit0 of [H0], bit0 of [GP])  (bit-level GP swap, self-inverse)
 }
 
 OPCODE_TO_CHAR = {v: k for k, v in OPCODES.items()}
@@ -225,11 +232,11 @@ class FB2DSimulator:
         elif opcode == 18:   # , grid[H0] -= grid[H1]
             self.grid[self.h0] = (self.grid[self.h0] - self.grid[self.h1]) & 0xFF
 
-        elif opcode == 19:   # x swap(grid[H0], grid[H1])
+        elif opcode == 19:   # X swap([H0], [H1])
             self.grid[self.h0], self.grid[self.h1] = \
                 self.grid[self.h1], self.grid[self.h0]
 
-        elif opcode == 20:   # F Fredkin: conditional swap
+        elif opcode == 20:   # F Fredkin: if [CL]!=0: swap([H0], [H1])
             if self.grid[self.cl] != 0:
                 self.grid[self.h0], self.grid[self.h1] = \
                     self.grid[self.h1], self.grid[self.h0]
@@ -292,11 +299,36 @@ class FB2DSimulator:
             if self.grid[self.gp] != 0:
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 38:   # Z swap(grid[H0], grid[GP])
+        elif opcode == 38:   # Z swap([H0], [GP])
             self.grid[self.h0], self.grid[self.gp] = \
                 self.grid[self.gp], self.grid[self.h0]
 
-        # else: NOP (0 or 39–255)
+        # ── Bit-level operations (v1.6) ──
+        elif opcode == 39:   # x  [H0] ^= [H1]  (XOR, self-inverse)
+            self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
+
+        elif opcode == 40:   # r  [H0] rotate right 1 bit
+            v = self.grid[self.h0]
+            self.grid[self.h0] = ((v >> 1) | ((v & 1) << 7)) & 0xFF
+
+        elif opcode == 41:   # l  [H0] rotate left 1 bit
+            v = self.grid[self.h0]
+            self.grid[self.h0] = (((v << 1) & 0xFF) | (v >> 7)) & 0xFF
+
+        elif opcode == 42:   # f  if [CL]&1: swap([H0], [H1])  (bit-0 Fredkin)
+            if self.grid[self.cl] & 1:
+                self.grid[self.h0], self.grid[self.h1] = \
+                    self.grid[self.h1], self.grid[self.h0]
+
+        elif opcode == 43:   # z  swap bit0 of [H0] with bit0 of [GP]
+            a = self.grid[self.h0]
+            b = self.grid[self.gp]
+            a_bit = a & 1
+            b_bit = b & 1
+            self.grid[self.h0] = (a & 0xFE) | b_bit
+            self.grid[self.gp] = (b & 0xFE) | a_bit
+
+        # else: NOP (0 or 44–255)
 
         # ── Trace output ──
         if self.trace:
@@ -409,6 +441,31 @@ class FB2DSimulator:
         elif opcode == 38:   # Z is self-inverse
             self.grid[self.h0], self.grid[self.gp] = \
                 self.grid[self.gp], self.grid[self.h0]
+
+        # ── Bit-level undo (v1.6) ──
+        elif opcode == 39:   # x XOR is self-inverse
+            self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
+
+        elif opcode == 40:   # r was rotate-right, undo with rotate-left
+            v = self.grid[self.h0]
+            self.grid[self.h0] = (((v << 1) & 0xFF) | (v >> 7)) & 0xFF
+
+        elif opcode == 41:   # l was rotate-left, undo with rotate-right
+            v = self.grid[self.h0]
+            self.grid[self.h0] = ((v >> 1) | ((v & 1) << 7)) & 0xFF
+
+        elif opcode == 42:   # f bit-0 Fredkin is self-inverse
+            if self.grid[self.cl] & 1:
+                self.grid[self.h0], self.grid[self.h1] = \
+                    self.grid[self.h1], self.grid[self.h0]
+
+        elif opcode == 43:   # z bit-0 GP swap is self-inverse
+            a = self.grid[self.h0]
+            b = self.grid[self.gp]
+            a_bit = a & 1
+            b_bit = b & 1
+            self.grid[self.h0] = (a & 0xFE) | b_bit
+            self.grid[self.gp] = (b & 0xFE) | a_bit
 
         # Mirrors (incl 34–37) and NOP: no data effect to undo (direction handled above)
 
@@ -958,23 +1015,28 @@ ISA ({opcount} opcodes + NOP):
     ^ (25)  North    v (26)  South    > (23)  East    < (24)  West
   GP movement (garbage pointer):
     { (32)  North    } (31)  South    ] (29)  East    [ (30)  West
-  Data:
-    + (15)  grid[H0]++                - (16)  grid[H0]--
-    . (17)  grid[H0] += grid[H1]      , (18)  grid[H0] -= grid[H1]
-    x (19)  swap(grid[H0],grid[H1])
-    F (20)  if grid[CL]!=0: swap (Fredkin)
+  Byte-level data:
+    + (15)  [H0]++                     - (16)  [H0]--
+    . (17)  [H0] += [H1]              , (18)  [H0] -= [H1]
+    X (19)  swap([H0], [H1])           F (20)  if [CL]!=0: swap([H0],[H1])
+  Bit-level data (v1.6):
+    x (39)  [H0] ^= [H1]  (XOR, self-inverse)
+    r (40)  [H0] rotate right 1 bit   l (41)  [H0] rotate left 1 bit
+    f (42)  if [CL]&1: swap([H0],[H1]) (bit-0 Fredkin)
+    z (43)  swap(bit0 [H0], bit0 [GP]) (bit-level GP swap)
   CL data:
-    G (21)  swap(H1_reg, grid[H0])    T (22)  swap(grid[CL], grid[H0])
+    G (21)  swap(H1_reg, [H0])         T (22)  swap([CL], [H0])
   GP data (breadcrumbs):
-    P (27)  grid[GP]++  (leave breadcrumb)
-    Q (28)  grid[GP]--  (erase breadcrumb)
+    P (27)  [GP]++  (leave breadcrumb)
+    Q (28)  [GP]--  (erase breadcrumb)
   GP-conditional mirrors:
-    ( (34)  \\ if grid[GP]!=0            ) (35)  \\ if grid[GP]=0
-    $ (37)  /  if grid[GP]!=0            # (36)  /  if grid[GP]=0
+    ( (34)  \\ if [GP]!=0               ) (35)  \\ if [GP]=0
+    $ (37)  /  if [GP]!=0               # (36)  /  if [GP]=0
   CL/GP swap:
     K (33)  swap(CL_register, GP_register)
   Data/GP swap:
-    Z (38)  swap(grid[H0], grid[GP])  (zero a variable in one step)
+    Z (38)  swap([H0], [GP])  (byte-level, zero a variable)
+  Notation: H0 = head position, [H0] = value at that position
 
   / reflect: E<->N  S<->W     \\ reflect: E<->S  N<->W
 
@@ -1230,12 +1292,17 @@ def interactive_session():
                     print("Available examples: bounce, loop, mirrors, branch")
                 sim.display_grid()
 
-            # ── Save / Load ──
+            # ── Save / Load (default to ./programs/) ──
             elif cmd == 'save':
                 if args:
                     fn = args[0]
                     if not fn.endswith('.fb2d'):
                         fn += '.fb2d'
+                    # Default to ./programs/ if no directory specified
+                    if os.sep not in fn and not fn.startswith('.'):
+                        prog_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'programs')
+                        if os.path.isdir(prog_dir):
+                            fn = os.path.join(prog_dir, fn)
                     sim.save_state(fn)
                     print(f"Saved to {fn}")
                 else:
@@ -1246,6 +1313,12 @@ def interactive_session():
                     fn = args[0]
                     if not fn.endswith('.fb2d'):
                         fn += '.fb2d'
+                    # Default to ./programs/ if no directory specified and file not found locally
+                    if not os.path.exists(fn) and os.sep not in fn and not fn.startswith('.'):
+                        prog_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'programs')
+                        candidate = os.path.join(prog_dir, fn)
+                        if os.path.exists(candidate):
+                            fn = candidate
                     sim.load_state(fn)
                     print(f"Loaded {fn}")
                     sim.display_grid()

@@ -40,12 +40,14 @@ OP = {
     'N':  7,   'S':  8,   'E':  9,   'W': 10,
     'n': 11,   's': 12,   'e': 13,   'w': 14,
     '+': 15,   '-': 16,   '.': 17,   ',': 18,
-    'x': 19,   'F': 20,   'G': 21,   'T': 22,
+    'X': 19,   'F': 20,   'G': 21,   'T': 22,
     '>': 23,   '<': 24,   '^': 25,   'v': 26,
     'P': 27,   'Q': 28,   ']': 29,   '[': 30,
     '}': 31,   '{': 32,   'K': 33,   '(': 34,   ')': 35,
     '#': 36,   '$': 37,
     'Z': 38,
+    # Bit-level ops (v1.6)
+    'x': 39,   'r': 40,   'l': 41,   'f': 42,   'z': 43,
 }
 
 OPCODE_TO_CHAR = {v: k for k, v in OP.items()}
@@ -448,7 +450,7 @@ class Compiler:
             ycol = self._var_col(stmt.y)
             self._move_h0_to(DATA_ROW, xcol, emit_code)
             self._move_h1_to(DATA_ROW, ycol, emit_code)
-            emit_code('x')
+            emit_code('X')
         elif isinstance(stmt, While):
             self._compile_while(stmt, level)
         else:
@@ -797,7 +799,7 @@ class Compiler:
             ycol = self._var_col(stmt.y)
             self._move_h0_to(DATA_ROW, xcol, emit_fn)
             self._move_h1_to(DATA_ROW, ycol, emit_fn)
-            emit_fn('x')
+            emit_fn('X')
         elif isinstance(stmt, While):
             raise RuntimeError("While in _compile_stmt_to — should use _compile_body_ops")
         else:
@@ -1089,7 +1091,7 @@ class CompilerV2:
             ycol = self._var_col(stmt.y)
             self._move_h0_to(DATA_ROW, xcol, emit_here)
             self._move_h1_to(DATA_ROW, ycol, emit_here)
-            emit_here('x')
+            emit_here('X')
         elif isinstance(stmt, ZeroVar):
             col = self._var_col(stmt.var)
             self._move_h0_to(DATA_ROW, col, emit_here)

@@ -1,0 +1,17 @@
+// written by Steve 2026-02-13
+// further testing ifb v0.1
+// calculate the n-th Fibonacci number
+
+var n = 10
+var result = 1
+var prev
+var tmp
+
+tmp += n
+
+while tmp do
+      result += prev
+      swap prev result
+      tmp -= 1
+end
+      

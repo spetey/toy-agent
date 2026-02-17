@@ -1,0 +1,35 @@
+// delta-encode.ifb — Delta encoder
+// Transforms input bytes to deltas for better compressibility
+// Input:  [10, 13, 11, 15, 14, 14, 18, 12]
+// Output: [10,  3,254,  4,255,  0,  4,250]  (deltas mod 256)
+// Fully reversible via step_back
+//
+// GP trail layout: outputs interleaved with swapped-out prev values.
+// Actual delta outputs are at even positions in the loop output.
+
+var n = 8
+var curr = 0
+var prev = 0
+var delta = 0
+input 10 13 11 15 14 14 18 12
+
+// First byte: output literally
+read curr
+advance
+prev += curr
+output curr
+n -= 1
+
+// Remaining bytes: output deltas
+// Double-read: read into both delta and curr before advancing.
+// After output delta, swap prev/curr to update prev, then output old prev.
+while n do
+    read delta
+    read curr
+    advance
+    delta -= prev
+    output delta
+    swap prev curr
+    output curr
+    n -= 1
+end

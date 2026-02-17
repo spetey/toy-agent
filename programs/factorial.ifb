@@ -1,0 +1,23 @@
+// Factorial: result = n!
+// For n=5, result should be 120
+// Past 5! the result will only be correct mod 256
+
+var n = 5
+var result = 1
+var acc = 0
+var count = 0
+
+while n do
+    // Multiply: acc = result * n
+    count += n
+    while count do
+        acc += result
+        count -= 1
+    end
+
+    // Move acc to result, zero acc
+    swap acc result
+    zero acc
+
+    n -= 1
+end

@@ -1,0 +1,13 @@
+// written by Steve 2026-02-13
+// testing ifb v0.1 for compiling to fb2d etc
+
+var input = 7
+var tmp
+var final
+
+tmp += input
+
+while tmp do
+      final += tmp
+      tmp -= 1
+end
