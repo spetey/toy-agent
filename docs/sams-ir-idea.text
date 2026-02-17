@@ -1,0 +1,254 @@
+
+So Sam Eisenstat says we can get reversibility by tracking a special "instruction register" that basically buffers the next instruction value for a step.
+
+## General case
+
+start:
+
+```
+Adx:    0    1    2    3    4    5    6    7   IR
+Val:   11    0    0    0    0    3    0    0   0
+Ins:    J    0    0    0    0    {    0    0
+       IP                       CL
+     H0,H1
+```
+
+next, swap(tape[IP], IR):
+
+```
+Adx:    0    1    2    3    4    5    6    7   IR
+Val:    0    0    0    0    0    3    0    0   11
+Ins:    0    0    0    0    0    {    0    0
+       IP                       CL
+     H0,H1
+```
+
+next, execute at IP (and increment or jump):
+
+```
+Adx:    0    1    2    3    4    5    6    7   IR
+Val:    0    0    0    0    0    3    0    0   11
+Ins:    0    0    0    0    0    {    0    0
+            IP                  CL
+     H0,H1
+```
+
+next, swap(tape[IP], IR):
+
+```
+Adx:    0    1    2    3    4    5    6    7   IR
+Val:    0   11    0    0    0    3    0    0    0
+Ins:    0    J    0    0    0    {    0    0
+            IP                  CL
+     H0,H1
+```
+
+next, execute at IP (and increment or jump):
+
+```
+Adx:    0    1    2    3    4    5    6    7   IR
+Val:    0   11    0    0    0    1    0    0    0
+Ins:    0    J    0    0    0    <    0    0
+                      IP        CL
+     H0,H1
+```
+
+This seems fine?
+
+## Problem case: `tape[tape[CL]] == 11`
+
+When the data in `CL` happens to point to an address with a `J`, then it's ambigous whether the current IP is from a jump or not.
+
+Call this state `A` (for "ambiguous"):
+
+```
+Adx:    0    1    2    3    4    5    6    7
+Val:    0   11    0    1    0    1    2    0
+Ins:    0    J    0    <    0    <    >    0
+                           IP   CL
+     H0,H1
+```
+
+`A` could have been preceded by
+
+```
+Adx:    0    1    2    3    4    5    6    7
+Val:    0   11    0    1    0    1    2    0
+Ins:    0    J    0    <    0    <    >    0
+                      IP             CL
+     H0,H1
+```
+
+and then just incremented after performing `<`, or by 
+
+```
+Adx:    0    1    2    3    4    5    6    7
+Val:    0   11    0    1    0    4    2    0
+Ins:    0    J    0    <    0    }    >    0
+            IP                  CL
+     H0,H1
+```
+
+and then jumping.
+
+Would an IR help with this?
+
+Let's trace the history where `A` was preceded by `J` not `<`, with an `IR`.
+
+Step 0 (start)
+
+```
+Idx:     0    1    2    3    4    5    6    7   IR
+Val:    11    0    1    0    0    1    2    0    0
+Ins:     J    0    <    0    0    <    >    0
+        IP                            CL
+      H0,H1
+```
+
+Step 0.5 swap
+
+```
+Idx:     0    1    2    3    4    5    6    7   IR
+Val:     0    0    1    0    0    1    2    0   11
+Ins:     0    0    <    0    0    <    >    0
+        IP                            CL
+      H0,H1
+```
+
+Step 1 execute@IP (nop)
+
+```
+Idx:     0    1    2    3    4    5    6    7   IR
+Val:     0    0    1    0    0    1    2    0   11
+Ins:     0    0    <    0    0    <    >    0
+             IP                       CL
+      H0,H1
+```
+
+Step 1.5 swap
+
+```
+Idx:     0    1    2    3    4    5    6    7   IR
+Val:     0   11    1    0    0    1    2    0    0
+Ins:     0    J    <    0    0    <    >    0
+             IP                       CL
+      H0,H1
+```
+
+Step 2 execute@IP (jump)
+
+```
+Idx:     0    1    2    3    4    5    6    7   IR
+Val:     0    2    1    0    0    1    1    0    0
+Ins:     0    >    <    0    0    <    >    0
+                  IP                  CL
+      H0,H1
+```
+
+Step 2.5 swap
+
+```
+Idx:     0    1    2    3    4    5    6    7   IR
+Val:     0    2    0    0    0    1    1    0    1
+Ins:     0    >    0    0    0    <    >    0
+                  IP                  CL
+      H0,H1
+```
+
+Step 3 execute @ IP (nop)
+
+```
+Idx:     0    1    2    3    4    5    6    7   IR
+Val:     0    2    0    0    0    1    1    0    1
+Ins:     0    >    0    0    0    <    >    0
+                       IP             CL
+      H0,H1
+```
+
+Step 3.5 swap
+
+```
+Idx:     0    1    2    3    4    5    6    7   IR
+Val:     0    2    0    1    0    1    1    0    0
+Ins:     0    >    0    <    0    <    >    0
+                       IP             CL
+      H0,H1
+```
+
+Step 4 execute @ IP (move `CL` left)
+
+```
+Idx:     0    1    2    3    4    5    6    7   IR
+Val:     0    2    0    1    0    1    1    0    0
+Ins:     0    >    0    <    0    <    >    0
+                            IP   CL
+      H0,H1
+```
+
+State A
+
+```
+Adx:    0    1    2    3    4    5    6    7
+Val:    0   11    0    1    0    1    2    0
+Ins:    0    J    0    <    0    <    >    0
+                           IP   CL
+     H0,H1
+```
+
+# Proof swap, then execute @ IP doesn't work
+
+Use `fb_ir_simulator-swap-then-ip.py` for these
+
+
+=== Ambiguous === `ambiguous.fb`
+IR=0 (0)
+IP=4, CL=5, H0=0, H1=0
+Idx:     0    1    2    3    4    5    6    7 
+Val:     0   11    0    1    0    1    1    0 
+Ins:     0    J    0    <    0    <    <    0 
+                            IP   CL           
+      H0,H1                        
+
+=== Step 0 (A: jumps right there) === `ambiguous_a.fb`
+IR=0 (0)
+IP=0, CL=5, H0=0, H1=0
+Idx:     0    1    2    3    4    5    6    7 
+Val:    11    0    0    1    0    4    1    0 
+Ins:     J    0    0    <    0    }    <    0 
+        IP                       CL           
+      H0,H1
+
+
+=== Step 0 (B: steps there) === `ambiguous_b.fb`
+IR=0 (0)
+IP=0, CL=6, H0=0, H1=0
+Idx:     0    1    2    3    4    5    6    7 
+Val:    11    0    1    0    0    1    2    0 
+Ins:     J    0    <    0    0    <    >    0 
+        IP                            CL      
+      H0,H1
+
+
+
+
+# Swap then perform on `IR` instead
+
+
+=== Ambiguous? ===
+IR=0 (0)
+IP=4, CL=5, H0=0, H1=0
+Idx:     0    1    2    3    4    5    6    7 
+Val:     0   11    0    0    0    1    2    0 
+Ins:     0    J    0    0    0    <    >    0 
+                            IP   CL           
+      H0,H1                                
+	  
+
+=== Previous A === `pre_ir_a.fb`
+IR=0 (0)
+IP=3, CL=5, H0=0, H1=0
+Idx:     0    1    2    3    4    5    6    7 
+Val:     0   11    0    0    0    1    2    0 
+Ins:     0    J    0    0    0    <    >    0 
+                       IP        CL           
+      H0,H1                             

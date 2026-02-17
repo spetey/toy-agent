@@ -1,0 +1,296 @@
+# fb2d Reference Sheet
+
+2D reversible programming language · toroidal grid · von Neumann
+architecture · v0.5
+
+## Execution Model
+
+::: section
+The instruction pointer (IP) moves across a toroidal 2D grid. Every
+instruction is reversible --- the simulator can step backward without
+history.
+
+1.  **Read** the opcode at `grid[IP_row, IP_col]`
+2.  **Execute** the instruction (mirrors may redirect IP direction)
+3.  **Advance** IP one cell in its current direction (post-redirect)
+
+Default grid: 8 × 16 (128 cells). All coordinates wrap toroidally.
+Values are bytes (0--255, mod 256 arithmetic).
+:::
+
+## Machine State
+
+:::::::::: section
+::::::::: state-grid
+::: state-item
+[grid\[r×c\]]{.state-label} [program + data (byte array)]{.state-desc}
+:::
+
+::: state-item
+[IP (row,col)]{.state-label} [instruction pointer position]{.state-desc}
+:::
+
+::: state-item
+[DIR]{.state-label} [IP direction: N / E / S / W]{.state-desc}
+:::
+
+::: state-item
+[CL]{.state-label style="color:var(--pink)"} [control locus (flat index)
+--- condition register]{.state-desc}
+:::
+
+::: state-item
+[H0]{.state-label style="color:var(--cyan)"} [data head 0 (flat index)
+--- primary operand]{.state-desc}
+:::
+
+::: state-item
+[H1]{.state-label style="color:var(--green)"} [data head 1 (flat index)
+--- secondary operand]{.state-desc}
+:::
+:::::::::
+
+All three heads (CL, H0, H1) are flat indices into the grid. Initial
+state: all at position 0, IP at (0,0) heading East.
+::::::::::
+
+## Instruction Set --- 26 Opcodes + NOP
+
+:::: section
+[Mirrors · Control Flow]{.cat-tag .tag-mirror}
+
+  Char             Byte   Instruction                                        Inverse
+  ---------------- ------ -------------------------------------------------- --------------
+  [/]{.op-char}    1      Unconditional `/` reflect                          self-inverse
+  [\\]{.op-char}   2      Unconditional `\` reflect                          self-inverse
+  [%]{.op-char}    3      `/` reflect if `grid[CL] ≠ 0`, else pass through   self-inverse
+  [?]{.op-char}    4      `/` reflect if `grid[CL] = 0`, else pass through   self-inverse
+  [&]{.op-char}    5      `\` reflect if `grid[CL] ≠ 0`, else pass through   self-inverse
+  [!]{.op-char}    6      `\` reflect if `grid[CL] = 0`, else pass through   self-inverse
+
+::: mirror-diagram
+**/**  reflect:  E [↔]{.arr} N    S [↔]{.arr} W     [(dr,dc) →
+(−dc,−dr)]{style="color:var(--text-dim)"}\
+**\\**  reflect:  E [↔]{.arr} S    N [↔]{.arr} W     [(dr,dc) →
+(dc,dr)]{style="color:var(--text-dim)"}
+:::
+
+Conditional mirrors act as branching: the IP either reflects (taking the
+turn) or passes straight through, based on grid\[CL\].
+::::
+
+::::::: section
+::::: two-col
+<div>
+
+[H0 Movement]{.cat-tag .tag-h0}
+
+  Char            Byte   Direction
+  --------------- ------ ------------------
+  [N]{.op-char}   7      H0 North (row−1)
+  [S]{.op-char}   8      H0 South (row+1)
+  [E]{.op-char}   9      H0 East (col+1)
+  [W]{.op-char}   10     H0 West (col−1)
+
+</div>
+
+<div>
+
+[H1 Movement]{.cat-tag .tag-h1}
+
+  Char            Byte   Direction
+  --------------- ------ ------------------
+  [n]{.op-char}   11     H1 North (row−1)
+  [s]{.op-char}   12     H1 South (row+1)
+  [e]{.op-char}   13     H1 East (col+1)
+  [w]{.op-char}   14     H1 West (col−1)
+
+</div>
+:::::
+
+::: {style="margin-top:12px"}
+[CL Movement]{.cat-tag .tag-cl}
+
+  Char             Byte   Direction
+  ---------------- ------ ------------------
+  [\^]{.op-char}   25     CL North (row−1)
+  [v]{.op-char}    26     CL South (row+1)
+  [\>]{.op-char}   23     CL East (col+1)
+  [\<]{.op-char}   24     CL West (col−1)
+:::
+
+All head movements wrap toroidally. Inverses: N↔S, E↔W for each head.
+:::::::
+
+::: section
+[Data Operations]{.cat-tag .tag-data}
+
+  Char            Byte   Instruction                                                                                      Inverse
+  --------------- ------ ------------------------------------------------------------------------------------------------ --------------
+  [+]{.op-char}   15     `grid[H0]++`  (mod 256)                                                                          −
+  [−]{.op-char}   16     `grid[H0]--`  (mod 256)                                                                          \+
+  [.]{.op-char}   17     `grid[H0] += grid[H1]`  (accumulate add)                                                         ,
+  [,]{.op-char}   18     `grid[H0] -= grid[H1]`  (accumulate sub)                                                         .
+  [x]{.op-char}   19     `swap(grid[H0], grid[H1])`                                                                       self-inverse
+  [F]{.op-char}   20     If `grid[CL] ≠ 0`: `swap(grid[H0], grid[H1])`  [(Fredkin gate)]{style="color:var(--text-dim)"}   self-inverse
+:::
+
+::: section
+[CL Data · Bridging]{.cat-tag .tag-bridge}
+
+  Char            Byte   Instruction                                                                                                  Inverse
+  --------------- ------ ------------------------------------------------------------------------------------------------------------ --------------
+  [G]{.op-char}   21     `swap(CL_register, grid[H0])`  [(indirect CL --- load/store CL as value)]{style="color:var(--text-dim)"}     self-inverse
+  [T]{.op-char}   22     `swap(grid[CL], grid[H0])`  [(bridge --- transfer between CL and H0 cells)]{style="color:var(--text-dim)"}   self-inverse
+:::
+
+::: section
+[NOP]{.cat-tag style="background:#8b949e20; color:var(--text-dim)"}
+
+Byte `0` (displayed as `·`) and any undefined byte value (27--255) are
+NOPs --- the IP passes through with no effect. This makes the language
+**\"valid everywhere\"**: any byte sequence is a valid program.
+:::
+
+## Reversibility [↺ history-free]{.reversible-badge}
+
+::: section
+Every instruction has a well-defined inverse. The simulator reverses
+execution *without* storing a history stack --- it deduces the prior
+state from the current state alone:
+
+  Forward                  Backward           Notes
+  ------------------------ ------------------ --------------------------------
+  `+ / −`                  `− / +`            Arithmetic inverses
+  `. / ,`                  `, / .`            Accumulate inverses
+  `N / S`, `E / W`         `S / N`, `W / E`   Direction reversal (all heads)
+  `/ \ x F G T`            themselves         Self-inverse (involutions)
+  Conditionals `% ? & !`   themselves         Same condition re-evaluated
+
+Reverse step: back up IP one cell in the opposite direction, read that
+cell\'s opcode, re-evaluate any condition, apply the inverse operation.
+:::
+
+## Byte Code Map
+
+::: section
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| Byte | Char                           | Category  |   | Byte    | Char                          | Category  |
++======+================================+===========+===+=========+===============================+===========+
+| 0    | [·]{.op-char                   | NOP       |   | 14      | [w]{.op-char                  | H1 West   |
+|      | style="color:var(--text-dim)"} |           |   |         | style="color:var(--green)"}   |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 1    | [/]{.op-char                   | Mirror    |   | 15      | [+]{.op-char                  | Increment |
+|      | style="color:var(--yellow)"}   |           |   |         | style="color:var(--orange)"}  |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 2    | [\\]{.op-char                  | Mirror    |   | 16      | [−]{.op-char                  | Decrement |
+|      | style="color:var(--yellow)"}   |           |   |         | style="color:var(--orange)"}  |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 3    | [%]{.op-char                   | Cond /    |   | 17      | [.]{.op-char                  | Acc. add  |
+|      | style="color:var(--yellow)"}   |           |   |         | style="color:var(--orange)"}  |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 4    | [?]{.op-char                   | Cond /    |   | 18      | [,]{.op-char                  | Acc. sub  |
+|      | style="color:var(--yellow)"}   |           |   |         | style="color:var(--orange)"}  |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 5    | [&]{.op-char                   | Cond \\   |   | 19      | [x]{.op-char                  | Swap      |
+|      | style="color:var(--yellow)"}   |           |   |         | style="color:var(--orange)"}  |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 6    | [!]{.op-char                   | Cond \\   |   | 20      | [F]{.op-char                  | Fredkin   |
+|      | style="color:var(--yellow)"}   |           |   |         | style="color:var(--orange)"}  |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 7    | [N]{.op-char                   | H0 North  |   | 21      | [G]{.op-char                  | Indirect  |
+|      | style="color:var(--cyan)"}     |           |   |         | style="color:var(--accent2)"} | CL        |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 8    | [S]{.op-char                   | H0 South  |   | 22      | [T]{.op-char                  | Bridge    |
+|      | style="color:var(--cyan)"}     |           |   |         | style="color:var(--accent2)"} |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 9    | [E]{.op-char                   | H0 East   |   | 23      | [\>]{.op-char                 | CL East   |
+|      | style="color:var(--cyan)"}     |           |   |         | style="color:var(--pink)"}    |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 10   | [W]{.op-char                   | H0 West   |   | 24      | [\<]{.op-char                 | CL West   |
+|      | style="color:var(--cyan)"}     |           |   |         | style="color:var(--pink)"}    |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 11   | [n]{.op-char                   | H1 North  |   | 25      | [\^]{.op-char                 | CL North  |
+|      | style="color:var(--green)"}    |           |   |         | style="color:var(--pink)"}    |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 12   | [s]{.op-char                   | H1 South  |   | 26      | [v]{.op-char                  | CL South  |
+|      | style="color:var(--green)"}    |           |   |         | style="color:var(--pink)"}    |           |
++------+--------------------------------+-----------+---+---------+-------------------------------+-----------+
+| 13   | [e]{.op-char                   | H1 East   |   | 27--255 | NOP (data / unused)                       |
+|      | style="color:var(--green)"}    |           |   |         |                                           |
++------+--------------------------------+-----------+---+---------+-------------------------------------------+
+:::
+
+## Simulator Interface Commands
+
+::: section
+### Program Loading
+
+  --------------------------- -----------------------------------------------------------------
+  tape \<code\>               Load code linearly onto grid (resets all state)
+  row \<r\> \[c\] \<code\>    Place code along row *r* starting at col *c* (default 0)
+  col \<c\> \[r\] \<code\>    Place code down column *c* starting at row *r* (default 0)
+  data \<r\> \<c\> \<v...\>   Set raw values at (r,c)+; values can be numbers or opcode chars
+  cell \<r\> \<c\> \[v\]      Get/set a single cell
+  --------------------------- -----------------------------------------------------------------
+:::
+
+::: section
+### Register Control
+
+  -------------------- ----------------------
+  ip \<r\> \<c\>       Set IP position
+  dir \<N\|E\|S\|W\>   Set IP direction
+  cl \[r c \| flat\]   Set/show CL register
+  h0 \[r c \| flat\]   Set/show H0 register
+  h1 \[r c \| flat\]   Set/show H1 register
+  -------------------- ----------------------
+:::
+
+::: section
+### Execution
+
+  -------------------- --------------------------------------------
+  step / s \[n\]       Step forward *n* instructions (default 1)
+  back / b / r \[n\]   Step backward *n* instructions (default 1)
+  run \[n\]            Run forward *n* steps (default 100)
+  runback \[n\]        Run backward *n* steps (default 100)
+  -------------------- --------------------------------------------
+:::
+
+::: section
+### Display & State
+
+  ------- ----------------------------------------------------
+  show    Display grid (opcode mnemonics + pointer overlays)
+  vals    Display raw byte values
+  both    Display grid + values side by side
+  trace   Toggle per-step execution trace
+  color   Toggle ANSI color output
+  ------- ----------------------------------------------------
+:::
+
+::: section
+### File & Session
+
+  ------------------ --------------------------------------------------------------------------
+  save \<file\>      Save full state to `.fb2d` file
+  load \<file\>      Load state from `.fb2d` file
+  size \<r\> \<c\>   Resize grid (resets state)
+  reset              Reset all state to initial
+  example \<name\>   Load built-in example: `bounce`, `loop`, `mirrors`, `branch`, `multiply`
+  quit / q / exit    Exit simulator
+  ------------------ --------------------------------------------------------------------------
+:::
+
+## Design Principles
+
+::: section
+  ------------------- --------------------------------------------------------------------------------------
+  Valid everywhere    Any byte sequence is a valid program (undefined bytes are NOPs)
+  Fully reversible    Every instruction has a unique inverse; backward execution requires no history stack
+  Von Neumann         Code and data share the same grid --- self-modifying programs are possible
+  Toroidal topology   All positions wrap --- the grid has no edges
+  2D spatial flow     Control flow via mirror reflections; loops are literal rectangles in space
+  ------------------- --------------------------------------------------------------------------------------
+:::

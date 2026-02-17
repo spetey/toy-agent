@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>rbefunge_isa</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+</head>
+<body>
+<h1 id="rbefunge-isa">RBefunge ISA</h1>
+<p><strong>RBefunge</strong> is a reversible computation language using
+direction/momentum and mirrors for control flow. Inspired by Befunge,
+but fully reversible.</p>
+<h2 id="state">State</h2>
+<ul>
+<li><code>tape[0..N-1]</code> — memory (program + data), 8-bit
+cells</li>
+<li><code>IP</code> — instruction pointer (position)</li>
+<li><code>Dir</code> — direction/momentum (+1 = right, -1 = left)</li>
+<li><code>H0</code> — data head 0 (primary, where +/- act, condition for
+mirrors)</li>
+<li><code>H1</code> — data head 1 (secondary, for swaps and reversible
+copy)</li>
+</ul>
+<p>All pointers wrap modulo N (tape size). After each instruction, IP
+advances by Dir.</p>
+<h2 id="instructions">Instructions</h2>
+<table>
+<thead>
+<tr>
+<th>Op</th>
+<th>Name</th>
+<th>Semantics</th>
+<th>Inverse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>+</code></td>
+<td>increment</td>
+<td><code>tape[H0] += 1</code></td>
+<td><code>-</code></td>
+</tr>
+<tr>
+<td><code>-</code></td>
+<td>decrement</td>
+<td><code>tape[H0] -= 1</code></td>
+<td><code>+</code></td>
+</tr>
+<tr>
+<td><code>&lt;</code></td>
+<td>H0 left</td>
+<td><code>H0 -= 1</code></td>
+<td><code>&gt;</code></td>
+</tr>
+<tr>
+<td><code>&gt;</code></td>
+<td>H0 right</td>
+<td><code>H0 += 1</code></td>
+<td><code>&lt;</code></td>
+</tr>
+<tr>
+<td><code>{</code></td>
+<td>H1 left</td>
+<td><code>H1 -= 1</code></td>
+<td><code>}</code></td>
+</tr>
+<tr>
+<td><code>}</code></td>
+<td>H1 right</td>
+<td><code>H1 += 1</code></td>
+<td><code>{</code></td>
+</tr>
+<tr>
+<td><code>.</code></td>
+<td>copy to H1</td>
+<td><code>tape[H1] += tape[H0]</code></td>
+<td><code>,</code></td>
+</tr>
+<tr>
+<td><code>,</code></td>
+<td>copy to H0</td>
+<td><code>tape[H0] += tape[H1]</code></td>
+<td><code>.</code></td>
+</tr>
+<tr>
+<td><code>x</code></td>
+<td>swap</td>
+<td><code>swap(tape[H0], tape[H1])</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>[</code></td>
+<td>zero mirror</td>
+<td><code>if tape[H0] == 0: Dir *= -1</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>]</code></td>
+<td>nonzero mirror</td>
+<td><code>if tape[H0] != 0: Dir *= -1</code></td>
+<td>self</td>
+</tr>
+</tbody>
+</table>
+<p>All operations are reversible. Mirrors are self-inverse.</p>
+<h2 id="true-reversibility">True Reversibility</h2>
+<p>Every RBefunge computation can be run backwards without a history
+stack:</p>
+<ol type="1">
+<li>Move IP backwards: <code>IP = (IP - Dir) mod N</code></li>
+<li>Look at the instruction at the previous position</li>
+<li>If it’s a mirror that would have fired, flip Dir</li>
+<li>Apply the inverse operation</li>
+</ol>
+<p>The <code>r</code> command in the simulator implements this.</p>
+<h2 id="control-flow-with-mirrors">Control Flow with Mirrors</h2>
+<p>Mirrors conditionally reverse the direction of execution:</p>
+<ul>
+<li><code>[</code> (zero mirror): bounces when
+<code>tape[H0] == 0</code>, passes otherwise</li>
+<li><code>]</code> (nonzero mirror): bounces when
+<code>tape[H0] != 0</code>, passes otherwise</li>
+</ul>
+<h3 id="loop-pattern-body">Loop Pattern: <code>] body ]</code></h3>
+<p>For a “while nonzero” loop, use nonzero mirrors on both sides:</p>
+<pre><code>] - ]</code></pre>
+<p>With <code>tape[H0] = 3</code>, starting at the <code>-</code> with
+<code>Dir = +1</code>:</p>
+<pre><code>Step 0: IP=1 (-), Dir=→, tape[H0]=3  → decrement to 2
+Step 1: IP=2 (]), Dir=→, tape[H0]=2  → bounce (2≠0), Dir=←
+Step 2: IP=1 (-), Dir=←, tape[H0]=2  → decrement to 1
+Step 3: IP=0 (]), Dir=←, tape[H0]=1  → bounce (1≠0), Dir=→
+Step 4: IP=1 (-), Dir=→, tape[H0]=1  → decrement to 0
+Step 5: IP=2 (]), Dir=→, tape[H0]=0  → pass (0=0), exit right</code></pre>
+<p>Total decrements: 3 ✓</p>
+<h3 id="key-insight">Key Insight</h3>
+<p>Start the loop <strong>inside</strong> the mirrors with a known
+direction. The mirrors keep bouncing the IP back and forth until the
+exit condition is met.</p>
+<h2 id="reversible-copy">Reversible Copy</h2>
+<p>The <code>.</code> and <code>,</code> operations implement reversible
+copy via addition:</p>
+<pre><code>tape[H1] = 0      # Start with H1 target clear
+.                 # tape[H1] += tape[H0], now tape[H1] = tape[H0]</code></pre>
+<p>To uncopy (restore tape[H1] to 0):</p>
+<pre><code>,                 # tape[H0] += tape[H1], equivalent to restoring</code></pre>
+<p>Actually, the inverse of <code>.</code> is <code>,</code> which does
+subtraction during reversal.</p>
+<h2 id="comparison-to-fbrain">Comparison to F***brain</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>F***brain</th>
+<th>RBefunge</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Control flow</td>
+<td>J (swap IP with memory)</td>
+<td>Mirrors (flip direction)</td>
+</tr>
+<tr>
+<td>Direction</td>
+<td>IP always +1</td>
+<td>IP moves by Dir (±1)</td>
+</tr>
+<tr>
+<td>Garbage cells</td>
+<td>Required for loops</td>
+<td>Not required</td>
+</tr>
+<tr>
+<td>J reversibility</td>
+<td>Requires heuristics</td>
+<td>N/A</td>
+</tr>
+<tr>
+<td>Mirror reversibility</td>
+<td>N/A</td>
+<td>Always correct</td>
+</tr>
+</tbody>
+</table>
+<p>RBefunge’s mirrors are <strong>unconditionally reversible</strong> -
+no ambiguity about where IP came from. The direction (Dir) encodes the
+execution history.</p>
+<h2 id="example-countdown-with-history">Example: Countdown with
+History</h2>
+<pre><code>] - . } ]</code></pre>
+<p>This decrements <code>tape[H0]</code> and copies each value to
+<code>tape[H1]</code>, building a history. The garbage accumulates in
+<code>tape[H1]</code>.</p>
+</body>
+</html>

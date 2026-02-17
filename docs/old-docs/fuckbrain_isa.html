@@ -1,0 +1,147 @@
+<h1 id="fbrain-isa">F***brain ISA</h1>
+<p><strong>F***brain</strong> is a reversible computation language using
+Fredkin-style conditional swaps. The <strong>F</strong> is for Fredkin
+(and the name reverses Brainf***).</p>
+<h2 id="state">State</h2>
+<ul>
+<li><code>tape[0..N-1]</code> — memory (program + data + garbage), 8-bit
+cells</li>
+<li><code>IP</code> — instruction pointer</li>
+<li><code>CL</code> — control locus (condition for F, target for
+J/S/G)</li>
+<li><code>H0</code> — data head 0 (accumulator, where +/- act)</li>
+<li><code>H1</code> — data head 1 (swap partner for x/F)</li>
+</ul>
+<p>All pointers wrap modulo N (tape size).</p>
+<h2 id="instructions">Instructions</h2>
+<table>
+<thead>
+<tr>
+<th>Op</th>
+<th>Name</th>
+<th>Semantics</th>
+<th>Inverse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;</code></td>
+<td>CL left</td>
+<td><code>CL -= 1</code></td>
+<td><code>&gt;</code></td>
+</tr>
+<tr>
+<td><code>&gt;</code></td>
+<td>CL right</td>
+<td><code>CL += 1</code></td>
+<td><code>&lt;</code></td>
+</tr>
+<tr>
+<td><code>{</code></td>
+<td>H0 left</td>
+<td><code>H0 -= 1</code></td>
+<td><code>}</code></td>
+</tr>
+<tr>
+<td><code>}</code></td>
+<td>H0 right</td>
+<td><code>H0 += 1</code></td>
+<td><code>{</code></td>
+</tr>
+<tr>
+<td><code>(</code></td>
+<td>H1 left</td>
+<td><code>H1 -= 1</code></td>
+<td><code>)</code></td>
+</tr>
+<tr>
+<td><code>)</code></td>
+<td>H1 right</td>
+<td><code>H1 += 1</code></td>
+<td><code>(</code></td>
+</tr>
+<tr>
+<td><code>+</code></td>
+<td>increment</td>
+<td><code>tape[H0] += 1</code></td>
+<td><code>-</code></td>
+</tr>
+<tr>
+<td><code>-</code></td>
+<td>decrement</td>
+<td><code>tape[H0] -= 1</code></td>
+<td><code>+</code></td>
+</tr>
+<tr>
+<td><code>x</code></td>
+<td>swap</td>
+<td><code>swap(tape[H0], tape[H1])</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>F</code></td>
+<td>Fredkin</td>
+<td><code>if tape[CL] ≠ 0: swap(tape[H0], tape[H1])</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>J</code></td>
+<td>jump</td>
+<td><code>swap(IP, tape[CL])</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>S</code></td>
+<td>bridge</td>
+<td><code>swap(tape[CL], tape[H0])</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>G</code></td>
+<td>indirect</td>
+<td><code>swap(CL, tape[H0])</code></td>
+<td>self</td>
+</tr>
+</tbody>
+</table>
+<p>All operations are reversible. The tape <em>is</em> the program (von
+Neumann architecture).</p>
+<h2 id="true-reversibility">True Reversibility</h2>
+<p>Every F***brain computation can be run backwards without maintaining
+a history stack. The simulator’s <code>r</code> command computes the
+previous state directly by: 1. Determining if we arrived via J (check if
+<code>tape[CL]</code> points to a J instruction) 2. Applying the inverse
+operation (or re-executing self-inverse ops like x, F, J, S, G)</p>
+<p>This is <strong>true reversibility</strong> — the physics of the
+computation itself is reversible, not just recorded.</p>
+<h2 id="notes">Notes</h2>
+<p><strong>F (Fredkin gate):</strong> Conditional swap enables
+branching. Tests <code>tape[CL]</code>; swaps
+<code>tape[H0] ↔︎ tape[H1]</code> if nonzero.</p>
+<p><strong>J (jump):</strong> Swaps IP with tape contents, enabling
+subroutines and loops. Writes return address for reversibility.</p>
+<p><strong>S (bridge):</strong> Swaps tape contents between CL and H0
+positions. Useful for data movement.</p>
+<p><strong>G (indirect):</strong> Swaps CL register with tape contents.
+Enables computed/indirect addressing for CL. Essential for loops that
+need a different garbage cell each iteration.</p>
+<p><strong>Garbage area:</strong> Loops require O(r) garbage cells for r
+iterations. Each loopback J writes a return address to a fresh cell.
+This is the “history” that enables reverse execution (Bennett’s
+approach).</p>
+<h2 id="example-dec-until-zero-loop">Example: DEC-until-zero loop</h2>
+<pre><code>G{{{{x}}))F&gt;J&lt;F}+{{{((x-}}}}+GJ   (31 instructions)</code></pre>
+<p>Decrements <code>tape[40]</code> until zero, using
+<code>tape[55+]</code> as garbage cells.</p>
+<p>Memory layout: - <code>tape[40]</code> = r (loop counter) -
+<code>tape[41]</code> = scratch (for F test) - <code>tape[42]</code> =
+exit address - <code>tape[43]</code> = continue address -
+<code>tape[44]</code> = garbage pointer - <code>tape[55+]</code> =
+garbage cells (return addresses)</p>
+<p>Initial pointers: <code>IP=1</code>, <code>H0=44</code>,
+<code>H1=41</code>, <code>CL=41</code></p>
+<p>The loop uses G twice per iteration: 1. <strong>G at start:</strong>
+Restores CL from <code>tape[44]</code> (undoes previous G) 2. <strong>G
+before J:</strong> Loads garbage pointer into CL for loopback</p>
+<p>Each iteration writes one return address, using exactly r garbage
+cells for r iterations.</p>

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>fuckbrain_isa</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+</head>
+<body>
+<h1 id="fbrain-isa">F***brain ISA</h1>
+<p><strong>F***brain</strong> is a reversible computation language using
+Fredkin-style conditional swaps. The <strong>F</strong> is for Fredkin
+(and the name reverses Brainf***).</p>
+<h2 id="state">State</h2>
+<ul>
+<li><code>tape[0..N-1]</code> — memory (program + data + garbage), 8-bit
+cells</li>
+<li><code>IP</code> — instruction pointer</li>
+<li><code>CL</code> — control locus (condition for F, target for
+J/S/G)</li>
+<li><code>H0</code> — data head 0 (accumulator, where +/- act)</li>
+<li><code>H1</code> — data head 1 (swap partner for x/F)</li>
+</ul>
+<p>All pointers wrap modulo N (tape size).</p>
+<h2 id="instructions">Instructions</h2>
+<table>
+<thead>
+<tr>
+<th>Op</th>
+<th>Name</th>
+<th>Semantics</th>
+<th>Inverse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;</code></td>
+<td>CL left</td>
+<td><code>CL -= 1</code></td>
+<td><code>&gt;</code></td>
+</tr>
+<tr>
+<td><code>&gt;</code></td>
+<td>CL right</td>
+<td><code>CL += 1</code></td>
+<td><code>&lt;</code></td>
+</tr>
+<tr>
+<td><code>{</code></td>
+<td>H0 left</td>
+<td><code>H0 -= 1</code></td>
+<td><code>}</code></td>
+</tr>
+<tr>
+<td><code>}</code></td>
+<td>H0 right</td>
+<td><code>H0 += 1</code></td>
+<td><code>{</code></td>
+</tr>
+<tr>
+<td><code>(</code></td>
+<td>H1 left</td>
+<td><code>H1 -= 1</code></td>
+<td><code>)</code></td>
+</tr>
+<tr>
+<td><code>)</code></td>
+<td>H1 right</td>
+<td><code>H1 += 1</code></td>
+<td><code>(</code></td>
+</tr>
+<tr>
+<td><code>+</code></td>
+<td>increment</td>
+<td><code>tape[H0] += 1</code></td>
+<td><code>-</code></td>
+</tr>
+<tr>
+<td><code>-</code></td>
+<td>decrement</td>
+<td><code>tape[H0] -= 1</code></td>
+<td><code>+</code></td>
+</tr>
+<tr>
+<td><code>x</code></td>
+<td>swap</td>
+<td><code>swap(tape[H0], tape[H1])</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>F</code></td>
+<td>Fredkin</td>
+<td><code>if tape[CL] ≠ 0: swap(tape[H0], tape[H1])</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>J</code></td>
+<td>jump</td>
+<td><code>swap(IP, tape[CL])</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>S</code></td>
+<td>bridge</td>
+<td><code>swap(tape[CL], tape[H0])</code></td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>G</code></td>
+<td>indirect</td>
+<td><code>swap(CL, tape[H0])</code></td>
+<td>self</td>
+</tr>
+</tbody>
+</table>
+<p>All operations are reversible. The tape <em>is</em> the program (von
+Neumann architecture).</p>
+<h2 id="true-reversibility">True Reversibility</h2>
+<p>Every F***brain computation can be run backwards without maintaining
+a history stack. The simulator’s <code>r</code> command computes the
+previous state directly by: 1. Determining if we arrived via J (check if
+<code>tape[CL]</code> points to a J instruction) 2. Applying the inverse
+operation (or re-executing self-inverse ops like x, F, J, S, G)</p>
+<p>This is <strong>true reversibility</strong> — the physics of the
+computation itself is reversible, not just recorded.</p>
+<h2 id="notes">Notes</h2>
+<p><strong>F (Fredkin gate):</strong> Conditional swap enables
+branching. Tests <code>tape[CL]</code>; swaps
+<code>tape[H0] ↔︎ tape[H1]</code> if nonzero.</p>
+<p><strong>J (jump):</strong> Swaps IP with tape contents, enabling
+subroutines and loops. Writes return address for reversibility.</p>
+<p><strong>S (bridge):</strong> Swaps tape contents between CL and H0
+positions. Useful for data movement.</p>
+<p><strong>G (indirect):</strong> Swaps CL register with tape contents.
+Enables computed/indirect addressing for CL. Essential for loops that
+need a different garbage cell each iteration.</p>
+<p><strong>Garbage area:</strong> Loops require O(r) garbage cells for r
+iterations. Each loopback J writes a return address to a fresh cell.
+This is the “history” that enables reverse execution (Bennett’s
+approach).</p>
+<h2 id="example-dec-until-zero-loop">Example: DEC-until-zero loop</h2>
+<pre><code>G{{{{x}}))F&gt;J&lt;F}+{{{((x-}}}}+GJ   (31 instructions)</code></pre>
+<p>Decrements <code>tape[40]</code> until zero, using
+<code>tape[55+]</code> as garbage cells.</p>
+<p>Memory layout: - <code>tape[40]</code> = r (loop counter) -
+<code>tape[41]</code> = scratch (for F test) - <code>tape[42]</code> =
+exit address - <code>tape[43]</code> = continue address -
+<code>tape[44]</code> = garbage pointer - <code>tape[55+]</code> =
+garbage cells (return addresses)</p>
+<p>Initial pointers: <code>IP=1</code>, <code>H0=44</code>,
+<code>H1=41</code>, <code>CL=41</code></p>
+<p>The loop uses G twice per iteration: 1. <strong>G at start:</strong>
+Restores CL from <code>tape[44]</code> (undoes previous G) 2. <strong>G
+before J:</strong> Loads garbage pointer into CL for loopback</p>
+<p>Each iteration writes one return address, using exactly r garbage
+cells for r iterations.</p>
+</body>
+</html>

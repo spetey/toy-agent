@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>fb2d Language Reference</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --surface2: #1f3460;
+    --border: #374785;
+    --text: #e8e8e8;
+    --text-dim: #a0a0b0;
+    --accent: #7ec8e3;
+    --accent2: #ff9a3c;
+    --green: #50fa7b;
+    --yellow: #f1fa8c;
+    --pink: #ff79c6;
+    --cyan: #8be9fd;
+    --purple: #bd93f9;
+    --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 24px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  h1 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    margin-bottom: 24px;
+  }
+
+  h2 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--accent2);
+    margin: 28px 0 12px 0;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--border);
+  }
+
+  h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--cyan);
+    margin: 16px 0 8px 0;
+  }
+
+  .section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    margin: 8px 0;
+  }
+
+  th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #2a2a4a;
+    vertical-align: top;
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  .op-char {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 1.1rem;
+    min-width: 28px;
+    display: inline-block;
+    text-align: center;
+  }
+
+  .op-byte {
+    font-family: var(--mono);
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+
+  code {
+    font-family: var(--mono);
+    background: var(--surface2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+  }
+
+  .state-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 24px;
+  }
+
+  .state-item {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 4px 0;
+  }
+
+  .state-label {
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--cyan);
+    min-width: 50px;
+  }
+
+  .mirror-box {
+    display: inline-block;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 8px 8px 8px 0;
+    font-family: var(--mono);
+    text-align: center;
+  }
+
+  .mirror-char {
+    font-size: 1.4rem;
+    font-weight: bold;
+    color: var(--yellow);
+  }
+
+  .mirror-rules {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+
+  .cat-mirror td:first-child .op-char { color: var(--yellow); }
+  .cat-h0 td:first-child .op-char { color: var(--cyan); }
+  .cat-h1 td:first-child .op-char { color: var(--green); }
+  .cat-cl td:first-child .op-char { color: var(--pink); }
+  .cat-gp td:first-child .op-char { color: var(--accent2); }
+  .cat-data td:first-child .op-char { color: var(--purple); }
+
+  .inv { color: var(--green); font-family: var(--mono); }
+
+  .note {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    font-style: italic;
+    margin-top: 8px;
+  }
+
+  .pattern-box {
+    background: var(--surface2);
+    border-left: 3px solid var(--accent);
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  @media (max-width: 700px) {
+    .two-col, .state-grid { grid-template-columns: 1fr; }
+  }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 8px;
+  }
+  .badge-rev { background: var(--green); color: #1a1a2e; }
+  .badge-tc { background: var(--accent2); color: #1a1a2e; }
+</style>
+</head>
+<body>
+
+<h1>fb2d Language Reference</h1>
+<p class="subtitle">
+  A 2D reversible programming language
+  <span class="badge badge-rev">Reversible</span>
+  <span class="badge badge-tc">Turing-Complete</span>
+</p>
+
+<!-- ═══════ EXECUTION MODEL ═══════ -->
+<h2>Execution Model</h2>
+<div class="section">
+  <p>The instruction pointer (IP) moves on a <strong>toroidal grid</strong>. Each step:</p>
+  <ol style="margin: 12px 0 0 20px; color: var(--text-dim);">
+    <li>Read opcode at <code>grid[IP]</code></li>
+    <li>Execute instruction (may change IP direction)</li>
+    <li>Advance IP one cell in current direction</li>
+  </ol>
+  <p class="note">Von Neumann architecture: code and data share the same grid. Any byte sequence is a valid program (undefined opcodes are NOPs).</p>
+</div>
+
+<!-- ═══════ STATE ═══════ -->
+<h2>Machine State</h2>
+<div class="section">
+  <div class="state-grid">
+    <div class="state-item"><span class="state-label">IP</span> Instruction pointer (row, col)</div>
+    <div class="state-item"><span class="state-label">DIR</span> IP direction: N / E / S / W</div>
+    <div class="state-item"><span class="state-label">CL</span> Control locus (flat index) — branching</div>
+    <div class="state-item"><span class="state-label">H0</span> Data head 0 (flat index) — primary data</div>
+    <div class="state-item"><span class="state-label">H1</span> Data head 1 (flat index) — secondary data</div>
+    <div class="state-item"><span class="state-label">GP</span> Garbage pointer (flat index) — breadcrumbs</div>
+  </div>
+  <p class="note">All head registers are flat indices: <code>flat = row × cols + col</code>. Grid cells are 8-bit (0–255, mod 256).</p>
+</div>
+
+<!-- ═══════ MIRRORS ═══════ -->
+<h2>Mirror Reflection Rules</h2>
+<div class="section">
+  <div class="mirror-box">
+    <div class="mirror-char">/</div>
+    <div class="mirror-rules">E↔N  S↔W</div>
+  </div>
+  <div class="mirror-box">
+    <div class="mirror-char">\</div>
+    <div class="mirror-rules">E↔S  N↔W</div>
+  </div>
+  <p style="margin-top: 12px;">Conditional mirrors check <code>grid[CL]</code>: if condition is true, reflect; otherwise pass through (NOP).</p>
+</div>
+
+<!-- ═══════ ISA ═══════ -->
+<h2>Instruction Set (32 opcodes)</h2>
+
+<div class="section">
+  <h3>Mirrors (bytes 1–6)</h3>
+  <table>
+    <tr><th>Char</th><th>Byte</th><th>Instruction</th><th>Inverse</th></tr>
+    <tr class="cat-mirror"><td><span class="op-char">/</span></td><td class="op-byte">1</td><td>Unconditional <code>/</code> reflect</td><td class="inv">self</td></tr>
+    <tr class="cat-mirror"><td><span class="op-char">\</span></td><td class="op-byte">2</td><td>Unconditional <code>\</code> reflect</td><td class="inv">self</td></tr>
+    <tr class="cat-mirror"><td><span class="op-char">%</span></td><td class="op-byte">3</td><td><code>/</code> reflect if <code>grid[CL] ≠ 0</code></td><td class="inv">self</td></tr>
+    <tr class="cat-mirror"><td><span class="op-char">?</span></td><td class="op-byte">4</td><td><code>/</code> reflect if <code>grid[CL] = 0</code></td><td class="inv">self</td></tr>
+    <tr class="cat-mirror"><td><span class="op-char">&amp;</span></td><td class="op-byte">5</td><td><code>\</code> reflect if <code>grid[CL] ≠ 0</code></td><td class="inv">self</td></tr>
+    <tr class="cat-mirror"><td><span class="op-char">!</span></td><td class="op-byte">6</td><td><code>\</code> reflect if <code>grid[CL] = 0</code></td><td class="inv">self</td></tr>
+  </table>
+</div>
+
+<div class="two-col">
+  <div class="section">
+    <h3>H0 Movement (bytes 7–10)</h3>
+    <table>
+      <tr><th>Char</th><th>Byte</th><th>Dir</th><th>Inv</th></tr>
+      <tr class="cat-h0"><td><span class="op-char">N</span></td><td class="op-byte">7</td><td>North (row−1)</td><td class="inv">S</td></tr>
+      <tr class="cat-h0"><td><span class="op-char">S</span></td><td class="op-byte">8</td><td>South (row+1)</td><td class="inv">N</td></tr>
+      <tr class="cat-h0"><td><span class="op-char">E</span></td><td class="op-byte">9</td><td>East (col+1)</td><td class="inv">W</td></tr>
+      <tr class="cat-h0"><td><span class="op-char">W</span></td><td class="op-byte">10</td><td>West (col−1)</td><td class="inv">E</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h3>H1 Movement (bytes 11–14)</h3>
+    <table>
+      <tr><th>Char</th><th>Byte</th><th>Dir</th><th>Inv</th></tr>
+      <tr class="cat-h1"><td><span class="op-char">n</span></td><td class="op-byte">11</td><td>North (row−1)</td><td class="inv">s</td></tr>
+      <tr class="cat-h1"><td><span class="op-char">s</span></td><td class="op-byte">12</td><td>South (row+1)</td><td class="inv">n</td></tr>
+      <tr class="cat-h1"><td><span class="op-char">e</span></td><td class="op-byte">13</td><td>East (col+1)</td><td class="inv">w</td></tr>
+      <tr class="cat-h1"><td><span class="op-char">w</span></td><td class="op-byte">14</td><td>West (col−1)</td><td class="inv">e</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Data Operations (bytes 15–22)</h3>
+  <table>
+    <tr><th>Char</th><th>Byte</th><th>Instruction</th><th>Inverse</th></tr>
+    <tr class="cat-data"><td><span class="op-char">+</span></td><td class="op-byte">15</td><td><code>grid[H0]++</code> (mod 256)</td><td class="inv">−</td></tr>
+    <tr class="cat-data"><td><span class="op-char">−</span></td><td class="op-byte">16</td><td><code>grid[H0]--</code> (mod 256)</td><td class="inv">+</td></tr>
+    <tr class="cat-data"><td><span class="op-char">.</span></td><td class="op-byte">17</td><td><code>grid[H0] += grid[H1]</code></td><td class="inv">,</td></tr>
+    <tr class="cat-data"><td><span class="op-char">,</span></td><td class="op-byte">18</td><td><code>grid[H0] -= grid[H1]</code></td><td class="inv">.</td></tr>
+    <tr class="cat-data"><td><span class="op-char">x</span></td><td class="op-byte">19</td><td><code>swap(grid[H0], grid[H1])</code></td><td class="inv">self</td></tr>
+    <tr class="cat-data"><td><span class="op-char">F</span></td><td class="op-byte">20</td><td>If <code>grid[CL] ≠ 0</code>: <code>swap(grid[H0], grid[H1])</code> (Fredkin)</td><td class="inv">self</td></tr>
+    <tr class="cat-data"><td><span class="op-char">G</span></td><td class="op-byte">21</td><td><code>swap(CL_register, grid[H0])</code> (indirect CL)</td><td class="inv">self</td></tr>
+    <tr class="cat-data"><td><span class="op-char">T</span></td><td class="op-byte">22</td><td><code>swap(grid[CL], grid[H0])</code> (bridge)</td><td class="inv">self</td></tr>
+  </table>
+</div>
+
+<div class="two-col">
+  <div class="section">
+    <h3>CL Movement (bytes 23–26)</h3>
+    <table>
+      <tr><th>Char</th><th>Byte</th><th>Dir</th><th>Inv</th></tr>
+      <tr class="cat-cl"><td><span class="op-char">&gt;</span></td><td class="op-byte">23</td><td>East (col+1)</td><td class="inv">&lt;</td></tr>
+      <tr class="cat-cl"><td><span class="op-char">&lt;</span></td><td class="op-byte">24</td><td>West (col−1)</td><td class="inv">&gt;</td></tr>
+      <tr class="cat-cl"><td><span class="op-char">^</span></td><td class="op-byte">25</td><td>North (row−1)</td><td class="inv">v</td></tr>
+      <tr class="cat-cl"><td><span class="op-char">v</span></td><td class="op-byte">26</td><td>South (row+1)</td><td class="inv">^</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h3>GP Movement (bytes 29–32)</h3>
+    <table>
+      <tr><th>Char</th><th>Byte</th><th>Dir</th><th>Inv</th></tr>
+      <tr class="cat-gp"><td><span class="op-char">]</span></td><td class="op-byte">29</td><td>East (col+1)</td><td class="inv">[</td></tr>
+      <tr class="cat-gp"><td><span class="op-char">[</span></td><td class="op-byte">30</td><td>West (col−1)</td><td class="inv">]</td></tr>
+      <tr class="cat-gp"><td><span class="op-char">}</span></td><td class="op-byte">31</td><td>South (row+1)</td><td class="inv">{</td></tr>
+      <tr class="cat-gp"><td><span class="op-char">{</span></td><td class="op-byte">32</td><td>North (row−1)</td><td class="inv">}</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <h3>GP Data — Breadcrumbs (bytes 27–28)</h3>
+  <table>
+    <tr><th>Char</th><th>Byte</th><th>Instruction</th><th>Inverse</th></tr>
+    <tr class="cat-gp"><td><span class="op-char">P</span></td><td class="op-byte">27</td><td><code>grid[GP]++</code> (leave breadcrumb)</td><td class="inv">Q</td></tr>
+    <tr class="cat-gp"><td><span class="op-char">Q</span></td><td class="op-byte">28</td><td><code>grid[GP]--</code> (erase breadcrumb)</td><td class="inv">P</td></tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>NOP (byte 0, bytes 33–255)</h3>
+  <p>Byte 0 (displayed as <code>·</code>) and bytes 33–255 are NOPs — IP passes through with no effect. This makes the language <strong>"valid everywhere"</strong>.</p>
+</div>
+
+<!-- ═══════ REVERSIBILITY ═══════ -->
+<h2>Reversibility</h2>
+<div class="section">
+  <p>Every instruction has a well-defined inverse. The simulator reverses execution <em>without</em> storing history — it deduces the prior state from the current state alone.</p>
+  <p style="margin-top: 10px;">At conditional mirrors, the condition is re-evaluated on reverse. Since the condition (<code>grid[CL]</code>) is not modified by the mirror, it correctly disambiguates the forward path.</p>
+</div>
+
+<!-- ═══════ PATTERNS ═══════ -->
+<h2>Common Patterns</h2>
+
+<div class="section">
+  <h3>Rectangular Loop</h3>
+  <p>A simple decrement-until-zero loop. CL and H0 point at the counter.</p>
+<div class="pattern-box">/−−−−−\      IP enters going E at top-left /
+·     ·      Body: decrement counter (−)
+\−−−−−%      % = exit S when grid[CL]=0, else E→N (loop back)</div>
+</div>
+
+<div class="section">
+  <h3>Conditional Branch (If-Then-Else)</h3>
+  <p>Two paths merge back together. CL points at condition.</p>
+<div class="pattern-box">    / · · · · \        THEN path (grid[CL] ≠ 0)
+→ · % · · · · & · →   ELSE path (grid[CL] = 0)
+    
+% = / if ≠0 (deflects E→N into THEN)
+& = \ if ≠0 (deflects S→E to merge)</div>
+</div>
+
+<div class="section">
+  <h3>Reversible Loop with Flag (Enter from Outside)</h3>
+  <p>Use a flag cell to disambiguate first-entry from loop-back. CL switches between flag and counter.</p>
+<div class="pattern-box">        / · · \           loop-back redirect
+        !                   ! = \ if grid[CL]=0 (entry deflects, loop-back NOP)
+        +                   increment flag (H0→flag)
+        E >                 move H0 and CL to counter
+        − W                 decrement counter, move H0 back
+        \ · · %             % = / if ≠0 (loop back N), else exit E
+              &lt;             move CL back to flag on loop-back</div>
+  <p class="note">Flag disambiguates: on entry flag=0, on loop-back flag≠0.</p>
+</div>
+
+<div class="section">
+  <h3>Breadcrumb Trail (Merge-Point Disambiguation)</h3>
+  <p>For instruction-level merges (e.g., compiling jump targets), use GP to leave breadcrumbs.</p>
+<div class="pattern-box">Predecessor A corridor:  P ]      (write 1, advance GP)
+Predecessor B corridor:  P P ]    (write 2, advance GP)
+
+Reverse from merge body:
+  [ Q       (retreat GP, decrement — if now 0, was pred A)
+  ...conditional routing back to correct predecessor...</div>
+</div>
+
+<!-- ═══════ BYTE MAP ═══════ -->
+<h2>Quick Byte Reference</h2>
+<div class="section">
+  <table style="font-size: 0.8rem;">
+    <tr>
+      <th>Byte</th><th>Op</th><th></th>
+      <th>Byte</th><th>Op</th><th></th>
+      <th>Byte</th><th>Op</th>
+    </tr>
+    <tr><td>0</td><td>·</td><td>NOP</td><td>11</td><td>n</td><td>H1 N</td><td>22</td><td>T</td><td>bridge</td></tr>
+    <tr><td>1</td><td>/</td><td>mirror</td><td>12</td><td>s</td><td>H1 S</td><td>23</td><td>&gt;</td><td>CL E</td></tr>
+    <tr><td>2</td><td>\</td><td>mirror</td><td>13</td><td>e</td><td>H1 E</td><td>24</td><td>&lt;</td><td>CL W</td></tr>
+    <tr><td>3</td><td>%</td><td>/ if≠0</td><td>14</td><td>w</td><td>H1 W</td><td>25</td><td>^</td><td>CL N</td></tr>
+    <tr><td>4</td><td>?</td><td>/ if=0</td><td>15</td><td>+</td><td>inc</td><td>26</td><td>v</td><td>CL S</td></tr>
+    <tr><td>5</td><td>&amp;</td><td>\ if≠0</td><td>16</td><td>−</td><td>dec</td><td>27</td><td>P</td><td>GP++</td></tr>
+    <tr><td>6</td><td>!</td><td>\ if=0</td><td>17</td><td>.</td><td>+=</td><td>28</td><td>Q</td><td>GP--</td></tr>
+    <tr><td>7</td><td>N</td><td>H0 N</td><td>18</td><td>,</td><td>-=</td><td>29</td><td>]</td><td>GP E</td></tr>
+    <tr><td>8</td><td>S</td><td>H0 S</td><td>19</td><td>x</td><td>swap</td><td>30</td><td>[</td><td>GP W</td></tr>
+    <tr><td>9</td><td>E</td><td>H0 E</td><td>20</td><td>F</td><td>Fredkin</td><td>31</td><td>}</td><td>GP S</td></tr>
+    <tr><td>10</td><td>W</td><td>H0 W</td><td>21</td><td>G</td><td>ind CL</td><td>32</td><td>{</td><td>GP N</td></tr>
+  </table>
+  <p class="note">Bytes 33–255: NOP</p>
+</div>
+
+<p style="text-align: center; color: var(--text-dim); margin-top: 32px; font-size: 0.8rem;">
+  fb2d v1.2 — 2026-02-10
+</p>
+
+</body>
+</html>
