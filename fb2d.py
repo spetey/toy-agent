@@ -529,12 +529,20 @@ class FB2DSimulator:
         return f"{prefix}{text}{ANSI['reset']}" if prefix else text
 
     def _cell_char(self, value):
-        """Get display character for a grid cell value."""
+        """Get display character for a grid cell value (always 1 char)."""
         if value in OPCODE_TO_CHAR:
             return OPCODE_TO_CHAR[value]
         if value < 100:
             return f'{value:2d}'
         return f'{value:02x}'
+
+    def _cell_display(self, ch):
+        """Pad cell char to exactly 3 characters for grid alignment."""
+        if len(ch) == 1:
+            return f" {ch} "
+        elif len(ch) == 2:
+            return f" {ch}"
+        return ch[:3]
 
     def display_grid(self):
         """Display the grid with colored pointer markers."""
@@ -580,51 +588,52 @@ class FB2DSimulator:
                           self.selection[1] <= c <= self.selection[3])
 
                 # Build display: direction arrow for IP, char for others
+                # _cell_display ensures exactly 3 chars for alignment
+                pad = self._cell_display(ch)
                 if is_ip:
-                    display = dir_arrow
-                    cell = self._color(f" {display} ", 'bold', 'red')
+                    cell = self._color(f" {dir_arrow} ", 'bold', 'red')
                 elif is_gp and is_cl and is_h0:
-                    cell = self._color(f"⟨{ch}⟩", 'bold', 'yellow')
+                    cell = self._color(f"⟨{ch}⟩" if len(ch) == 1 else f"⟨{ch}", 'bold', 'yellow')
                 elif is_gp and is_cl:
-                    cell = self._color(f"⟨{ch}⟩", 'magenta')
+                    cell = self._color(f"⟨{ch}⟩" if len(ch) == 1 else f"⟨{ch}", 'magenta')
                 elif is_gp and is_h0:
-                    cell = self._color(f"⟨{ch}⟩", 'cyan')
+                    cell = self._color(f"⟨{ch}⟩" if len(ch) == 1 else f"⟨{ch}", 'cyan')
                 elif is_gp:
                     if val == 0:
                         cell = self._color(f" ○ ", 'yellow')
                     else:
-                        cell = self._color(f" {ch} ", 'yellow')
+                        cell = self._color(pad, 'yellow')
                 elif is_cl and is_h0 and is_h1:
-                    cell = self._color(f"[{ch}]", 'bold', 'yellow')
+                    cell = self._color(f"[{ch}]" if len(ch) == 1 else f"[{ch}", 'bold', 'yellow')
                 elif is_cl and is_h0:
-                    cell = self._color(f"«{ch}»", 'magenta')
+                    cell = self._color(f"«{ch}»" if len(ch) == 1 else f"«{ch}", 'magenta')
                 elif is_cl and is_h1:
-                    cell = self._color(f"‹{ch}›", 'magenta')
+                    cell = self._color(f"‹{ch}›" if len(ch) == 1 else f"‹{ch}", 'magenta')
                 elif is_h0 and is_h1:
-                    cell = self._color(f"«{ch}»", 'yellow')
+                    cell = self._color(f"«{ch}»" if len(ch) == 1 else f"«{ch}", 'yellow')
                 elif is_cl:
-                    cell = self._color(f" {ch} ", 'magenta')
+                    cell = self._color(pad, 'magenta')
                 elif is_h0:
                     if val == 0:
                         cell = self._color(f" o ", 'bold', 'cyan')
                     else:
-                        cell = self._color(f" {ch} ", 'bold', 'cyan')
+                        cell = self._color(pad, 'bold', 'cyan')
                 elif is_h1:
                     if val == 0:
                         cell = self._color(f" o ", 'bold', 'green')
                     else:
-                        cell = self._color(f" {ch} ", 'bold', 'green')
+                        cell = self._color(pad, 'bold', 'green')
                 else:
                     if val == 0:
                         if is_sel:
-                            cell = self._color(f" {ch} ", 'bg_blue', 'dim')
+                            cell = self._color(pad, 'bg_blue', 'dim')
                         else:
-                            cell = self._color(f" {ch} ", 'dim')
+                            cell = self._color(pad, 'dim')
                     else:
                         if is_sel:
-                            cell = self._color(f" {ch} ", 'bg_blue')
+                            cell = self._color(pad, 'bg_blue')
                         else:
-                            cell = f" {ch} "
+                            cell = pad
 
                 line += cell
             print(line)
@@ -1058,6 +1067,7 @@ Commands:
   back / b [n]         Reverse n steps (default 1)
   run [n]              Run n forward (default 100)
   runback [n]          Run n backward (default 100)
+  zero / z             Reverse all steps back to step 0
 
   show                 Display grid
   vals                 Display values
@@ -1259,6 +1269,14 @@ def interactive_session():
                     else:
                         break
                 print(f"Ran {actual} steps backward")
+                sim.display_grid()
+
+            # ── Reset to step zero ──
+            elif cmd in ('zero', 'z'):
+                n = sim.step_count
+                for _ in range(n):
+                    sim.step_back()
+                print(f"Reversed {n} steps back to step 0")
                 sim.display_grid()
 
             # ── Display ──
