@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-ifbc-03.py — ifb to fb2d compiler, v0.3
+ifbc-03.py — ifb to fb2d compiler, v0.4
 
-Authored or modified by Claude Opus 4.6, 2026-02-16
+Authored or modified by Claude Opus 4.6, 2026-02-19
 Based on ifbc-02.py v0.2.1
 
 Compiles a minimal reversible imperative language (ifb) to fb2d grid files.
 NEW in v0.2: nested while loops.
 NEW in v0.2.1: zero keyword (Z opcode), no canonical resets (minimal head moves).
 NEW in v0.3: stream I/O (input, read, advance, output) for byte-sequence processing.
+NEW in v0.4: bit-level ops (x ^= y, rotl x, rotr x) for compression/ECC.
 
 Grid layout (extends v0.1 with 2 rows per nesting level):
   Row 0: variables (one per column)
@@ -148,6 +149,28 @@ class OutputVar:
     def __repr__(self):
         return f"OutputVar({self.var})"
 
+class XorVar:
+    """x ^= y — XOR x with y (self-inverse)"""
+    def __init__(self, target, source):
+        self.target = target
+        self.source = source
+    def __repr__(self):
+        return f"XorVar({self.target}, {self.source})"
+
+class RotLeft:
+    """rotl x — rotate x left 1 bit"""
+    def __init__(self, var):
+        self.var = var
+    def __repr__(self):
+        return f"RotLeft({self.var})"
+
+class RotRight:
+    """rotr x — rotate x right 1 bit"""
+    def __init__(self, var):
+        self.var = var
+    def __repr__(self):
+        return f"RotRight({self.var})"
+
 class While:
     """while x do ... end"""
     def __init__(self, var, body, negated=False):
@@ -170,7 +193,7 @@ def tokenize(source):
         line = line.split('//')[0].strip()
         if not line:
             continue
-        parts = re.findall(r'\+=|-=|[a-zA-Z_]\w*|\d+|[!=]', line)
+        parts = re.findall(r'\^=|\+=|-=|[a-zA-Z_]\w*|\d+|[!=]', line)
         tokens.extend(parts)
     return tokens
 
@@ -238,6 +261,14 @@ def parse(source):
             advance()
             var = advance()
             return OutputVar(var)
+        elif tok == 'rotl':
+            advance()
+            var = advance()
+            return RotLeft(var)
+        elif tok == 'rotr':
+            advance()
+            var = advance()
+            return RotRight(var)
         elif tok == 'while':
             advance()
             negated = False
@@ -263,6 +294,8 @@ def parse(source):
                     return SubConst(var, int(rhs))
                 except ValueError:
                     return SubVar(var, rhs)
+            elif op == '^=':
+                return XorVar(var, rhs)
             else:
                 raise SyntaxError(f"Unknown operator '{op}'")
 
@@ -451,6 +484,20 @@ class Compiler:
             self._move_h0_to(DATA_ROW, xcol, emit_code)
             self._move_h1_to(DATA_ROW, ycol, emit_code)
             emit_code('X')
+        elif isinstance(stmt, XorVar):
+            tcol = self._var_col(stmt.target)
+            scol = self._var_col(stmt.source)
+            self._move_h0_to(DATA_ROW, tcol, emit_code)
+            self._move_h1_to(DATA_ROW, scol, emit_code)
+            emit_code('x')
+        elif isinstance(stmt, RotLeft):
+            col = self._var_col(stmt.var)
+            self._move_h0_to(DATA_ROW, col, emit_code)
+            emit_code('l')
+        elif isinstance(stmt, RotRight):
+            col = self._var_col(stmt.var)
+            self._move_h0_to(DATA_ROW, col, emit_code)
+            emit_code('r')
         elif isinstance(stmt, While):
             self._compile_while(stmt, level)
         else:
@@ -800,6 +847,20 @@ class Compiler:
             self._move_h0_to(DATA_ROW, xcol, emit_fn)
             self._move_h1_to(DATA_ROW, ycol, emit_fn)
             emit_fn('X')
+        elif isinstance(stmt, XorVar):
+            tcol = self._var_col(stmt.target)
+            scol = self._var_col(stmt.source)
+            self._move_h0_to(DATA_ROW, tcol, emit_fn)
+            self._move_h1_to(DATA_ROW, scol, emit_fn)
+            emit_fn('x')
+        elif isinstance(stmt, RotLeft):
+            col = self._var_col(stmt.var)
+            self._move_h0_to(DATA_ROW, col, emit_fn)
+            emit_fn('l')
+        elif isinstance(stmt, RotRight):
+            col = self._var_col(stmt.var)
+            self._move_h0_to(DATA_ROW, col, emit_fn)
+            emit_fn('r')
         elif isinstance(stmt, While):
             raise RuntimeError("While in _compile_stmt_to — should use _compile_body_ops")
         else:
@@ -1092,6 +1153,20 @@ class CompilerV2:
             self._move_h0_to(DATA_ROW, xcol, emit_here)
             self._move_h1_to(DATA_ROW, ycol, emit_here)
             emit_here('X')
+        elif isinstance(stmt, XorVar):
+            tcol = self._var_col(stmt.target)
+            scol = self._var_col(stmt.source)
+            self._move_h0_to(DATA_ROW, tcol, emit_here)
+            self._move_h1_to(DATA_ROW, scol, emit_here)
+            emit_here('x')   # [H0] ^= [H1]
+        elif isinstance(stmt, RotLeft):
+            col = self._var_col(stmt.var)
+            self._move_h0_to(DATA_ROW, col, emit_here)
+            emit_here('l')   # rotate left 1 bit
+        elif isinstance(stmt, RotRight):
+            col = self._var_col(stmt.var)
+            self._move_h0_to(DATA_ROW, col, emit_here)
+            emit_here('r')   # rotate right 1 bit
         elif isinstance(stmt, ZeroVar):
             col = self._var_col(stmt.var)
             self._move_h0_to(DATA_ROW, col, emit_here)
@@ -1491,6 +1566,65 @@ zero x
 """,
         'expected': {'x': 0, 'y': 0},
     },
+    # ── Bit-level ops tests ──
+    'xor_basic': {
+        'source': """\
+var x = 202
+var y = 170
+x ^= y
+// 0b11001010 ^ 0b10101010 = 0b01100000 = 96
+""",
+        'expected': {'x': 96, 'y': 170},
+    },
+    'xor_self_inverse': {
+        'source': """\
+var x = 42
+var y = 99
+x ^= y
+x ^= y
+// XOR is self-inverse: x restored to 42
+""",
+        'expected': {'x': 42, 'y': 99},
+    },
+    'rotate_basic': {
+        'source': """\
+var x = 202
+var y = 202
+rotl x
+rotr y
+// rotl(0b11001010) = 0b10010101 = 149
+// rotr(0b11001010) = 0b01100101 = 101
+""",
+        'expected': {'x': 149, 'y': 101},
+    },
+    'rotate_inverse': {
+        'source': """\
+var x = 42
+rotl x
+rotr x
+// rotl then rotr restores original
+""",
+        'expected': {'x': 42},
+    },
+    'xor_in_loop': {
+        'source': """\
+// XOR-accumulate: fold 4 values into acc
+var n = 4
+var acc = 0
+var val = 0
+input 10 20 30 40
+while n do
+    read val
+    advance
+    acc ^= val
+    zero val
+    n -= 1
+end
+// acc = 10 ^ 20 ^ 30 ^ 40 = 30 ^ 30 ^ 40 = 0 ^ 40 = 40
+// Wait: 10^20 = 30, 30^30 = 0, 0^40 = 40. Yes.
+""",
+        'expected': {'n': 0, 'acc': 40, 'val': 0},
+    },
     # ── New: stream I/O tests ──
     'delta': {
         'source': """\
@@ -1560,18 +1694,8 @@ def run_test(name, verbose=False):
         display_grid(rows, cols, grid_flat)
         print(f"Header: {header}")
 
-    # Run using fb2d simulator
-    sys.path.insert(0, '/Volumes/briefcase/compnet/python-scripts/toy-agent')
-    try:
-        import importlib.util
-        _spec = importlib.util.spec_from_file_location(
-            'fb2d_10',
-            '/Volumes/briefcase/compnet/python-scripts/toy-agent/fb2d-10.py')
-        _mod = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        FB2DSimulator = _mod.FB2DSimulator
-    except Exception:
-        from fb2d import FB2DSimulator
+    # Run using fb2d simulator (always use local fb2d.py)
+    from fb2d import FB2DSimulator
 
     sim = FB2DSimulator(rows=rows, cols=cols)
     sim.use_color = False
