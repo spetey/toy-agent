@@ -1,5 +1,5 @@
-# F***brain Reflective v3: Turing Completeness Sketch
-## Authored or modified by Claude — 2025-02-01
+# F***brain 2D: Turing Completeness and Universality
+## Authored or modified by Claude — 2025-02-01, updated 2026-02-19
 
 ---
 
@@ -497,3 +497,194 @@ constant cell to target T, gated on condition C:
 
 Both cases leave scratch=0 and V restored. The only permanent effect is on T.
 This is the key building block for all conditional operations.
+
+---
+
+## 15. The Quiescent Background Requirement (added 2026-02-19)
+
+### 15.1 The Problem
+
+The TC proof in §§1–12 assumes **structured initial conditions**: specific
+initial tape contents with registers, active flags, address constants, and
+scratch cells all initialized to known values. This is standard for TC proofs
+(every UTM needs its input encoded on the tape), but it raises a deeper
+question: does the **physics** of fb2d — its dynamics on *arbitrary* grid
+states — support unbounded computation?
+
+The answer appears to be **no**, for the same reason it's no for every other
+known reversible TC model.
+
+### 15.2 Two Levels of "Valid Everywhere"
+
+fb2d satisfies "valid everywhere" in the **dynamics** sense:
+- Every byte value is a valid opcode (known instruction or NOP)
+- Every grid state has a unique successor AND a unique predecessor
+- `step()` and `step_back()` are total functions on the full state space
+- The dynamics is a bijection: no state is an orphan, no two states collide
+
+But Turing completeness requires more than valid dynamics. It requires
+**unbounded loops** — the ability to repeat a computation an arbitrary number
+of times. And unbounded loops require **fresh resources**: either blank tape
+cells (for history/garbage), or at minimum cells in a known state that can
+serve as counters, flags, or scratch space.
+
+### 15.3 The Fundamental Obstruction
+
+In fb2d's reversible dynamics, every operation that "uses" a cell must be
+undoable. The garbage pointer (GP) records displaced values so that
+operations can be reversed. But GP itself consumes cells — and those cells
+must be in a known state (typically zero) for the GP trail to be
+interpretable.
+
+On an arbitrary grid — where GP might point to cells containing any value —
+the GP mechanism breaks down:
+- `P` (GP++) writes a breadcrumb, but the existing cell value is unknown
+- Loop-entry mirrors like `(` test `[GP] != 0`, but an arbitrary cell might
+  already be nonzero, causing spurious loop entry/exit
+- Carry arithmetic corridors require zero-terminated digit sequences, which
+  don't exist on a random grid
+
+This is not a bug in fb2d's design. It is a **fundamental property of
+reversible computation**:
+
+> **Every known reversible Turing-complete model requires a quiescent
+> (known-state) background for the tape/memory regions that grow during
+> computation.**
+
+This includes:
+- **Bennett's reversible TM simulation** (1973): requires blank history tape
+- **Morita's reversible CAs** (various): valid-everywhere dynamics, but TC
+  proofs use finite configurations on an all-zero background
+- **Fredkin & Toffoli's conservative logic** (1982): requires blank wires
+- **Janus** (reversible imperative language): variables start at zero
+- **fb2d**: requires zeroed GP trail, initialized registers and flags
+
+This appears to be an **open problem**, not a proven impossibility. No one
+has proved that reversible TC *requires* quiescent background, but no one
+has achieved it without one either.
+
+### 15.4 Circuit Completeness vs. Turing Completeness
+
+There is a weaker but still powerful notion: **circuit universality**
+(sometimes called "physical universality" following Janzing 2010).
+
+A system is circuit-universal if, for any finite region R and any desired
+finite transformation T on R's contents, you can arrange the cells *outside*
+R to cause T to happen. This gives you arbitrary bounded-time computation on
+fixed-size inputs — any Boolean circuit — but not unbounded loops.
+
+**fb2d is plausibly circuit-complete.** The dispatch-block architecture of
+§§4–9 can implement any fixed finite computation: you lay out the code,
+initialize the state region, and the IP bounces through the dispatch blocks
+for a predetermined number of iterations. The only thing you *can't* do
+(without quiescent background) is loop an unbounded number of times, because
+eventually the GP trail would wrap into unknown territory.
+
+For many practical purposes — including error correction, compression, and
+local self-repair — circuit completeness may suffice. The agent doesn't
+need to compute Ackermann's function; it needs to apply bounded corrective
+transformations to its local neighborhood.
+
+### 15.5 Relationship to Existing Work
+
+The distinction between circuit and Turing universality in reversible
+systems is well-studied:
+
+- **Schaeffer's physically universal CA** (2014): a 2-state 2D Margolus
+  block cellular automaton that is reversible, valid everywhere, and
+  physically universal (circuit-complete). It is NOT Turing-complete in the
+  strong sense because structures diffuse away — you cannot maintain
+  persistent computational infrastructure on an arbitrary background.
+
+- **Salo & Törma's physically universal turmite** (2020/2023): a 5-state
+  binary 2D Turing machine that is reversible, valid everywhere, physically
+  universal, and also Turing-universal (via the separate "nontrivial
+  turmites are Turing-universal" theorem of Maldonado et al. 2017). However,
+  Turing universality still requires structured (periodic) initial
+  conditions — the periodic background provides the computational
+  infrastructure (wires, gates, gadgets) that the turmite traverses.
+
+- **Morita's reversible CAs**: valid-everywhere dynamics, TC for finite
+  configurations on quiescent background. The dynamics is a bijection on
+  ALL configurations, but meaningful computation requires structure.
+
+fb2d sits in the same position as these systems: its dynamics is a bijection
+on the full state space (valid everywhere), it is TC given structured initial
+conditions, and it is plausibly circuit-complete without them.
+
+### 15.6 Implications for the Agent Project
+
+The original goal was an agent that resists degradation by noise. The key
+question is: does the agent need Turing completeness, or is circuit
+completeness sufficient?
+
+**Circuit completeness may be enough.** An error-correcting agent needs to:
+1. Detect corruption in a local neighborhood (finite check)
+2. Compute a correction (finite transformation)
+3. Apply the correction (finite action)
+
+None of these require unbounded loops. They require the ability to implement
+*any* finite transformation on a bounded region — which is exactly what
+circuit/physical universality provides.
+
+The strongest known result in this direction is Salo & Törma's turmite:
+it can implement any finite transformation on any finite region by
+controlling only the exterior. This means that even if some region is
+corrupted by noise, the surrounding machinery can "compute through" the
+corruption and restore it. This is precisely the property we want.
+
+### 15.7 Open Questions
+
+1. **Is reversible TC without quiescent background possible?** No known
+   construction achieves it. It may be provably impossible (perhaps via an
+   information-theoretic argument about the entropy of the tape), but no
+   such proof exists.
+
+2. **Is fb2d physically universal?** We have not proved this. Physical
+   universality requires showing that for ANY finite region R and ANY
+   transformation T, there exists an exterior configuration that causes T.
+   The dispatch-block architecture suggests this is plausible, but a proof
+   would need to handle arbitrary region contents.
+
+3. **Should fb2d be replaced by Salo & Törma's turmite?** Their machine
+   has proven physical universality with just 5 states and 2 symbols. The
+   tradeoff: fb2d has a rich ISA designed for (relatively) human-writable
+   programs; the turmite has a 2-symbol alphabet requiring significant
+   infrastructure to be programmable. Building on existing proven results
+   is appealing, but the turmite would need an fb2d-like language layer
+   on top.
+
+---
+
+## 16. Updated Summary (2026-02-19)
+
+| Property | Status |
+|----------|--------|
+| Reversible | ✓ Every state has unique predecessor, inferred from state alone |
+| Valid everywhere (dynamics) | ✓ Any byte sequence is a valid program; bijection on all states |
+| Turing complete (with structured init) | ✓ (sketch) Simulates counter machines via dispatch blocks |
+| Turing complete (arbitrary init) | ✗ Requires quiescent background (same as all known reversible TC models) |
+| Circuit complete (plausible) | ~ Dispatch blocks can implement any finite transformation (not yet proved) |
+| Physically universal | ? Unknown; plausible but unproved |
+| Practically programmable | ✗ Encoding is polynomial but enormous |
+| Self-modifying | Not needed for TC, but possible (code is on the tape) |
+| Garbage-free | ✓ No garbage bits accumulate (all scratch cleaned per iteration) |
+
+---
+
+## References (added 2026-02-19)
+
+- Bennett, C.H. (1973). "Logical reversibility of computation." IBM Journal
+  of Research and Development, 17(6), 525-532.
+- Fredkin, E. & Toffoli, T. (1982). "Conservative logic." International
+  Journal of Theoretical Physics, 21(3-4), 219-253.
+- Janzing, D. (2010). "Is there a physically universal cellular automaton or
+  Hamiltonian?" arXiv:1009.1720.
+- Maldonado, D., Gajardo, A., Hellouin de Menibus, B., & Moreira, A. (2017).
+  "Nontrivial turmites are Turing-universal." arXiv:1702.05547.
+- Morita, K. (various). Reversible cellular automata — see survey in
+  "Theory of Reversible Computing" (Springer, 2017).
+- Salo, V. & Törma, I. (2023). "A physically universal Turing machine."
+  Journal of Computer and System Sciences, 132, 16-44. arXiv:2003.10328.
+- Schaeffer, L. (2014). "A physically universal cellular automaton."
+  Electronic Colloquium on Computational Complexity, TR14-084.
