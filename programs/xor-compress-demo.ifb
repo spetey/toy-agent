@@ -1,0 +1,59 @@
+// xor-compress-demo.ifb — XOR detects redundancy in data
+//
+// Shows how XOR extracts zeros from redundant data.
+// Input: 4 byte pairs where each pair is identical.
+// XOR of identical values = 0 → "free fuel" for reversible computation.
+//
+// This is a straight-line (no loop) demo to keep things clear.
+
+var a = 0
+var b = 0
+var diff = 0
+input 100 100 200 200 42 42 7 7
+
+// Pair 1: 100 XOR 100 = 0
+read a
+advance
+read b
+advance
+diff += a
+diff ^= b
+output diff      // → 0 (identical pair!)
+output a
+output b
+
+// Pair 2: 200 XOR 200 = 0
+read a
+advance
+read b
+advance
+diff += a
+diff ^= b
+output diff      // → 0 (identical pair!)
+output a
+output b
+
+// Pair 3: 42 XOR 42 = 0
+read a
+advance
+read b
+advance
+diff += a
+diff ^= b
+output diff      // → 0 (identical pair!)
+output a
+output b
+
+// Pair 4: 7 XOR 7 = 0
+read a
+advance
+read b
+advance
+diff += a
+diff ^= b
+output diff      // → 0 (identical pair!)
+output a
+output b
+
+// GP trail: 12 values, every 3rd is 0 (the XOR result).
+// 4 zeros extracted from 8 bytes of redundant data = 50% fuel yield.
