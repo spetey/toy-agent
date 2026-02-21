@@ -52,6 +52,47 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 #regionPopup button { background: #533483; color: #e0e0e0; border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; margin-top: 4px; margin-right: 4px; }
 #regionPopup button:hover { background: #7b2cbf; }
 
+/* Edit mode */
+#canvasWrap.editMode { cursor: crosshair; }
+#canvasWrap.editMode.dragging { cursor: grabbing; }
+#editControls { display: none; gap: 6px; align-items: center; }
+#editControls.visible { display: flex; }
+#editControls button { background: #533483; color: #e0e0e0; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 13px; }
+#editControls button:hover { background: #7b2cbf; }
+#editControls button:disabled { opacity: 0.4; cursor: default; }
+#btnModeToggle.editActive { background: #e94560; }
+#selInfo { color: #4488ff; font-size: 12px; }
+
+/* Opcode picker */
+#opcodePicker { position: absolute; background: #1a1a2e; border: 1px solid #7b2cbf; border-radius: 8px; padding: 10px; z-index: 250; display: none; max-height: 480px; overflow-y: auto; }
+#opcodePicker.compact { width: 320px; }
+#opcodePicker.verbose { width: 340px; }
+#opcodePicker .op-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+#opcodePicker .op-header button { background: none; border: 1px solid #533483; color: #888; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-size: 10px; }
+#opcodePicker .op-header button:hover { color: #e0e0e0; border-color: #7b2cbf; }
+#opcodePicker .op-group { margin-bottom: 6px; }
+#opcodePicker .op-group-label { font-size: 10px; color: #888; text-transform: uppercase; margin-bottom: 3px; letter-spacing: 0.5px; }
+#opcodePicker .op-grid { display: flex; flex-wrap: wrap; gap: 2px; }
+#opcodePicker .op-btn { display: flex; align-items: center; justify-content: center; background: #2a2a4a; color: #e0e0e0; border: 1px solid #3a3a5a; border-radius: 3px; cursor: pointer; font-family: inherit; }
+#opcodePicker.compact .op-btn { width: 28px; height: 28px; font-size: 14px; }
+#opcodePicker.verbose .op-btn { width: auto; height: auto; font-size: 12px; padding: 3px 6px; gap: 4px; }
+#opcodePicker.verbose .op-btn .op-label { color: #999; font-size: 10px; }
+#opcodePicker .op-btn:hover { background: #533483; border-color: #7b2cbf; }
+#opcodePicker .op-btn.selected { background: #7b2cbf; border-color: #9d4edd; }
+#opcodePicker .op-raw { display: flex; gap: 4px; align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px solid #3a3a5a; }
+#opcodePicker .op-raw input { width: 60px; background: #1a1a2e; color: #e0e0e0; border: 1px solid #533483; padding: 3px 6px; border-radius: 3px; font-family: inherit; font-size: 12px; }
+#opcodePicker .op-raw button { background: #533483; color: #e0e0e0; border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; }
+
+/* Custom scrollbars */
+.scrollbar-track { position: absolute; background: rgba(0,0,0,0.2); z-index: 50; border-radius: 4px; }
+.scrollbar-track.horizontal { left: 0; bottom: 0; height: 10px; right: 10px; }
+.scrollbar-track.vertical { top: 0; right: 0; width: 10px; bottom: 10px; }
+.scrollbar-thumb { position: absolute; background: rgba(83,52,131,0.6); border-radius: 4px; min-width: 20px; min-height: 20px; cursor: pointer; transition: background 0.15s; }
+.scrollbar-thumb:hover, .scrollbar-thumb.dragging { background: rgba(123,44,191,0.85); }
+.scrollbar-track.horizontal .scrollbar-thumb { height: 100%; top: 0; }
+.scrollbar-track.vertical .scrollbar-thumb { width: 100%; left: 0; }
+.scrollbar-track.hidden { display: none; }
+
 #helpOverlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 300; display: none; align-items: center; justify-content: center; }
 #helpOverlay.visible { display: flex; }
 #helpContent { background: #16213e; border: 1px solid #533483; border-radius: 8px; padding: 20px 28px; max-width: 500px; font-size: 13px; line-height: 1.6; }
@@ -65,6 +106,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 <div id="toolbar">
   <select id="fileSelect"><option value="">-- load file --</option></select>
   <span style="color:#555">|</span>
+  <button id="btnReset" title="Reset to step 0 (R)">&#x21BA;</button>
   <button id="btnBackFast" title="Step back 10 (Shift+Left)">&#x25C0;&#x25C0;</button>
   <button id="btnBack" title="Step back (Left)">&#x25C0;</button>
   <span id="stepDisplay">Step 0</span>
@@ -74,6 +116,17 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
   <button id="btnPlay" title="Play/Pause (Space)">&#x25B6; Play</button>
   <input type="range" id="speedSlider" min="1" max="100" value="50" title="Playback speed">
   <span id="speedLabel">200ms</span>
+  <span style="color:#555">|</span>
+  <button id="btnModeToggle" title="Toggle edit mode (E)">&#x270E; Edit</button>
+  <div id="editControls">
+    <button id="btnCopy" title="Copy selection (Cmd/Ctrl+C)" disabled>Copy</button>
+    <button id="btnCut" title="Cut selection (Cmd/Ctrl+X)" disabled>Cut</button>
+    <button id="btnPaste" title="Paste (Cmd/Ctrl+V)" disabled>Paste</button>
+    <button id="btnDelSel" title="Delete selection (Del)" disabled>Del</button>
+    <span style="color:#555">|</span>
+    <button id="btnSave" title="Save to file">Save</button>
+    <span id="selInfo"></span>
+  </div>
   <span style="color:#555">|</span>
   <button id="btnHelp" title="Keyboard shortcuts (?)">?</button>
 </div>
@@ -107,6 +160,9 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
       <button id="regionCancel">Cancel</button>
     </div>
   </div>
+  <div id="opcodePicker"></div>
+  <div class="scrollbar-track horizontal" id="hScrollTrack"><div class="scrollbar-thumb" id="hScrollThumb"></div></div>
+  <div class="scrollbar-track vertical" id="vScrollTrack"><div class="scrollbar-thumb" id="vScrollThumb"></div></div>
 </div>
 
 <div id="bottomBar">
@@ -130,7 +186,8 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
     <div class="section">
       <kbd>&rarr;</kbd> Step forward &nbsp; <kbd>&larr;</kbd> Step back<br>
       <kbd>Shift+&rarr;</kbd> Step 10x &nbsp; <kbd>Shift+&larr;</kbd> Back 10x<br>
-      <kbd>Space</kbd> Play / Pause
+      <kbd>Space</kbd> Play / Pause<br>
+      <kbd>R</kbd> Reset to step 0
     </div>
     <div class="section">
       <kbd>F</kbd> Fit to grid &nbsp; <kbd>+</kbd> Zoom in &nbsp; <kbd>-</kbd> Zoom out
@@ -139,8 +196,14 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
       <kbd>?</kbd> Toggle this help<br>
       <kbd>Esc</kbd> Close help / cancel annotation
     </div>
+    <div class="section">
+      <kbd>E</kbd> Toggle edit mode<br>
+      <kbd>Ctrl/Cmd+C</kbd> Copy &nbsp; <kbd>Ctrl/Cmd+X</kbd> Cut<br>
+      <kbd>Ctrl/Cmd+V</kbd> Paste &nbsp; <kbd>Del</kbd> Delete selection
+    </div>
     <div class="section" style="color:#888;">
-      <b>Mouse:</b> Drag to pan, scroll to zoom<br>
+      <b>View mode:</b> Drag to pan, scroll to zoom<br>
+      <b>Edit mode:</b> Click cell to set opcode, drag to select<br>
       <b>Right-click</b> a cell to annotate it<br>
       <b>Shift+drag</b> to select a region for labeling
     </div>
@@ -210,6 +273,14 @@ let followMode = 'center'; // center | edge | off
 // Animation
 let animTarget = null; // {x, y, startX, startY, startTime, duration}
 
+// Edit mode
+let editMode = false;
+let editSelection = null; // {r1, c1, r2, c2}
+let editSelecting = false; // currently dragging a selection
+let editSelStart = null;
+let clipboardInfo = null; // {width, height, loaded}
+let pasteMode = false; // waiting for click to paste
+
 // Canvas
 const canvas = document.getElementById('gridCanvas');
 const ctx = canvas.getContext('2d');
@@ -271,8 +342,27 @@ async function stepBack(n = 1) {
   afterStep();
 }
 
+async function resetToStart() {
+  const file = currentFile || (state && state.current_file);
+  if (!file) return;
+  if (playing) togglePlay();
+  state = await api('reset', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ filename: file })
+  });
+  currentFile = file;
+  afterStep();
+}
+
 async function refreshState() {
   state = await api('state');
+  // Sync currentFile from server if not set locally
+  if (!currentFile && state.current_file) {
+    currentFile = state.current_file;
+    // Also sync the dropdown selection
+    document.getElementById('fileSelect').value = currentFile;
+  }
   updateStatus();
   render();
 }
@@ -322,6 +412,9 @@ function zoomFit() {
   const gridH = state.rows * cellSize;
   vpX = -(canvas.width - gridW) / 2;
   vpY = -(canvas.height - gridH) / 2;
+  // Switch follow to off so auto-tracking doesn't fight the fit
+  followMode = 'off';
+  document.querySelectorAll('input[name=follow]').forEach(r => { r.checked = r.value === 'off'; });
   render();
 }
 
@@ -504,7 +597,7 @@ function render() {
     }
   }
 
-  // Region selection overlay
+  // Region annotation selection overlay
   if (regionSelecting && regionStart && regionEnd) {
     const sr = Math.min(regionStart.r, regionEnd.r);
     const sc = Math.min(regionStart.c, regionEnd.c);
@@ -523,8 +616,27 @@ function render() {
     ctx.setLineDash([]);
   }
 
+  // Edit mode selection overlay
+  if (editMode && editSelection) {
+    const { r1, c1, r2, c2 } = editSelection;
+    const rx = c1 * cs - vpX;
+    const ry = r1 * cs - vpY;
+    const rw = (c2 - c1 + 1) * cs;
+    const rh = (r2 - r1 + 1) * cs;
+    ctx.fillStyle = 'rgba(100,200,255,0.12)';
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeStyle = '#66ccff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(rx + 1, ry + 1, rw - 2, rh - 2);
+    ctx.setLineDash([]);
+  }
+
   // Row/col rulers
   drawRulers(r0, r1, c0, c1);
+
+  // Update scrollbars
+  updateScrollbars();
 }
 
 function drawRulers(r0, r1, c0, c1) {
@@ -556,6 +668,146 @@ function cellChar(val) {
   return val.toString(16).padStart(2, '0');
 }
 
+// ── Scrollbars ────────────────────────────────────────────────
+const hTrack = document.getElementById('hScrollTrack');
+const hThumb = document.getElementById('hScrollThumb');
+const vTrack = document.getElementById('vScrollTrack');
+const vThumb = document.getElementById('vScrollThumb');
+
+// Edge padding: scrollbar allows scrolling this many pixels past grid edges
+const SCROLL_PAD = 60;
+
+function scrollRange() {
+  // Returns { minX, maxX, minY, maxY } — allowed viewport range with padding
+  if (!state) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  const gridW = state.cols * cellSize;
+  const gridH = state.rows * cellSize;
+  return {
+    minX: -SCROLL_PAD,
+    maxX: gridW - canvas.width + SCROLL_PAD,
+    minY: -SCROLL_PAD,
+    maxY: gridH - canvas.height + SCROLL_PAD,
+  };
+}
+
+function updateScrollbars() {
+  if (!state) { hTrack.classList.add('hidden'); vTrack.classList.add('hidden'); return; }
+
+  const { minX, maxX, minY, maxY } = scrollRange();
+  const rangeX = maxX - minX;
+  const rangeY = maxY - minY;
+  const gridW = state.cols * cellSize;
+  const gridH = state.rows * cellSize;
+  const viewW = canvas.width;
+  const viewH = canvas.height;
+
+  // Horizontal
+  if (gridW <= viewW && vpX >= -SCROLL_PAD && vpX <= SCROLL_PAD) {
+    hTrack.classList.add('hidden');
+  } else {
+    hTrack.classList.remove('hidden');
+    const trackW = hTrack.clientWidth;
+    const totalW = gridW + 2 * SCROLL_PAD;
+    const thumbW = Math.max(20, (viewW / totalW) * trackW);
+    const ratio = rangeX > 0 ? Math.max(0, Math.min(1, (vpX - minX) / rangeX)) : 0;
+    const thumbLeft = ratio * (trackW - thumbW);
+    hThumb.style.width = thumbW + 'px';
+    hThumb.style.left = thumbLeft + 'px';
+  }
+
+  // Vertical
+  if (gridH <= viewH && vpY >= -SCROLL_PAD && vpY <= SCROLL_PAD) {
+    vTrack.classList.add('hidden');
+  } else {
+    vTrack.classList.remove('hidden');
+    const trackH = vTrack.clientHeight;
+    const totalH = gridH + 2 * SCROLL_PAD;
+    const thumbH = Math.max(20, (viewH / totalH) * trackH);
+    const ratio = rangeY > 0 ? Math.max(0, Math.min(1, (vpY - minY) / rangeY)) : 0;
+    const thumbTop = ratio * (trackH - thumbH);
+    vThumb.style.height = thumbH + 'px';
+    vThumb.style.top = thumbTop + 'px';
+  }
+}
+
+// Scrollbar drag state
+let sbDragging = null; // 'h' | 'v' | null
+let sbDragStart = 0;   // mouse position at drag start
+let sbDragVp = 0;      // vpX or vpY at drag start
+
+hThumb.addEventListener('mousedown', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  sbDragging = 'h';
+  sbDragStart = e.clientX;
+  sbDragVp = vpX;
+  hThumb.classList.add('dragging');
+});
+
+vThumb.addEventListener('mousedown', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  sbDragging = 'v';
+  sbDragStart = e.clientY;
+  sbDragVp = vpY;
+  vThumb.classList.add('dragging');
+});
+
+// Track click (jump to position)
+hTrack.addEventListener('mousedown', (e) => {
+  if (e.target === hThumb) return;
+  if (!state) return;
+  const { minX, maxX } = scrollRange();
+  const rect = hTrack.getBoundingClientRect();
+  const clickRatio = (e.clientX - rect.left) / rect.width;
+  vpX = minX + clickRatio * (maxX - minX);
+  render();
+});
+
+vTrack.addEventListener('mousedown', (e) => {
+  if (e.target === vThumb) return;
+  if (!state) return;
+  const { minY, maxY } = scrollRange();
+  const rect = vTrack.getBoundingClientRect();
+  const clickRatio = (e.clientY - rect.top) / rect.height;
+  vpY = minY + clickRatio * (maxY - minY);
+  render();
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!sbDragging || !state) return;
+  const { minX, maxX, minY, maxY } = scrollRange();
+  if (sbDragging === 'h') {
+    const rangeX = maxX - minX;
+    const gridW = state.cols * cellSize;
+    const totalW = gridW + 2 * SCROLL_PAD;
+    const trackW = hTrack.clientWidth;
+    const thumbW = Math.max(20, (canvas.width / totalW) * trackW);
+    const deltaPixel = e.clientX - sbDragStart;
+    const deltaRatio = deltaPixel / (trackW - thumbW);
+    vpX = sbDragVp + deltaRatio * rangeX;
+    vpX = Math.max(minX, Math.min(maxX, vpX));
+    render();
+  } else {
+    const rangeY = maxY - minY;
+    const gridH = state.rows * cellSize;
+    const totalH = gridH + 2 * SCROLL_PAD;
+    const trackH = vTrack.clientHeight;
+    const thumbH = Math.max(20, (canvas.height / totalH) * trackH);
+    const deltaPixel = e.clientY - sbDragStart;
+    const deltaRatio = deltaPixel / (trackH - thumbH);
+    vpY = sbDragVp + deltaRatio * rangeY;
+    vpY = Math.max(minY, Math.min(maxY, vpY));
+    render();
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (sbDragging) {
+    hThumb.classList.remove('dragging');
+    vThumb.classList.remove('dragging');
+    sbDragging = null;
+  }
+});
+
 // ── Mouse interaction ──────────────────────────────────────────
 function canvasToGrid(mx, my) {
   const r = Math.floor((vpY + my) / cellSize);
@@ -570,8 +822,8 @@ canvas.addEventListener('mousedown', (e) => {
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
-    if (e.shiftKey || document.getElementById('regionMode').checked) {
-      // Region select mode
+    // Shift+drag always does region annotation (both modes)
+    if (e.shiftKey || (!editMode && document.getElementById('regionMode').checked)) {
       const cell = canvasToGrid(mx, my);
       if (cell) {
         regionSelecting = true;
@@ -581,7 +833,30 @@ canvas.addEventListener('mousedown', (e) => {
       }
       return;
     }
-    // Pan
+
+    if (editMode) {
+      const cell = canvasToGrid(mx, my);
+      if (!cell) return;
+
+      // If in paste mode, paste at click location
+      if (pasteMode && clipboardInfo && clipboardInfo.loaded) {
+        doPaste(cell.r, cell.c);
+        return;
+      }
+
+      // Close opcode picker if open
+      closeOpcodePicker();
+
+      // Start drag-to-select
+      editSelecting = true;
+      editSelStart = cell;
+      editSelection = { r1: cell.r, c1: cell.c, r2: cell.r, c2: cell.c };
+      updateEditButtons();
+      render();
+      return;
+    }
+
+    // View mode: pan
     dragging = true;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
@@ -605,8 +880,17 @@ canvas.addEventListener('mousemove', (e) => {
 
   if (regionSelecting) {
     const cell = canvasToGrid(mx, my);
-    if (cell) {
-      regionEnd = cell;
+    if (cell) { regionEnd = cell; render(); }
+    return;
+  }
+
+  if (editSelecting) {
+    const cell = canvasToGrid(mx, my);
+    if (cell && editSelStart) {
+      editSelection = {
+        r1: Math.min(editSelStart.r, cell.r), c1: Math.min(editSelStart.c, cell.c),
+        r2: Math.max(editSelStart.r, cell.r), c2: Math.max(editSelStart.c, cell.c)
+      };
       render();
     }
     return;
@@ -656,6 +940,19 @@ canvas.addEventListener('mouseup', (e) => {
     regionStart = null;
     regionEnd = null;
     render();
+  }
+  if (editSelecting) {
+    editSelecting = false;
+    if (editSelection) {
+      const { r1, c1, r2, c2 } = editSelection;
+      // If single cell click (not drag), show opcode picker
+      if (r1 === r2 && c1 === c2) {
+        showOpcodePicker(r1, c1, e.clientX, e.clientY);
+      }
+      // Sync selection to backend
+      syncSelection();
+      updateEditButtons();
+    }
   }
 });
 
@@ -774,6 +1071,257 @@ function closeRegionPopup() {
   pendingRegion = null;
 }
 
+// ── Edit mode ──────────────────────────────────────────────────
+
+function toggleEditMode() {
+  editMode = !editMode;
+  const btn = document.getElementById('btnModeToggle');
+  const controls = document.getElementById('editControls');
+  if (editMode) {
+    btn.classList.add('editActive');
+    btn.innerHTML = '&#x270E; Edit';
+    controls.classList.add('visible');
+    wrap.classList.add('editMode');
+    if (playing) togglePlay();
+  } else {
+    btn.classList.remove('editActive');
+    btn.innerHTML = '&#x270E; Edit';
+    controls.classList.remove('visible');
+    wrap.classList.remove('editMode');
+    editSelection = null;
+    pasteMode = false;
+    closeOpcodePicker();
+  }
+  updateEditButtons();
+  render();
+}
+
+function updateEditButtons() {
+  const hasSel = editSelection !== null;
+  const hasClip = clipboardInfo && clipboardInfo.loaded;
+  document.getElementById('btnCopy').disabled = !hasSel;
+  document.getElementById('btnCut').disabled = !hasSel;
+  document.getElementById('btnDelSel').disabled = !hasSel;
+  document.getElementById('btnPaste').disabled = !hasClip;
+
+  const info = document.getElementById('selInfo');
+  if (hasSel) {
+    const { r1, c1, r2, c2 } = editSelection;
+    const w = c2 - c1 + 1, h = r2 - r1 + 1;
+    info.textContent = `Sel: ${h}\u00d7${w} (${h*w})`;
+  } else if (pasteMode) {
+    info.textContent = 'Click to paste...';
+  } else {
+    info.textContent = '';
+  }
+}
+
+async function syncSelection() {
+  if (!editSelection) return;
+  const { r1, c1, r2, c2 } = editSelection;
+  await api('select', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ r1, c1, r2, c2 })
+  });
+}
+
+async function doCopy() {
+  if (!editSelection) return;
+  await syncSelection();
+  const result = await api('copy', { method: 'POST' });
+  state = result;
+  clipboardInfo = result.clipboard;
+  updateEditButtons();
+  updateStatus();
+  render();
+}
+
+async function doCut() {
+  if (!editSelection) return;
+  await syncSelection();
+  const result = await api('cut', { method: 'POST' });
+  state = result;
+  clipboardInfo = result.clipboard;
+  editSelection = null;
+  updateEditButtons();
+  updateStatus();
+  render();
+}
+
+async function doPaste(r, c) {
+  const result = await api('paste', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ r, c })
+  });
+  state = result;
+  pasteMode = false;
+  updateEditButtons();
+  updateStatus();
+  render();
+}
+
+async function doDeleteSelection() {
+  if (!editSelection) return;
+  await syncSelection();
+  state = await api('delete_selection', { method: 'POST' });
+  editSelection = null;
+  updateEditButtons();
+  updateStatus();
+  render();
+}
+
+function enterPasteMode() {
+  if (!clipboardInfo || !clipboardInfo.loaded) return;
+  pasteMode = true;
+  editSelection = null;
+  updateEditButtons();
+}
+
+async function doSave() {
+  if (!currentFile) {
+    const name = prompt('Save as filename (without .fb2d):');
+    if (!name) return;
+    currentFile = name + '.fb2d';
+  }
+  await api('save', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ filename: currentFile })
+  });
+  document.getElementById('selInfo').textContent = 'Saved!';
+  setTimeout(() => updateEditButtons(), 1500);
+}
+
+async function setCell(r, c, value) {
+  state = await api('setcell', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ r, c, value })
+  });
+  updateStatus();
+  render();
+}
+
+// ── Opcode picker ──────────────────────────────────────────────
+
+const OPCODE_GROUPS = [
+  { label: 'Mirrors', ops: [
+    [0,'NOP'], [1,'/'], [2,'\\'], [3,'%'], [4,'?'], [5,'&'], [6,'!']
+  ]},
+  { label: 'H0 Move', ops: [[7,'N'], [8,'S'], [9,'E'], [10,'W']] },
+  { label: 'H1 Move', ops: [[11,'n'], [12,'s'], [13,'e'], [14,'w']] },
+  { label: 'CL Move', ops: [[25,'^'], [26,'v'], [23,'>'], [24,'<']] },
+  { label: 'GP Move', ops: [[32,'{'], [31,'}'], [29,']'], [30,'[']] },
+  { label: 'Byte Data', ops: [
+    [15,'+'], [16,'-'], [17,'.'], [18,','], [19,'X'], [20,'F'], [21,'G'], [22,'T']
+  ]},
+  { label: 'Bit Data', ops: [[39,'x'], [40,'r'], [41,'l'], [42,'f'], [43,'z']] },
+  { label: 'GP Data', ops: [[27,'P'], [28,'Q'], [33,'K'], [38,'Z']] },
+  { label: 'GP Mirrors', ops: [[34,'('], [35,')'], [36,'#'], [37,'$']] },
+];
+
+let pickerCell = null;
+let pickerVerbose = false;
+
+function buildOpcodePicker() {
+  const picker = document.getElementById('opcodePicker');
+  picker.className = pickerVerbose ? 'verbose' : 'compact';
+  const modeLabel = pickerVerbose ? 'Compact' : 'Explain';
+  let html = `<div class="op-header"><span style="font-size:11px;color:#888;">Set opcode</span><button id="pickerToggleMode">${modeLabel}</button></div>`;
+  for (const group of OPCODE_GROUPS) {
+    html += `<div class="op-group"><div class="op-group-label">${group.label}</div><div class="op-grid">`;
+    for (const [code, ch] of group.ops) {
+      const name = OPCODE_NAMES[code] || 'NOP';
+      const display = code === 0 ? '\u00b7' : ch;
+      if (pickerVerbose) {
+        html += `<button class="op-btn" data-code="${code}" title="${name} (${code})"><b>${display}</b> <span class="op-label">${name}</span></button>`;
+      } else {
+        html += `<button class="op-btn" data-code="${code}" title="${name} (${code})">${display}</button>`;
+      }
+    }
+    html += '</div></div>';
+  }
+  html += '<div class="op-raw"><span style="color:#888;font-size:11px">Raw:</span><input type="number" id="rawValueInput" min="0" max="255" placeholder="0-255"><button id="rawValueSet">Set</button></div>';
+  picker.innerHTML = html;
+
+  // Toggle compact/verbose
+  document.getElementById('pickerToggleMode').addEventListener('click', (e) => {
+    e.stopPropagation();
+    pickerVerbose = !pickerVerbose;
+    const savedCell = pickerCell;
+    buildOpcodePicker();
+    pickerCell = savedCell;
+    // Re-highlight current value
+    if (pickerCell && state) {
+      const flat = pickerCell.r * state.cols + pickerCell.c;
+      const currentVal = state.grid[flat];
+      picker.querySelectorAll('.op-btn').forEach(b => {
+        b.classList.toggle('selected', parseInt(b.dataset.code) === currentVal);
+      });
+    }
+  });
+
+  // Event delegation for opcode buttons
+  picker.addEventListener('click', (e) => {
+    const btn = e.target.closest('.op-btn');
+    if (btn && pickerCell) {
+      const code = parseInt(btn.dataset.code);
+      setCell(pickerCell.r, pickerCell.c, code);
+      closeOpcodePicker();
+      return;
+    }
+    if (e.target.id === 'rawValueSet') {
+      const val = parseInt(document.getElementById('rawValueInput').value);
+      if (pickerCell && !isNaN(val) && val >= 0 && val <= 255) {
+        setCell(pickerCell.r, pickerCell.c, val);
+        closeOpcodePicker();
+      }
+    }
+  });
+
+  // Enter key in raw input
+  picker.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.id === 'rawValueInput') {
+      document.getElementById('rawValueSet').click();
+    }
+    if (e.key === 'Escape') closeOpcodePicker();
+    e.stopPropagation();
+  });
+}
+
+function showOpcodePicker(r, c, px, py) {
+  pickerCell = { r, c };
+  const picker = document.getElementById('opcodePicker');
+  const wrapRect = wrap.getBoundingClientRect();
+  // Position near click, but keep on screen
+  let left = px - wrapRect.left + 8;
+  let top = py - wrapRect.top + 8;
+  if (left + 330 > wrapRect.width) left = wrapRect.width - 340;
+  if (top + 350 > wrapRect.height) top = wrapRect.height - 360;
+  if (left < 0) left = 4;
+  if (top < 0) top = 4;
+  picker.style.left = left + 'px';
+  picker.style.top = top + 'px';
+  picker.style.display = 'block';
+
+  // Highlight current value
+  const flat = r * state.cols + c;
+  const currentVal = state.grid[flat];
+  picker.querySelectorAll('.op-btn').forEach(b => {
+    b.classList.toggle('selected', parseInt(b.dataset.code) === currentVal);
+  });
+}
+
+function closeOpcodePicker() {
+  document.getElementById('opcodePicker').style.display = 'none';
+  pickerCell = null;
+}
+
+// Build picker once on load
+buildOpcodePicker();
+
 // ── Playback ───────────────────────────────────────────────────
 function togglePlay() {
   playing = !playing;
@@ -811,6 +1359,7 @@ document.getElementById('fileSelect').addEventListener('change', (e) => {
   }
 });
 
+document.getElementById('btnReset').addEventListener('click', resetToStart);
 document.getElementById('btnForward').addEventListener('click', () => stepForward(1));
 document.getElementById('btnBack').addEventListener('click', () => stepBack(1));
 document.getElementById('btnForwardFast').addEventListener('click', () => stepForward(10));
@@ -822,8 +1371,22 @@ document.getElementById('btnZoomIn').addEventListener('click', () => zoomAt(canv
 document.getElementById('btnZoomOut').addEventListener('click', () => zoomAt(canvas.width/2, canvas.height/2, 1/1.3));
 document.getElementById('btnZoomFit').addEventListener('click', zoomFit);
 
+document.getElementById('btnModeToggle').addEventListener('click', toggleEditMode);
+document.getElementById('btnCopy').addEventListener('click', doCopy);
+document.getElementById('btnCut').addEventListener('click', doCut);
+document.getElementById('btnPaste').addEventListener('click', enterPasteMode);
+document.getElementById('btnDelSel').addEventListener('click', doDeleteSelection);
+document.getElementById('btnSave').addEventListener('click', doSave);
+
 document.getElementById('btnHelp').addEventListener('click', () => {
   document.getElementById('helpOverlay').classList.toggle('visible');
+});
+
+// Click outside help content to close
+document.getElementById('helpOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'helpOverlay') {
+    e.target.classList.remove('visible');
+  }
 });
 
 document.querySelectorAll('input[name=follow]').forEach(r => {
@@ -835,12 +1398,22 @@ document.addEventListener('keydown', (e) => {
   // Don't capture when typing in inputs
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-  if (e.key === 'ArrowRight' && e.shiftKey) { stepForward(10); e.preventDefault(); }
+  const mod = e.metaKey || e.ctrlKey;
+
+  // Edit mode clipboard shortcuts
+  if (editMode && mod && e.key === 'c') { doCopy(); e.preventDefault(); return; }
+  if (editMode && mod && e.key === 'x') { doCut(); e.preventDefault(); return; }
+  if (editMode && mod && e.key === 'v') { enterPasteMode(); e.preventDefault(); return; }
+  if (editMode && (e.key === 'Delete' || e.key === 'Backspace')) { doDeleteSelection(); e.preventDefault(); return; }
+
+  if (e.key === 'e' && !mod) { toggleEditMode(); e.preventDefault(); }
+  else if (e.key === 'r' && !mod && !editMode) { resetToStart(); e.preventDefault(); }
+  else if (e.key === 'ArrowRight' && e.shiftKey) { stepForward(10); e.preventDefault(); }
   else if (e.key === 'ArrowLeft' && e.shiftKey) { stepBack(10); e.preventDefault(); }
   else if (e.key === 'ArrowRight') { stepForward(1); e.preventDefault(); }
   else if (e.key === 'ArrowLeft') { stepBack(1); e.preventDefault(); }
   else if (e.key === ' ') { togglePlay(); e.preventDefault(); }
-  else if (e.key === 'f' || e.key === 'F') { zoomFit(); }
+  else if ((e.key === 'f' || e.key === 'F') && !mod) { zoomFit(); }
   else if (e.key === '=' || e.key === '+') { zoomAt(canvas.width/2, canvas.height/2, 1.3); }
   else if (e.key === '-') { zoomAt(canvas.width/2, canvas.height/2, 1/1.3); }
   else if (e.key === '?') { document.getElementById('helpOverlay').classList.toggle('visible'); }
@@ -848,6 +1421,8 @@ document.addEventListener('keydown', (e) => {
     document.getElementById('helpOverlay').classList.remove('visible');
     closeAnnPopup();
     closeRegionPopup();
+    closeOpcodePicker();
+    if (editMode) { editSelection = null; pasteMode = false; updateEditButtons(); render(); }
   }
 });
 

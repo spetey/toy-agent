@@ -10,6 +10,7 @@ PROGRAMS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'program
 
 app = Flask(__name__)
 sim = FB2DSimulator()
+current_file = ''  # Track which file is currently loaded
 
 
 def serialize_state():
@@ -26,6 +27,7 @@ def serialize_state():
         'h1': sim.h1,
         'gp': sim.gp,
         'step_count': sim.step_count,
+        'current_file': current_file,
     }
 
 
@@ -41,9 +43,27 @@ def get_state():
 
 @app.route('/api/load', methods=['POST'])
 def load_file():
+    global current_file
     data = request.get_json(force=True)
     filename = data.get('filename', '')
     # Sanitize: only allow filenames, no path traversal
+    if '/' in filename or '\\' in filename or '..' in filename:
+        abort(400, 'Invalid filename')
+    path = os.path.join(PROGRAMS_DIR, filename)
+    if not os.path.isfile(path):
+        abort(404, f'File not found: {filename}')
+    sim.load_state(path)
+    current_file = filename
+    return jsonify(serialize_state())
+
+
+@app.route('/api/reset', methods=['POST'])
+def reset_state():
+    """Reload the current file to reset back to step 0."""
+    data = request.get_json(force=True) if request.data else {}
+    filename = data.get('filename', '') or current_file
+    if not filename:
+        abort(400, 'No filename to reset')
     if '/' in filename or '\\' in filename or '..' in filename:
         abort(400, 'Invalid filename')
     path = os.path.join(PROGRAMS_DIR, filename)
@@ -102,6 +122,117 @@ def save_annotations():
     with open(ann_path, 'w') as f:
         json.dump(data, f, indent=2)
     return jsonify({'ok': True})
+
+
+# ── Edit routes ─────────────────────────────────────────────────
+
+
+@app.route('/api/setcell', methods=['POST'])
+def set_cell():
+    data = request.get_json(force=True)
+    r, c, val = int(data['r']), int(data['c']), int(data['value'])
+    if 0 <= r < sim.rows and 0 <= c < sim.cols and 0 <= val <= 255:
+        sim.grid[sim._to_flat(r, c)] = val
+    return jsonify(serialize_state())
+
+
+@app.route('/api/setcells', methods=['POST'])
+def set_cells():
+    data = request.get_json(force=True)
+    for cell in data.get('cells', []):
+        r, c, val = int(cell['r']), int(cell['c']), int(cell['value'])
+        if 0 <= r < sim.rows and 0 <= c < sim.cols and 0 <= val <= 255:
+            sim.grid[sim._to_flat(r, c)] = val
+    return jsonify(serialize_state())
+
+
+@app.route('/api/select', methods=['POST'])
+def select_rect():
+    data = request.get_json(force=True)
+    sim.select_rect(int(data['r1']), int(data['c1']),
+                    int(data['r2']), int(data['c2']))
+    return jsonify(serialize_state())
+
+
+@app.route('/api/copy', methods=['POST'])
+def copy_rect():
+    sim.copy_rect()
+    has = sim.clipboard is not None
+    w, h = (sim.clipboard[0], sim.clipboard[1]) if has else (0, 0)
+    result = serialize_state()
+    result['clipboard'] = {'width': w, 'height': h, 'loaded': has}
+    return jsonify(result)
+
+
+@app.route('/api/cut', methods=['POST'])
+def cut_rect():
+    sim.cut_rect()
+    has = sim.clipboard is not None
+    w, h = (sim.clipboard[0], sim.clipboard[1]) if has else (0, 0)
+    result = serialize_state()
+    result['clipboard'] = {'width': w, 'height': h, 'loaded': has}
+    return jsonify(result)
+
+
+@app.route('/api/paste', methods=['POST'])
+def paste_rect():
+    data = request.get_json(force=True)
+    sim.paste_rect(int(data['r']), int(data['c']))
+    return jsonify(serialize_state())
+
+
+@app.route('/api/delete_selection', methods=['POST'])
+def delete_selection():
+    """Zero all cells in the current selection."""
+    if sim.selection is not None:
+        r1, c1, r2, c2 = sim.selection
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                sim.grid[sim._to_flat(r, c)] = 0
+    return jsonify(serialize_state())
+
+
+@app.route('/api/save', methods=['POST'])
+def save_state():
+    data = request.get_json(force=True)
+    filename = data.get('filename', currentFile if 'currentFile' in dir() else '')
+    if not filename:
+        abort(400, 'No filename specified')
+    if '/' in filename or '\\' in filename or '..' in filename:
+        abort(400, 'Invalid filename')
+    if not filename.endswith('.fb2d'):
+        filename += '.fb2d'
+    path = os.path.join(PROGRAMS_DIR, filename)
+    sim.save_state(path)
+    return jsonify({'ok': True, 'filename': filename})
+
+
+@app.route('/api/resize', methods=['POST'])
+def resize_grid():
+    data = request.get_json(force=True)
+    new_rows, new_cols = int(data['rows']), int(data['cols'])
+    if new_rows < 1 or new_cols < 1 or new_rows > 1000 or new_cols > 2000:
+        abort(400, 'Invalid dimensions')
+    # Preserve existing data where possible
+    old_grid = list(sim.grid)
+    old_rows, old_cols = sim.rows, sim.cols
+    sim.rows = new_rows
+    sim.cols = new_cols
+    sim.grid_size = new_rows * new_cols
+    sim.grid = [0] * sim.grid_size
+    for r in range(min(old_rows, new_rows)):
+        for c in range(min(old_cols, new_cols)):
+            sim.grid[r * new_cols + c] = old_grid[r * old_cols + c]
+    # Clamp head positions
+    sim.ip_row = min(sim.ip_row, new_rows - 1)
+    sim.ip_col = min(sim.ip_col, new_cols - 1)
+    sim.cl = min(sim.cl, sim.grid_size - 1)
+    sim.h0 = min(sim.h0, sim.grid_size - 1)
+    sim.h1 = min(sim.h1, sim.grid_size - 1)
+    sim.gp = min(sim.gp, sim.grid_size - 1)
+    sim.selection = None
+    sim.clipboard = None
+    return jsonify(serialize_state())
 
 
 if __name__ == '__main__':
