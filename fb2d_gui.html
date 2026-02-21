@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>fb2d GUI</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a2e; color: #e0e0e0; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+
+#toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #16213e; border-bottom: 1px solid #0f3460; flex-wrap: wrap; }
+#toolbar select, #toolbar button, #toolbar input[type=range] { font-family: inherit; font-size: 13px; }
+#toolbar select { background: #0f3460; color: #e0e0e0; border: 1px solid #533483; padding: 4px 8px; border-radius: 4px; }
+#toolbar button { background: #533483; color: #e0e0e0; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; min-width: 32px; }
+#toolbar button:hover { background: #7b2cbf; }
+#toolbar button:active { background: #9d4edd; }
+#toolbar button.active { background: #e94560; }
+#stepDisplay { font-size: 13px; min-width: 90px; text-align: center; color: #aaa; }
+#speedSlider { width: 80px; accent-color: #533483; }
+#speedLabel { font-size: 11px; color: #888; min-width: 50px; }
+
+#status { display: flex; align-items: center; gap: 16px; padding: 4px 12px; background: #16213e; border-bottom: 1px solid #0f3460; font-size: 12px; flex-wrap: wrap; }
+.head-label { font-weight: bold; }
+.head-ip { color: #ff6b6b; }
+.head-cl { color: #da70d6; }
+.head-h0 { color: #00ced1; }
+.head-h1 { color: #32cd32; }
+.head-gp { color: #ffd700; }
+
+#canvasWrap { flex: 1; position: relative; overflow: hidden; cursor: grab; }
+#canvasWrap.dragging { cursor: grabbing; }
+#gridCanvas { display: block; }
+
+#bottomBar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; background: #16213e; border-top: 1px solid #0f3460; font-size: 12px; flex-wrap: wrap; }
+#bottomBar button { background: #533483; color: #e0e0e0; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 12px; }
+#bottomBar button:hover { background: #7b2cbf; }
+#bottomBar label { cursor: pointer; }
+#bottomBar input[type=radio] { accent-color: #533483; }
+#cellInfo { margin-left: auto; color: #888; min-width: 200px; text-align: right; }
+
+#tooltip { position: absolute; background: #222; color: #e0e0e0; border: 1px solid #533483; padding: 4px 8px; border-radius: 4px; font-size: 11px; pointer-events: none; display: none; z-index: 100; white-space: pre; }
+
+/* Annotation popup */
+#annPopup { position: absolute; background: #222; border: 1px solid #7b2cbf; border-radius: 6px; padding: 8px; z-index: 200; display: none; }
+#annPopup input { background: #1a1a2e; color: #e0e0e0; border: 1px solid #533483; padding: 4px 6px; border-radius: 3px; font-family: inherit; font-size: 12px; width: 200px; }
+#annPopup button { background: #533483; color: #e0e0e0; border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; margin-top: 4px; margin-right: 4px; }
+#annPopup button:hover { background: #7b2cbf; }
+#annPopup .ann-delete { background: #e94560; }
+
+/* Region label popup */
+#regionPopup { position: absolute; background: #222; border: 1px solid #7b2cbf; border-radius: 6px; padding: 8px; z-index: 200; display: none; }
+#regionPopup input { background: #1a1a2e; color: #e0e0e0; border: 1px solid #533483; padding: 4px 6px; border-radius: 3px; font-family: inherit; font-size: 12px; width: 180px; }
+#regionPopup button { background: #533483; color: #e0e0e0; border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; margin-top: 4px; margin-right: 4px; }
+#regionPopup button:hover { background: #7b2cbf; }
+
+#helpOverlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 300; display: none; align-items: center; justify-content: center; }
+#helpOverlay.visible { display: flex; }
+#helpContent { background: #16213e; border: 1px solid #533483; border-radius: 8px; padding: 20px 28px; max-width: 500px; font-size: 13px; line-height: 1.6; }
+#helpContent h2 { margin-bottom: 12px; color: #9d4edd; }
+#helpContent kbd { background: #0f3460; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
+#helpContent .section { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <select id="fileSelect"><option value="">-- load file --</option></select>
+  <span style="color:#555">|</span>
+  <button id="btnBackFast" title="Step back 10 (Shift+Left)">&#x25C0;&#x25C0;</button>
+  <button id="btnBack" title="Step back (Left)">&#x25C0;</button>
+  <span id="stepDisplay">Step 0</span>
+  <button id="btnForward" title="Step forward (Right)">&#x25B6;</button>
+  <button id="btnForwardFast" title="Step forward 10 (Shift+Right)">&#x25B6;&#x25B6;</button>
+  <span style="color:#555">|</span>
+  <button id="btnPlay" title="Play/Pause (Space)">&#x25B6; Play</button>
+  <input type="range" id="speedSlider" min="1" max="100" value="50" title="Playback speed">
+  <span id="speedLabel">200ms</span>
+  <span style="color:#555">|</span>
+  <button id="btnHelp" title="Keyboard shortcuts (?)">?</button>
+</div>
+
+<div id="status">
+  <span class="head-label head-ip" id="ipStatus">IP:(0,0)&rarr;</span>
+  <span class="head-label head-cl" id="clStatus">CL:0</span>
+  <span class="head-label head-h0" id="h0Status">H0:0</span>
+  <span class="head-label head-h1" id="h1Status">H1:0</span>
+  <span class="head-label head-gp" id="gpStatus">GP:0</span>
+  <span id="gridSize" style="color:#666; margin-left:auto;"></span>
+</div>
+
+<div id="canvasWrap">
+  <canvas id="gridCanvas"></canvas>
+  <div id="tooltip"></div>
+  <div id="annPopup">
+    <div style="font-size:11px; color:#888; margin-bottom:4px;">Cell annotation:</div>
+    <input id="annInput" type="text" placeholder="Enter note...">
+    <div style="margin-top:4px;">
+      <button id="annSave">Save</button>
+      <button id="annDelete" class="ann-delete">Delete</button>
+      <button id="annCancel">Cancel</button>
+    </div>
+  </div>
+  <div id="regionPopup">
+    <div style="font-size:11px; color:#888; margin-bottom:4px;">Region label:</div>
+    <input id="regionInput" type="text" placeholder="Label this region...">
+    <div style="margin-top:4px;">
+      <button id="regionSave">Save</button>
+      <button id="regionCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="bottomBar">
+  <button id="btnZoomOut" title="Zoom out (-)">-</button>
+  <button id="btnZoomFit" title="Fit grid (F)">Fit</button>
+  <button id="btnZoomIn" title="Zoom in (+)">+</button>
+  <span style="color:#555">|</span>
+  <span style="color:#888;">Follow:</span>
+  <label><input type="radio" name="follow" value="center" checked> Center</label>
+  <label><input type="radio" name="follow" value="edge"> Edge</label>
+  <label><input type="radio" name="follow" value="off"> Off</label>
+  <span style="color:#555">|</span>
+  <span style="color:#888;">Annotate:</span>
+  <label title="Shift+drag to select region"><input type="checkbox" id="regionMode"> Region select</label>
+  <span id="cellInfo"></span>
+</div>
+
+<div id="helpOverlay">
+  <div id="helpContent">
+    <h2>Keyboard Shortcuts</h2>
+    <div class="section">
+      <kbd>&rarr;</kbd> Step forward &nbsp; <kbd>&larr;</kbd> Step back<br>
+      <kbd>Shift+&rarr;</kbd> Step 10x &nbsp; <kbd>Shift+&larr;</kbd> Back 10x<br>
+      <kbd>Space</kbd> Play / Pause
+    </div>
+    <div class="section">
+      <kbd>F</kbd> Fit to grid &nbsp; <kbd>+</kbd> Zoom in &nbsp; <kbd>-</kbd> Zoom out
+    </div>
+    <div class="section">
+      <kbd>?</kbd> Toggle this help<br>
+      <kbd>Esc</kbd> Close help / cancel annotation
+    </div>
+    <div class="section" style="color:#888;">
+      <b>Mouse:</b> Drag to pan, scroll to zoom<br>
+      <b>Right-click</b> a cell to annotate it<br>
+      <b>Shift+drag</b> to select a region for labeling
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Constants ──────────────────────────────────────────────────
+const DIR_ARROWS = ['\u2191', '\u2192', '\u2193', '\u2190']; // N E S W
+const OPCODE_CHARS = {
+  0:'\u00b7', 1:'/', 2:'\\', 3:'%', 4:'?', 5:'&', 6:'!',
+  7:'N', 8:'S', 9:'E', 10:'W', 11:'n', 12:'s', 13:'e', 14:'w',
+  15:'+', 16:'-', 17:'.', 18:',', 19:'X', 20:'F', 21:'G', 22:'T',
+  23:'>', 24:'<', 25:'^', 26:'v', 27:'P', 28:'Q', 29:']', 30:'[',
+  31:'}', 32:'{', 33:'K', 34:'(', 35:')', 36:'#', 37:'$', 38:'Z',
+  39:'x', 40:'r', 41:'l', 42:'f', 43:'z'
+};
+
+const OPCODE_NAMES = {
+  0:'NOP', 1:'/ reflect', 2:'\\ reflect', 3:'% /if[CL]!=0', 4:'? /if[CL]==0',
+  5:'& \\if[CL]!=0', 6:'! \\if[CL]==0',
+  7:'H0 North', 8:'H0 South', 9:'H0 East', 10:'H0 West',
+  11:'H1 North', 12:'H1 South', 13:'H1 East', 14:'H1 West',
+  15:'[H0]++', 16:'[H0]--', 17:'[H0]+=[H1]', 18:'[H0]-=[H1]',
+  19:'swap([H0],[H1])', 20:'Fredkin', 21:'indirect H1', 22:'bridge',
+  23:'CL East', 24:'CL West', 25:'CL North', 26:'CL South',
+  27:'[GP]++', 28:'[GP]--', 29:'GP East', 30:'GP West', 31:'GP South', 32:'GP North',
+  33:'swap(CL,GP)', 34:'\\if[GP]!=0', 35:'\\if[GP]==0',
+  36:'/if[GP]==0', 37:'/if[GP]!=0', 38:'swap([H0],[GP])',
+  39:'XOR', 40:'rot right', 41:'rot left', 42:'bit Fredkin', 43:'bit GP swap'
+};
+
+const COLORS = {
+  ip: '#ff6b6b', cl: '#da70d6', h0: '#00ced1', h1: '#32cd32', gp: '#ffd700',
+  ipBg: 'rgba(255,107,107,0.7)', clBg: 'rgba(218,112,214,0.35)',
+  h0Bg: 'rgba(0,206,209,0.35)', h1Bg: 'rgba(50,205,50,0.35)',
+  gpBg: 'rgba(255,215,0,0.3)',
+  gridBg: '#1a1a2e', cellBg: '#1e1e3a', zeroBg: '#1a1a2e',
+  gridLine: '#2a2a4a', text: '#c0c0c0', dimText: '#555',
+  annDot: '#ff9f43', regionFill: 'rgba(68,136,255,0.15)', regionStroke: '#4488ff'
+};
+
+// ── State ──────────────────────────────────────────────────────
+let state = null;
+let currentFile = '';
+let annotations = { cells: {}, regions: [] };
+
+// Viewport
+let vpX = 0, vpY = 0; // top-left offset in grid-pixel coords
+let cellSize = 24;
+const MIN_CELL = 4, MAX_CELL = 64;
+
+// Pan drag
+let dragging = false, dragStartX = 0, dragStartY = 0, dragVpX = 0, dragVpY = 0;
+
+// Region select
+let regionSelecting = false, regionStart = null, regionEnd = null;
+
+// Playback
+let playing = false;
+let playTimer = null;
+let playDelay = 200;
+
+// Follow mode
+let followMode = 'center'; // center | edge | off
+
+// Animation
+let animTarget = null; // {x, y, startX, startY, startTime, duration}
+
+// Canvas
+const canvas = document.getElementById('gridCanvas');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('canvasWrap');
+
+// ── API ────────────────────────────────────────────────────────
+async function api(path, opts) {
+  const res = await fetch('/api/' + path, opts);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+async function loadFileList() {
+  const files = await api('files');
+  const sel = document.getElementById('fileSelect');
+  sel.innerHTML = '<option value="">-- load file --</option>';
+  for (const f of files) {
+    const opt = document.createElement('option');
+    opt.value = f;
+    opt.textContent = f.replace('.fb2d', '');
+    sel.appendChild(opt);
+  }
+}
+
+async function loadFile(filename) {
+  state = await api('load', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({filename})
+  });
+  currentFile = filename;
+  annotations = await api('annotations?file=' + encodeURIComponent(filename));
+  zoomFit();
+  updateStatus();
+  render();
+}
+
+async function loadAnnotations() {
+  if (!currentFile) return;
+  annotations = await api('annotations?file=' + encodeURIComponent(currentFile));
+}
+
+async function saveAnnotations() {
+  if (!currentFile) return;
+  await api('annotations?file=' + encodeURIComponent(currentFile), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(annotations)
+  });
+}
+
+async function stepForward(n = 1) {
+  state = await api('step?n=' + n, {method: 'POST'});
+  afterStep();
+}
+
+async function stepBack(n = 1) {
+  state = await api('back?n=' + n, {method: 'POST'});
+  afterStep();
+}
+
+async function refreshState() {
+  state = await api('state');
+  updateStatus();
+  render();
+}
+
+function afterStep() {
+  updateStatus();
+  followIP();
+  render();
+}
+
+// ── Status display ─────────────────────────────────────────────
+function updateStatus() {
+  if (!state) return;
+  const arrow = DIR_ARROWS[state.ip_dir];
+  document.getElementById('ipStatus').textContent =
+    `IP:(${state.ip_row},${state.ip_col})${arrow}`;
+
+  const rc = (flat) => {
+    const r = Math.floor(flat / state.cols);
+    const c = flat % state.cols;
+    return `(${r},${c})`;
+  };
+  document.getElementById('clStatus').textContent = `CL:${rc(state.cl)}`;
+  document.getElementById('h0Status').textContent = `H0:${rc(state.h0)}`;
+  document.getElementById('h1Status').textContent = `H1:${rc(state.h1)}`;
+  document.getElementById('gpStatus').textContent = `GP:${rc(state.gp)}`;
+  document.getElementById('stepDisplay').textContent = `Step ${state.step_count}`;
+  document.getElementById('gridSize').textContent = `${state.rows}\u00d7${state.cols}`;
+}
+
+// ── Viewport / zoom ────────────────────────────────────────────
+function resizeCanvas() {
+  canvas.width = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  render();
+}
+
+function zoomFit() {
+  if (!state) return;
+  const padX = 40, padY = 40;
+  const availW = canvas.width - padX;
+  const availH = canvas.height - padY;
+  cellSize = Math.max(MIN_CELL, Math.min(MAX_CELL,
+    Math.floor(Math.min(availW / state.cols, availH / state.rows))));
+  // Center the grid
+  const gridW = state.cols * cellSize;
+  const gridH = state.rows * cellSize;
+  vpX = -(canvas.width - gridW) / 2;
+  vpY = -(canvas.height - gridH) / 2;
+  render();
+}
+
+function zoomAt(x, y, factor) {
+  // x, y in canvas coords; zoom centered on that point
+  const gridX = vpX + x;
+  const gridY = vpY + y;
+  const oldSize = cellSize;
+  cellSize = Math.max(MIN_CELL, Math.min(MAX_CELL, Math.round(cellSize * factor)));
+  if (cellSize === oldSize) return;
+  // Adjust viewport so the grid point under cursor stays put
+  const scale = cellSize / oldSize;
+  vpX = gridX * scale - x;
+  vpY = gridY * scale - y;
+  render();
+}
+
+// ── Follow IP ──────────────────────────────────────────────────
+function followIP(smooth = true) {
+  if (!state || followMode === 'off') return;
+  const ipPixelX = state.ip_col * cellSize + cellSize / 2;
+  const ipPixelY = state.ip_row * cellSize + cellSize / 2;
+
+  if (followMode === 'center') {
+    const targetX = ipPixelX - canvas.width / 2;
+    const targetY = ipPixelY - canvas.height / 2;
+    if (smooth && (Math.abs(targetX - vpX) > 1 || Math.abs(targetY - vpY) > 1)) {
+      startAnim(targetX, targetY, 150);
+    } else {
+      vpX = targetX;
+      vpY = targetY;
+    }
+  } else if (followMode === 'edge') {
+    const margin = 0.2;
+    const lx = vpX + canvas.width * margin;
+    const rx = vpX + canvas.width * (1 - margin);
+    const ty = vpY + canvas.height * margin;
+    const by = vpY + canvas.height * (1 - margin);
+    let targetX = vpX, targetY = vpY;
+    if (ipPixelX < lx || ipPixelX > rx) targetX = ipPixelX - canvas.width / 2;
+    if (ipPixelY < ty || ipPixelY > by) targetY = ipPixelY - canvas.height / 2;
+    if (targetX !== vpX || targetY !== vpY) {
+      if (smooth) startAnim(targetX, targetY, 150);
+      else { vpX = targetX; vpY = targetY; }
+    }
+  }
+}
+
+function startAnim(tx, ty, duration) {
+  animTarget = { x: tx, y: ty, startX: vpX, startY: vpY, startTime: performance.now(), duration };
+  requestAnimationFrame(animFrame);
+}
+
+function animFrame(now) {
+  if (!animTarget) return;
+  const t = Math.min(1, (now - animTarget.startTime) / animTarget.duration);
+  const ease = 1 - Math.pow(1 - t, 3);
+  vpX = animTarget.startX + (animTarget.x - animTarget.startX) * ease;
+  vpY = animTarget.startY + (animTarget.y - animTarget.startY) * ease;
+  render();
+  if (t < 1) requestAnimationFrame(animFrame);
+  else animTarget = null;
+}
+
+// ── Rendering ──────────────────────────────────────────────────
+function render() {
+  if (!state) return;
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = COLORS.gridBg;
+  ctx.fillRect(0, 0, w, h);
+
+  const rows = state.rows, cols = state.cols;
+  const cs = cellSize;
+
+  // Visible cell range
+  const c0 = Math.max(0, Math.floor(vpX / cs));
+  const c1 = Math.min(cols - 1, Math.floor((vpX + w) / cs));
+  const r0 = Math.max(0, Math.floor(vpY / cs));
+  const r1 = Math.min(rows - 1, Math.floor((vpY + h) / cs));
+
+  // Head positions as (row, col)
+  const ipR = state.ip_row, ipC = state.ip_col;
+  const clR = Math.floor(state.cl / cols), clC = state.cl % cols;
+  const h0R = Math.floor(state.h0 / cols), h0C = state.h0 % cols;
+  const h1R = Math.floor(state.h1 / cols), h1C = state.h1 % cols;
+  const gpR = Math.floor(state.gp / cols), gpC = state.gp % cols;
+
+  // Draw region annotations (behind cells)
+  for (const reg of annotations.regions) {
+    const rx = reg.c1 * cs - vpX;
+    const ry = reg.r1 * cs - vpY;
+    const rw = (reg.c2 - reg.c1 + 1) * cs;
+    const rh = (reg.r2 - reg.r1 + 1) * cs;
+    ctx.fillStyle = reg.color || COLORS.regionFill;
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeStyle = COLORS.regionStroke;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(rx + 0.5, ry + 0.5, rw - 1, rh - 1);
+    if (cs >= 8 && reg.label) {
+      ctx.fillStyle = COLORS.regionStroke;
+      ctx.font = `${Math.min(11, cs * 0.5)}px monospace`;
+      ctx.fillText(reg.label, rx + 3, ry + Math.min(12, cs * 0.6));
+    }
+  }
+
+  // Draw cells
+  const showText = cs >= 14;
+  const fontSize = Math.max(8, Math.min(16, cs * 0.55));
+  if (showText) {
+    ctx.font = `${fontSize}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+  }
+
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const px = c * cs - vpX;
+      const py = r * cs - vpY;
+      const flat = r * cols + c;
+      const val = state.grid[flat];
+
+      // Cell background
+      const isIP = (r === ipR && c === ipC);
+      const isCL = (r === clR && c === clC);
+      const isH0 = (r === h0R && c === h0C);
+      const isH1 = (r === h1R && c === h1C);
+      const isGP = (r === gpR && c === gpC);
+
+      if (isIP) ctx.fillStyle = COLORS.ipBg;
+      else if (isCL) ctx.fillStyle = COLORS.clBg;
+      else if (isH0) ctx.fillStyle = COLORS.h0Bg;
+      else if (isH1) ctx.fillStyle = COLORS.h1Bg;
+      else if (isGP) ctx.fillStyle = COLORS.gpBg;
+      else ctx.fillStyle = val === 0 ? COLORS.zeroBg : COLORS.cellBg;
+
+      ctx.fillRect(px, py, cs, cs);
+
+      // Grid lines
+      ctx.strokeStyle = COLORS.gridLine;
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(px + 0.5, py + 0.5, cs - 1, cs - 1);
+
+      // Secondary pointer borders
+      if (!isIP) {
+        if (isCL) { ctx.strokeStyle = COLORS.cl; ctx.lineWidth = 2; ctx.strokeRect(px+1, py+1, cs-2, cs-2); }
+        if (isH0) { ctx.strokeStyle = COLORS.h0; ctx.lineWidth = 2; ctx.strokeRect(px+1, py+1, cs-2, cs-2); }
+        if (isH1) { ctx.strokeStyle = COLORS.h1; ctx.lineWidth = 1.5; ctx.strokeRect(px+2, py+2, cs-4, cs-4); }
+        if (isGP) { ctx.strokeStyle = COLORS.gp; ctx.lineWidth = 1; ctx.strokeRect(px+3, py+3, cs-6, cs-6); }
+      }
+
+      // Annotation dot
+      const annKey = `${r},${c}`;
+      if (annotations.cells[annKey]) {
+        ctx.fillStyle = COLORS.annDot;
+        ctx.beginPath();
+        ctx.arc(px + cs - 4, py + 4, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Cell text
+      if (showText) {
+        if (isIP) {
+          ctx.fillStyle = '#fff';
+          ctx.fillText(DIR_ARROWS[state.ip_dir], px + cs/2, py + cs/2);
+        } else {
+          const ch = cellChar(val);
+          ctx.fillStyle = val === 0 ? COLORS.dimText : COLORS.text;
+          ctx.fillText(ch, px + cs/2, py + cs/2);
+        }
+      } else if (cs >= 6) {
+        // Tiny mode: just show pointer dots
+        if (isIP) {
+          ctx.fillStyle = COLORS.ip;
+          ctx.beginPath();
+          ctx.arc(px + cs/2, py + cs/2, cs * 0.3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  // Region selection overlay
+  if (regionSelecting && regionStart && regionEnd) {
+    const sr = Math.min(regionStart.r, regionEnd.r);
+    const sc = Math.min(regionStart.c, regionEnd.c);
+    const er = Math.max(regionStart.r, regionEnd.r);
+    const ec = Math.max(regionStart.c, regionEnd.c);
+    const rx = sc * cs - vpX;
+    const ry = sr * cs - vpY;
+    const rw = (ec - sc + 1) * cs;
+    const rh = (er - sr + 1) * cs;
+    ctx.fillStyle = 'rgba(68,136,255,0.2)';
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeStyle = '#4488ff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(rx, ry, rw, rh);
+    ctx.setLineDash([]);
+  }
+
+  // Row/col rulers
+  drawRulers(r0, r1, c0, c1);
+}
+
+function drawRulers(r0, r1, c0, c1) {
+  if (!state || cellSize < 10) return;
+  const cs = cellSize;
+  ctx.font = `${Math.min(10, cs * 0.4)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = '#555';
+
+  // Column numbers along top
+  for (let c = c0; c <= c1; c++) {
+    if (c % Math.max(1, Math.floor(30 / cs)) !== 0 && cs < 20) continue;
+    const px = c * cs - vpX + cs / 2;
+    ctx.fillText(c, px, 2);
+  }
+
+  // Row numbers along left
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let r = r0; r <= r1; r++) {
+    const py = r * cs - vpY + cs / 2;
+    ctx.fillText(r, 2, py);
+  }
+}
+
+function cellChar(val) {
+  if (val in OPCODE_CHARS) return OPCODE_CHARS[val];
+  return val.toString(16).padStart(2, '0');
+}
+
+// ── Mouse interaction ──────────────────────────────────────────
+function canvasToGrid(mx, my) {
+  const r = Math.floor((vpY + my) / cellSize);
+  const c = Math.floor((vpX + mx) / cellSize);
+  if (!state || r < 0 || r >= state.rows || c < 0 || c >= state.cols) return null;
+  return { r, c };
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 0) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    if (e.shiftKey || document.getElementById('regionMode').checked) {
+      // Region select mode
+      const cell = canvasToGrid(mx, my);
+      if (cell) {
+        regionSelecting = true;
+        regionStart = cell;
+        regionEnd = cell;
+        render();
+      }
+      return;
+    }
+    // Pan
+    dragging = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragVpX = vpX;
+    dragVpY = vpY;
+    wrap.classList.add('dragging');
+  }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+
+  if (dragging) {
+    vpX = dragVpX - (e.clientX - dragStartX);
+    vpY = dragVpY - (e.clientY - dragStartY);
+    render();
+    return;
+  }
+
+  if (regionSelecting) {
+    const cell = canvasToGrid(mx, my);
+    if (cell) {
+      regionEnd = cell;
+      render();
+    }
+    return;
+  }
+
+  // Hover tooltip
+  const cell = canvasToGrid(mx, my);
+  const tooltip = document.getElementById('tooltip');
+  if (cell && state) {
+    const flat = cell.r * state.cols + cell.c;
+    const val = state.grid[flat];
+    const ch = cellChar(val);
+    const name = OPCODE_NAMES[val] || (val === 0 ? 'NOP' : `NOP (0x${val.toString(16)})`);
+    let text = `(${cell.r},${cell.c}) ${ch} = ${val} ${name}`;
+    const annKey = `${cell.r},${cell.c}`;
+    if (annotations.cells[annKey]) {
+      text += `\n\uD83D\uDCDD ${annotations.cells[annKey]}`;
+    }
+    tooltip.textContent = text;
+    tooltip.style.left = (mx + 16) + 'px';
+    tooltip.style.top = (my + 16) + 'px';
+    tooltip.style.display = 'block';
+    document.getElementById('cellInfo').textContent =
+      `(${cell.r},${cell.c}) ${ch}=${val} ${name}`;
+  } else {
+    tooltip.style.display = 'none';
+    document.getElementById('cellInfo').textContent = '';
+  }
+});
+
+canvas.addEventListener('mouseup', (e) => {
+  if (dragging) {
+    dragging = false;
+    wrap.classList.remove('dragging');
+  }
+  if (regionSelecting) {
+    regionSelecting = false;
+    if (regionStart && regionEnd) {
+      const sr = Math.min(regionStart.r, regionEnd.r);
+      const sc = Math.min(regionStart.c, regionEnd.c);
+      const er = Math.max(regionStart.r, regionEnd.r);
+      const ec = Math.max(regionStart.c, regionEnd.c);
+      if (sr !== er || sc !== ec) {
+        showRegionPopup(sr, sc, er, ec, e.clientX, e.clientY);
+      }
+    }
+    regionStart = null;
+    regionEnd = null;
+    render();
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  document.getElementById('tooltip').style.display = 'none';
+  if (dragging) { dragging = false; wrap.classList.remove('dragging'); }
+});
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  zoomAt(mx, my, factor);
+}, { passive: false });
+
+// Right-click for cell annotation
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const cell = canvasToGrid(mx, my);
+  if (cell) showAnnPopup(cell.r, cell.c, e.clientX, e.clientY);
+});
+
+// ── Annotation popup ───────────────────────────────────────────
+let annCell = null;
+
+function showAnnPopup(r, c, px, py) {
+  annCell = { r, c };
+  const popup = document.getElementById('annPopup');
+  const input = document.getElementById('annInput');
+  const key = `${r},${c}`;
+  input.value = annotations.cells[key] || '';
+  // Position relative to canvasWrap
+  const wrapRect = wrap.getBoundingClientRect();
+  popup.style.left = (px - wrapRect.left + 8) + 'px';
+  popup.style.top = (py - wrapRect.top + 8) + 'px';
+  popup.style.display = 'block';
+  input.focus();
+}
+
+document.getElementById('annSave').addEventListener('click', () => {
+  if (!annCell) return;
+  const val = document.getElementById('annInput').value.trim();
+  const key = `${annCell.r},${annCell.c}`;
+  if (val) annotations.cells[key] = val;
+  else delete annotations.cells[key];
+  saveAnnotations();
+  closeAnnPopup();
+  render();
+});
+
+document.getElementById('annDelete').addEventListener('click', () => {
+  if (!annCell) return;
+  const key = `${annCell.r},${annCell.c}`;
+  delete annotations.cells[key];
+  saveAnnotations();
+  closeAnnPopup();
+  render();
+});
+
+document.getElementById('annCancel').addEventListener('click', closeAnnPopup);
+
+document.getElementById('annInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('annSave').click();
+  if (e.key === 'Escape') closeAnnPopup();
+  e.stopPropagation();
+});
+
+function closeAnnPopup() {
+  document.getElementById('annPopup').style.display = 'none';
+  annCell = null;
+}
+
+// ── Region label popup ─────────────────────────────────────────
+let pendingRegion = null;
+
+function showRegionPopup(r1, c1, r2, c2, px, py) {
+  pendingRegion = { r1, c1, r2, c2 };
+  const popup = document.getElementById('regionPopup');
+  const input = document.getElementById('regionInput');
+  input.value = '';
+  const wrapRect = wrap.getBoundingClientRect();
+  popup.style.left = (px - wrapRect.left + 8) + 'px';
+  popup.style.top = (py - wrapRect.top + 8) + 'px';
+  popup.style.display = 'block';
+  input.focus();
+}
+
+document.getElementById('regionSave').addEventListener('click', () => {
+  if (!pendingRegion) return;
+  const label = document.getElementById('regionInput').value.trim();
+  if (label) {
+    annotations.regions.push({
+      ...pendingRegion, label, color: COLORS.regionFill
+    });
+    saveAnnotations();
+  }
+  closeRegionPopup();
+  render();
+});
+
+document.getElementById('regionCancel').addEventListener('click', closeRegionPopup);
+
+document.getElementById('regionInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('regionSave').click();
+  if (e.key === 'Escape') closeRegionPopup();
+  e.stopPropagation();
+});
+
+function closeRegionPopup() {
+  document.getElementById('regionPopup').style.display = 'none';
+  pendingRegion = null;
+}
+
+// ── Playback ───────────────────────────────────────────────────
+function togglePlay() {
+  playing = !playing;
+  const btn = document.getElementById('btnPlay');
+  if (playing) {
+    btn.textContent = '\u25A0 Stop';
+    btn.classList.add('active');
+    playTick();
+  } else {
+    btn.textContent = '\u25B6 Play';
+    btn.classList.remove('active');
+    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+  }
+}
+
+async function playTick() {
+  if (!playing) return;
+  await stepForward(1);
+  if (playing) playTimer = setTimeout(playTick, playDelay);
+}
+
+function updateSpeed() {
+  const slider = document.getElementById('speedSlider');
+  // Map 1..100 to 500ms..10ms (exponential)
+  const v = parseInt(slider.value);
+  playDelay = Math.round(500 * Math.pow(10 / 500, v / 100));
+  document.getElementById('speedLabel').textContent = playDelay + 'ms';
+}
+
+// ── Button handlers ────────────────────────────────────────────
+document.getElementById('fileSelect').addEventListener('change', (e) => {
+  if (e.target.value) {
+    if (playing) togglePlay();
+    loadFile(e.target.value);
+  }
+});
+
+document.getElementById('btnForward').addEventListener('click', () => stepForward(1));
+document.getElementById('btnBack').addEventListener('click', () => stepBack(1));
+document.getElementById('btnForwardFast').addEventListener('click', () => stepForward(10));
+document.getElementById('btnBackFast').addEventListener('click', () => stepBack(10));
+document.getElementById('btnPlay').addEventListener('click', togglePlay);
+document.getElementById('speedSlider').addEventListener('input', updateSpeed);
+
+document.getElementById('btnZoomIn').addEventListener('click', () => zoomAt(canvas.width/2, canvas.height/2, 1.3));
+document.getElementById('btnZoomOut').addEventListener('click', () => zoomAt(canvas.width/2, canvas.height/2, 1/1.3));
+document.getElementById('btnZoomFit').addEventListener('click', zoomFit);
+
+document.getElementById('btnHelp').addEventListener('click', () => {
+  document.getElementById('helpOverlay').classList.toggle('visible');
+});
+
+document.querySelectorAll('input[name=follow]').forEach(r => {
+  r.addEventListener('change', () => { followMode = r.value; });
+});
+
+// ── Keyboard shortcuts ─────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  // Don't capture when typing in inputs
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+  if (e.key === 'ArrowRight' && e.shiftKey) { stepForward(10); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft' && e.shiftKey) { stepBack(10); e.preventDefault(); }
+  else if (e.key === 'ArrowRight') { stepForward(1); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft') { stepBack(1); e.preventDefault(); }
+  else if (e.key === ' ') { togglePlay(); e.preventDefault(); }
+  else if (e.key === 'f' || e.key === 'F') { zoomFit(); }
+  else if (e.key === '=' || e.key === '+') { zoomAt(canvas.width/2, canvas.height/2, 1.3); }
+  else if (e.key === '-') { zoomAt(canvas.width/2, canvas.height/2, 1/1.3); }
+  else if (e.key === '?') { document.getElementById('helpOverlay').classList.toggle('visible'); }
+  else if (e.key === 'Escape') {
+    document.getElementById('helpOverlay').classList.remove('visible');
+    closeAnnPopup();
+    closeRegionPopup();
+  }
+});
+
+// ── Init ───────────────────────────────────────────────────────
+window.addEventListener('resize', resizeCanvas);
+
+async function init() {
+  resizeCanvas();
+  updateSpeed();
+  await loadFileList();
+  await refreshState();
+  zoomFit();
+}
+
+init();
+</script>
+</body>
+</html>
