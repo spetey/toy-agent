@@ -2,8 +2,9 @@
 """
 F***brain 2D Grid Simulator v1
 Authored or modified by Claude
-Version: 2026-02-17 v1.6 — bit-level ops (x=XOR, r/l rotate, f bit-Fredkin, z bit-GP-swap)
-                            x→X rename for byte swap; load/save defaults to ./programs
+Version: 2026-02-21 v1.8 — [CL]++ and [CL]-- opcodes (: and ;)
+                            v1.7: R/L rotate-by-[CL], Y fused rotate-XOR
+                            v1.6: bit-level ops (x=XOR, r/l rotate, f bit-Fredkin, z bit-GP-swap)
 
 A 2D reversible programming model where the instruction pointer moves
 on a toroidal grid and bounces off mirrors for control flow.
@@ -97,6 +98,11 @@ OPCODES = {
     'l':  41,  # [H0] rotate left 1 bit   (bit7→bit0, inverse: r)
     'f':  42,  # if [CL]&1: swap([H0], [H1])  (bit-0 Fredkin, self-inverse)
     'z':  43,  # swap(bit0 of [H0], bit0 of [GP])  (bit-level GP swap, self-inverse)
+    'R':  44,  # [H0] rotate right by ([CL] & 7) bits  (inverse: L)
+    'L':  45,  # [H0] rotate left  by ([CL] & 7) bits  (inverse: R)
+    'Y':  46,  # [H0] ^= ror([H1], [CL] & 7)  (fused rotate-XOR, self-inverse)
+    ':':  47,  # [CL]++  (inverse: ;)
+    ';':  48,  # [CL]--  (inverse: :)
 }
 
 OPCODE_TO_CHAR = {v: k for k, v in OPCODES.items()}
@@ -328,7 +334,31 @@ class FB2DSimulator:
             self.grid[self.h0] = (a & 0xFE) | b_bit
             self.grid[self.gp] = (b & 0xFE) | a_bit
 
-        # else: NOP (0 or 44–255)
+        elif opcode == 44:   # R  [H0] rotate right by ([CL] & 7) bits
+            n = self.grid[self.cl] & 7
+            if n:
+                v = self.grid[self.h0]
+                self.grid[self.h0] = ((v >> n) | (v << (8 - n))) & 0xFF
+
+        elif opcode == 45:   # L  [H0] rotate left by ([CL] & 7) bits
+            n = self.grid[self.cl] & 7
+            if n:
+                v = self.grid[self.h0]
+                self.grid[self.h0] = ((v << n) & 0xFF | (v >> (8 - n))) & 0xFF
+
+        elif opcode == 46:   # Y  [H0] ^= ror([H1], [CL] & 7)  (self-inverse)
+            n = self.grid[self.cl] & 7
+            v = self.grid[self.h1]
+            rotated = ((v >> n) | (v << (8 - n))) & 0xFF if n else v
+            self.grid[self.h0] = self.grid[self.h0] ^ rotated
+
+        elif opcode == 47:   # :  [CL]++
+            self.grid[self.cl] = (self.grid[self.cl] + 1) & 0xFF
+
+        elif opcode == 48:   # ;  [CL]--
+            self.grid[self.cl] = (self.grid[self.cl] - 1) & 0xFF
+
+        # else: NOP (0 or 49–255)
 
         # ── Trace output ──
         if self.trace:
@@ -467,6 +497,30 @@ class FB2DSimulator:
             self.grid[self.h0] = (a & 0xFE) | b_bit
             self.grid[self.gp] = (b & 0xFE) | a_bit
 
+        elif opcode == 44:   # R was rotate-right-by-CL, undo with rotate-left-by-CL
+            n = self.grid[self.cl] & 7
+            if n:
+                v = self.grid[self.h0]
+                self.grid[self.h0] = ((v << n) & 0xFF | (v >> (8 - n))) & 0xFF
+
+        elif opcode == 45:   # L was rotate-left-by-CL, undo with rotate-right-by-CL
+            n = self.grid[self.cl] & 7
+            if n:
+                v = self.grid[self.h0]
+                self.grid[self.h0] = ((v >> n) | (v << (8 - n))) & 0xFF
+
+        elif opcode == 46:   # Y is self-inverse (XOR twice cancels)
+            n = self.grid[self.cl] & 7
+            v = self.grid[self.h1]
+            rotated = ((v >> n) | (v << (8 - n))) & 0xFF if n else v
+            self.grid[self.h0] = self.grid[self.h0] ^ rotated
+
+        elif opcode == 47:   # : was [CL]++, undo --
+            self.grid[self.cl] = (self.grid[self.cl] - 1) & 0xFF
+
+        elif opcode == 48:   # ; was [CL]--, undo ++
+            self.grid[self.cl] = (self.grid[self.cl] + 1) & 0xFF
+
         # Mirrors (incl 34–37) and NOP: no data effect to undo (direction handled above)
 
         # ── Trace output ──
@@ -518,6 +572,101 @@ class FB2DSimulator:
                 else:
                     c += 1
         return count
+
+    def wrap_code(self, opcodes, width, start_row=0, start_col=0):
+        """Wrap a linear opcode sequence into a boustrophedon (serpentine) layout.
+
+        The IP enters at (start_row, start_col) going East and snakes through
+        rows using mirrors at the edges:
+
+          Row 0:  [opcodes →→→]  \\     (W-1 opcode slots, then \\ at col W-1)
+          Row 1:  /  [←←← opcodes]     (/ at col W-1 reflects S→W, opcodes W→,
+                                         / at col 0 reflects W→S)
+          Row 2:  \\  [opcodes →→→]  \\ (\\ at col 0 reflects S→E, ... repeat)
+          ...
+
+        First row: cols start_col..W-2 = W-1-start_col opcode slots.
+        Even rows (after first): cols 1..W-2 = W-2 opcode slots.
+        Odd rows (going West):   cols W-2..1 = W-2 opcode slots.
+
+        Args:
+            opcodes: list of opcode values (ints) to place
+            width:   total grid width (must be >= 4)
+            start_row: first row for code (default 0)
+            start_col: first col for code on first row (default 0)
+
+        Returns: (rows_used, end_row, end_col, end_dir)
+            rows_used: number of rows consumed by the wrapped code
+            end_row/col/dir: where the IP exits after the last opcode
+        """
+        assert width >= 4, "Need at least 4 columns for wrapping"
+        assert start_col < width - 1, "start_col must leave room for mirrors"
+
+        ops = list(opcodes)
+        total = len(ops)
+        if total == 0:
+            return 0, start_row, start_col, DIR_E
+
+        placed = 0
+        row = start_row
+
+        # First row: going East, cols start_col to width-2
+        first_row_slots = width - 1 - start_col
+        n = min(first_row_slots, total - placed)
+        for i in range(n):
+            self.grid[self._to_flat(row, start_col + i)] = ops[placed]
+            placed += 1
+
+        if placed >= total:
+            # All fit on first row, no mirrors needed
+            return 1, row, start_col + n - 1, DIR_E
+
+        # Need to wrap: place \ at col width-1 to reflect E→S
+        self.grid[self._to_flat(row, width - 1)] = OPCODES['\\']
+
+        row_count = 1
+
+        while placed < total:
+            row += 1
+            row_count += 1
+
+            if row_count % 2 == 0:
+                # Odd-indexed row (0-indexed): going West
+                # / at col width-1 to reflect S→W
+                self.grid[self._to_flat(row, width - 1)] = OPCODES['/']
+
+                # Opcodes from col width-2 down to col 1
+                slots = width - 2
+                n = min(slots, total - placed)
+                for i in range(n):
+                    self.grid[self._to_flat(row, width - 2 - i)] = ops[placed]
+                    placed += 1
+
+                if placed >= total:
+                    return row_count, row, width - 2 - (n - 1), DIR_W
+
+                # / at col 0 to reflect W→S
+                self.grid[self._to_flat(row, 0)] = OPCODES['/']
+
+            else:
+                # Even-indexed row: going East
+                # \ at col 0 to reflect S→E
+                self.grid[self._to_flat(row, 0)] = OPCODES['\\']
+
+                # Opcodes from col 1 to col width-2
+                slots = width - 2
+                n = min(slots, total - placed)
+                for i in range(n):
+                    self.grid[self._to_flat(row, 1 + i)] = ops[placed]
+                    placed += 1
+
+                if placed >= total:
+                    return row_count, row, 1 + (n - 1), DIR_E
+
+                # \ at col width-1 to reflect E→S
+                self.grid[self._to_flat(row, width - 1)] = OPCODES['\\']
+
+        return row_count, row, 0, DIR_E  # shouldn't reach here
 
     # ── Display ────────────────────────────────────────────────────
 

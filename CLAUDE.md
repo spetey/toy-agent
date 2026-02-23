@@ -60,7 +60,7 @@ fb2d is a 2D reversible esoteric language where:
 - **`old-files/2d-older/`** — Earlier 2D simulator iterations.
 - **`old-files/ifbc-02.py`** — Previous compiler version.
 
-## ISA Summary (v1.6, 43 opcodes + NOP)
+## ISA Summary (v1.8, 48 opcodes + NOP)
 
 ### Mirrors
 | Op | Code | Meaning |
@@ -94,7 +94,7 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `G` | 21 | swap(H1_register, [H0]) — indirect H1 |
 | `T` | 22 | swap([CL], [H0]) — bridge |
 
-### Bit-Level Data (v1.6)
+### Bit-Level Data (v1.6 + v1.7)
 | Op | Code | Meaning |
 |----|------|---------|
 | `x` | 39 | [H0] ^= [H1] — XOR, self-inverse |
@@ -102,6 +102,11 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `l` | 41 | [H0] rotate left 1 bit — inverse: `r` |
 | `f` | 42 | if [CL]&1: swap([H0], [H1]) — bit-0 Fredkin |
 | `z` | 43 | swap(bit0 of [H0], bit0 of [GP]) |
+| `R` | 44 | [H0] rotate right by ([CL]&7) bits — inverse: `L` |
+| `L` | 45 | [H0] rotate left by ([CL]&7) bits — inverse: `R` |
+| `Y` | 46 | [H0] ^= ror([H1], [CL]&7) — fused rotate-XOR, self-inverse |
+| `:` | 47 | [CL]++ — inverse: `;` |
+| `;` | 48 | [CL]-- — inverse: `:` |
 
 ### GP (Garbage Pointer) Ops
 | Op | Code | Meaning |
@@ -119,8 +124,10 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 - `+` / `-` are inverses
 - `.` / `,` are inverses
 - `r` / `l` are inverses
+- `R` / `L` are inverses
+- `:` / `;` are inverses
 - `N`/`S`, `E`/`W`, etc. are inverses (all head movement pairs)
-- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z` are self-inverse
+- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y` are self-inverse
 
 ## ifb Language (intermediate fuckbrain)
 
