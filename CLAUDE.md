@@ -171,6 +171,14 @@ output x            // write to GP trail, zero var
    single-code-row layout with corridor rows for each nesting level.
    Works for moderate depths but corridor space can be tight.
 
+5. **Torus periodicity**: fb2d on a torus is always periodic — there is
+   no halting condition. Loops must be designed so that re-sweeping
+   already-corrected data is harmless. The Hamming gadget is a no-op on
+   correct codewords (syndrome=0, no correction applied), but the dirty
+   GP trail (PA, SYND cells) from previous passes must not pollute future
+   passes' scratch space. This is the central design constraint for the
+   self-correcting sweep architecture.
+
 ## Running Tests
 
 ```bash
