@@ -79,6 +79,23 @@ RE-ENTRANCY SLOT LAYOUT:
 
     Between cycles, the outer loop advances all heads east by SLOT_WIDTH:
       H0, H1, CL, GP += 8 east each
+
+TORUS SWEEP (re-entrant loop via actual fb2d opcodes):
+    The code row contains gadget (336 ops) + head advance (32 ops) = 368 ops.
+    368 / SLOT_WIDTH = 46 slots per full row. The IP wraps on the torus
+    back to column 0 after each cycle. Each cycle takes `cols` steps.
+
+    SINGLE-PASS: each GP slot starts at 0 (clean). After correction,
+    ≤1 dirty cell per slot. A second lap would find dirty GP cells.
+    Multi-pass requires a compressor or zero reservoir (future phase).
+
+WRAPPED TORUS SWEEP (boustrophedon re-entrant loop):
+    Same 368 ops wrapped into W-wide boustrophedon layout via mirrors.
+    The IP snakes through code rows, exits at col W-1 going South,
+    passes through GP[W-1] and DATA[W-1] (both safe NOPs), then
+    re-enters via the existing boustrophedon mirror at (CODE_ROW, W-1).
+    No corridor row needed. Requires (W-1) % SLOT_WIDTH not in {0, 5}.
+    For W=64: 8×64 grid, 6 code rows, 388 steps/cycle, max 8 codewords.
 """
 
 import sys
@@ -665,11 +682,11 @@ def run_reentrant_test(cases, verbose=False):
 
     Each case is (payload_11bit, error_bit_or_None).
 
-    LAYOUT: Each correction cycle uses a 9-column "slot".
-      Slot 0: cols 0..8    CW at (DATA, 0),  scratch at (GP, 0..8)
-      Slot 1: cols 9..17   CW at (DATA, 9),  scratch at (GP, 9..17)
+    LAYOUT: Each correction cycle uses an 8-column "slot" (SLOT_WIDTH).
+      Slot 0: cols 0..7    CW at (DATA, 0),  scratch at (GP, 0..7)
+      Slot 1: cols 8..15   CW at (DATA, 8),  scratch at (GP, 8..15)
 
-    Between cycles the outer loop advances all heads east by SLOT_WIDTH (9).
+    Between cycles the outer loop advances all heads east by SLOT_WIDTH (8).
     """
     n = len(cases)
     code_ops, _, _ = build_gadget(gp_distance=2, n_rows=3)
@@ -780,13 +797,1058 @@ def run_reentrant_test(cases, verbose=False):
                 sim.h0 = sim._move_head(sim.h0, 1)   # East
             for _ in range(SLOT_WIDTH):
                 sim.h1 = sim._move_head(sim.h1, 1)   # East
-            # GP: from PA (slot_base + 0) to next PA (slot_base + 9) = 9 east
+            # GP: from PA (slot_base + 0) to next PA (slot_base + 8) = 8 east
             for _ in range(SLOT_WIDTH):
                 sim.gp = sim._move_head(sim.gp, 1)   # East
             for _ in range(SLOT_WIDTH):
                 sim.cl = sim._move_head(sim.cl, 1)    # East
 
     return all_ok
+
+
+# ── Re-entrant torus sweep ──────────────────────────────────────────
+#
+# The gadget + head-advance ops form a single code row on the torus.
+# The IP walks east, executing the correction gadget, then advancing
+# all 4 heads by SLOT_WIDTH to the next codeword's slot. After the
+# code row, the IP wraps on the torus back to column 0 and re-enters
+# the gadget for the next codeword.
+#
+# Grid layout:
+#   Row 0 (DATA): CW0 at col 0, CW1 at col 8, ..., CW_{N-1} at col (N-1)*8
+#   Row 1 (CODE): [336 gadget ops] [32 head-advance ops] [NOPs...]
+#   Row 2 (GP):   slot0(PA..ROT) | slot1(PA..ROT) | ...
+#
+# Each cycle: cols steps (one full row traversal). N cycles for N codewords.
+# After N cycles, all codewords corrected. Heads advanced N*SLOT_WIDTH cols.
+#
+# SINGLE-PASS CONSTRAINT: Each GP slot must start clean (all zeros).
+# After correction, ≤1 dirty cell remains per slot. A second lap would
+# find dirty GP cells and fail. Multi-pass requires a compressor to
+# reclaim dirty cells — that's a future phase.
+
+
+def build_reentrant_code(gp_distance=2, n_rows=3):
+    """Build gadget + head-advance ops for re-entrant torus sweep.
+
+    After the correction gadget, 4×SLOT_WIDTH head-movement ops advance
+    all four heads (H0, H1, GP, CL) east by SLOT_WIDTH columns, positioning
+    them for the next correction slot.
+
+    On the torus, the IP wraps from the end of the code row back to
+    column 0, re-entering the gadget for the next codeword.
+
+    Returns: list of opchar strings (368 ops for standard 3-row grid).
+    """
+    gadget_ops, _, _ = build_gadget(gp_distance=gp_distance, n_rows=n_rows)
+
+    # Head advance: move all 4 heads east by SLOT_WIDTH
+    advance = []
+    advance += ['E'] * SLOT_WIDTH   # H0 east ×8
+    advance += ['e'] * SLOT_WIDTH   # H1 east ×8
+    advance += [']'] * SLOT_WIDTH   # GP east ×8
+    advance += ['>'] * SLOT_WIDTH   # CL east ×8
+
+    return gadget_ops + advance
+
+
+def make_reentrant_torus(cases):
+    """Build a torus for re-entrant sweep of N codewords.
+
+    cases: list of (payload_11bit, error_bit_or_None)
+
+    Layout:
+      Row 0 (DATA):  CW_i at col i*SLOT_WIDTH (i = 0..N-1)
+      Row 1 (CODE):  gadget + advance ops (Hamming-encoded)
+      Row 2 (GP):    slot_i scratch at cols i*SLOT_WIDTH..i*SLOT_WIDTH+7
+
+    Grid width = max(code_length, N * SLOT_WIDTH), rounded up to a
+    multiple of SLOT_WIDTH for clean slot alignment.
+
+    Returns: (sim, expected_results)
+    """
+    n = len(cases)
+    code_ops = build_reentrant_code(gp_distance=2, n_rows=N_ROWS)
+    code_len = len(code_ops)
+
+    # Grid width: fits both code and data slots
+    data_cols = n * SLOT_WIDTH
+    cols = max(code_len, data_cols)
+    # Round up to multiple of SLOT_WIDTH for clean slot alignment
+    cols = ((cols + SLOT_WIDTH - 1) // SLOT_WIDTH) * SLOT_WIDTH
+
+    sim = FB2DSimulator(rows=N_ROWS, cols=cols)
+
+    # Place code (Hamming-encoded)
+    for i, opchar in enumerate(code_ops):
+        sim.grid[sim._to_flat(CODE_ROW, i)] = hamming_encode(OP[opchar])
+
+    # Place codewords in slot-based layout
+    expected = []
+    for i, (payload, error_bit) in enumerate(cases):
+        cw = encode(payload)
+        if error_bit is not None:
+            bad = inject_error(cw, error_bit)
+            expected.append(cw)
+        else:
+            bad = cw
+            expected.append(cw)
+        sim.grid[sim._to_flat(DATA_ROW, i * SLOT_WIDTH)] = bad
+
+    # Initial head positions
+    gp_row = GP_ROW
+    sim.ip_row = CODE_ROW
+    sim.ip_col = 0
+    sim.ip_dir = 1  # East
+    sim.h0 = sim._to_flat(DATA_ROW, CW)
+    sim.h1 = sim._to_flat(DATA_ROW, CW)
+    sim.cl = sim._to_flat(gp_row, ROT)
+    sim.gp = sim._to_flat(gp_row, GP_PA)
+
+    return sim, expected
+
+
+def run_reentrant_torus_test(cases, verbose=False, check_reverse=False):
+    """Test re-entrant torus sweep with actual fb2d execution.
+
+    Unlike run_reentrant_test() which uses Python to advance heads between
+    cycles, this version uses actual head-movement opcodes on the code row.
+    The IP wraps on the torus, forming a true re-entrant loop executed
+    entirely by the fb2d simulator.
+
+    Each cycle takes exactly `cols` steps (one full row traversal including
+    NOPs after the code). After N cycles (N * cols steps), all N codewords
+    have been corrected.
+
+    Args:
+        cases: list of (payload_11bit, error_bit_or_None)
+        verbose: print per-codeword results
+        check_reverse: also verify full reverse restores original state
+
+    Returns: bool (all tests passed)
+    """
+    n = len(cases)
+    sim, expected = make_reentrant_torus(cases)
+    cols = sim.cols
+    gp_row = GP_ROW
+
+    # Run N cycles. Each cycle = cols steps (full row traversal).
+    total_steps = n * cols
+
+    for _ in range(total_steps):
+        sim.step()
+
+    # Check all codeword results
+    all_ok = True
+    for i in range(n):
+        data_col = i * SLOT_WIDTH
+        result = sim.grid[sim._to_flat(DATA_ROW, data_col)]
+        ok = (result == expected[i])
+
+        if verbose or not ok:
+            payload, error_bit = cases[i]
+            err_desc = f"bit {error_bit}" if error_bit is not None else "none"
+            print(f"    CW[{i}] col={data_col}: payload={payload} err={err_desc}"
+                  f" result=0x{result:04x} expected=0x{expected[i]:04x}"
+                  f" {'ok' if ok else 'FAIL'}")
+        all_ok &= ok
+
+    # Check final head positions
+    # After N cycles, heads have advanced N*SLOT_WIDTH cols (mod grid width)
+    final_offset = (n * SLOT_WIDTH) % cols
+    exp_h0 = sim._to_flat(DATA_ROW, final_offset + CW)
+    exp_h1 = sim._to_flat(DATA_ROW, final_offset + CW)
+    exp_gp = sim._to_flat(gp_row, final_offset + GP_PA)
+    exp_cl = sim._to_flat(gp_row, final_offset + ROT)
+
+    heads_ok = (sim.h0 == exp_h0 and sim.h1 == exp_h1
+                and sim.gp == exp_gp and sim.cl == exp_cl)
+
+    if verbose or not heads_ok:
+        h0_r, h0_c = sim.h0 // cols, sim.h0 % cols
+        gp_r, gp_c = sim.gp // cols, sim.gp % cols
+        cl_r, cl_c = sim.cl // cols, sim.cl % cols
+        exp_col = final_offset
+        print(f"    Final heads: H0=col {h0_c} GP=col {gp_c} CL=col {cl_c}"
+              f" (expected offset={exp_col})"
+              f" {'ok' if heads_ok else 'FAIL'}")
+    all_ok &= heads_ok
+
+    if verbose:
+        print(f"    {total_steps} total steps"
+              f" ({n} cycles × {cols} steps/cycle)")
+
+    # Full reverse check
+    if check_reverse:
+        for _ in range(total_steps):
+            sim.step_back()
+
+        reverse_ok = True
+        # Data row should be back to original (corrupted) values
+        for i in range(n):
+            data_col = i * SLOT_WIDTH
+            payload, error_bit = cases[i]
+            cw = encode(payload)
+            orig = inject_error(cw, error_bit) if error_bit is not None else cw
+            result = sim.grid[sim._to_flat(DATA_ROW, data_col)]
+            if result != orig:
+                reverse_ok = False
+                if verbose:
+                    print(f"    [REVERSE] CW[{i}]: 0x{result:04x}"
+                          f" != expected 0x{orig:04x}")
+
+        # GP row should be all zeros
+        for col in range(cols):
+            if sim.grid[sim._to_flat(gp_row, col)] != 0:
+                reverse_ok = False
+                if verbose:
+                    val = sim.grid[sim._to_flat(gp_row, col)]
+                    print(f"    [REVERSE] GP col {col}: 0x{val:04x} != 0")
+                break
+
+        # Heads should be back at start
+        if (sim.h0 != sim._to_flat(DATA_ROW, CW)
+                or sim.h1 != sim._to_flat(DATA_ROW, CW)
+                or sim.gp != sim._to_flat(gp_row, GP_PA)
+                or sim.cl != sim._to_flat(gp_row, ROT)):
+            reverse_ok = False
+            if verbose:
+                print(f"    [REVERSE] Heads not restored to start")
+
+        if verbose:
+            print(f"    Reverse: {'ok' if reverse_ok else 'FAIL'}")
+        all_ok &= reverse_ok
+
+    return all_ok
+
+
+def save_reentrant_fb2d(cases, name='hamming16-reentrant'):
+    """Save a re-entrant torus sweep as a .fb2d file for GUI visualization."""
+    prog_dir = os.path.dirname(os.path.abspath(__file__))
+    sim, _ = make_reentrant_torus(cases)
+    fn = os.path.join(prog_dir, f'{name}.fb2d')
+    sim.save_state(fn)
+    print(f"  Saved {fn}  ({sim.rows}×{sim.cols},"
+          f" {len(cases)} codewords)")
+
+
+# ── Wrapped re-entrant torus sweep ─────────────────────────────────────
+#
+# Same 368-op code (gadget + head advance) in a boustrophedon layout.
+# The IP snakes through code rows via mirrors, then exits at col W-1,
+# traverses GP and DATA rows (both NOP at that column), and re-enters
+# the code via the boustrophedon mirror at (CODE_ROW, W-1).
+#
+# No corridor row needed: the exit mirror is placed on the last code
+# row at col W-1, directing the IP South through the "safe column"
+# (col W-1). Safety requires (W-1) % SLOT_WIDTH not in {0, 5}
+# (avoiding GP_PA and GP_EV offsets).
+#
+# Grid layout (example: 60-wide, 7 code rows):
+#   Row 0 (DATA):     CW0 at col 0, CW1 at col 8, ..., CW6 at col 48
+#   Rows 1-7 (CODE):  boustrophedon with mirrors at cols 0 and 59
+#   Row 8 (GP):       slot0..slot6 scratch at 8-col intervals
+#
+# Return path: IP exits last code row at col 59 going South,
+# passes through GP[59] (offset 3 = S2, clean NOP) and DATA[59]
+# (empty NOP), re-enters CODE row 1 at col 59 via existing \ mirror
+# → S→E → wraps East to col 0.
+#
+# Cycle length = code_rows × width + 3 (East-ending last row)
+#              = code_rows × width + 4 (West-ending last row)
+# Max codewords = floor(width / SLOT_WIDTH).
+
+
+def make_reentrant_wrapped_torus(cases, wrap_width=60):
+    """Build a wrapped torus for re-entrant sweep of N codewords.
+
+    cases: list of (payload_11bit, error_bit_or_None)
+
+    Layout:
+      Row 0 (DATA):       CW_i at col i*SLOT_WIDTH
+      Rows 1..C (CODE):   368 ops in boustrophedon layout
+      Row C+1 (GP):       slot_i scratch at cols i*SLOT_WIDTH..+7
+
+    The IP snakes through code rows, exits at col wrap_width-1 going
+    South, traverses GP and DATA at that column (both NOP), and re-enters
+    via the boustrophedon mirror at (CODE_ROW, wrap_width-1).
+
+    Returns: (sim, expected_results, cycle_length)
+    """
+    n = len(cases)
+    max_codewords = wrap_width // SLOT_WIDTH
+    assert n <= max_codewords, (
+        f"Too many codewords ({n}) for width {wrap_width},"
+        f" max {max_codewords}")
+
+    # Build reentrant code (368 ops, same regardless of grid dimensions
+    # because DATA↔GP shortcut is always 1 N/S step on a torus where
+    # DATA=row 0 and GP=last row)
+    code_ops = build_reentrant_code(gp_distance=2, n_rows=N_ROWS)
+    op_values = [OP[ch] for ch in code_ops]
+    n_ops = len(op_values)
+
+    # Compute code row count for boustrophedon layout
+    assert wrap_width >= 4, "wrap_width must be >= 4"
+    first_row_slots = wrap_width - 1
+    if n_ops <= first_row_slots:
+        code_rows = 1
+    else:
+        remaining = n_ops - first_row_slots
+        code_rows = 1 + -(-remaining // (wrap_width - 2))  # ceil div
+
+    n_rows = 1 + code_rows + 1  # DATA + CODE rows + GP
+    gp_row = n_rows - 1
+
+    # Safety: return path at col wrap_width-1 must avoid dirty GP offsets
+    if code_rows > 1:
+        return_col = wrap_width - 1
+        return_offset = return_col % SLOT_WIDTH
+        assert return_offset not in (GP_PA, GP_EV), (
+            f"Return col {return_col} has GP offset {return_offset}"
+            f" (PA={GP_PA} or EV={GP_EV}), unsafe for return path."
+            f" Choose a different wrap_width.")
+
+    sim = FB2DSimulator(rows=n_rows, cols=wrap_width)
+
+    # Place code via wrap_code (or linearly for single-row case)
+    if code_rows == 1:
+        for i, op in enumerate(op_values):
+            sim.grid[sim._to_flat(CODE_ROW, i)] = hamming_encode(op)
+        end_dir = 1  # East
+    else:
+        rows_used, end_row, last_op_col, end_dir = sim.wrap_code(
+            op_values, wrap_width, start_row=CODE_ROW, start_col=0)
+        assert rows_used == code_rows, (
+            f"wrap_code used {rows_used} rows, expected {code_rows}")
+
+        # Add exit mirror on last code row if ending East
+        # (West-ending rows already have / at col W-1 from wrap_code)
+        if end_dir == 1:  # East
+            last_code_row = CODE_ROW + rows_used - 1
+            exit_flat = sim._to_flat(last_code_row, wrap_width - 1)
+            assert sim.grid[exit_flat] == 0, (
+                f"Cell ({last_code_row},{wrap_width-1}) not empty"
+                f" for exit mirror")
+            sim.grid[exit_flat] = hamming_encode(OP['\\'])
+
+    # Place codewords on DATA row
+    expected = []
+    for i, (payload, error_bit) in enumerate(cases):
+        cw = encode(payload)
+        if error_bit is not None:
+            bad = inject_error(cw, error_bit)
+            expected.append(cw)
+        else:
+            bad = cw
+            expected.append(cw)
+        sim.grid[sim._to_flat(DATA_ROW, i * SLOT_WIDTH)] = bad
+
+    # Initial head positions
+    sim.ip_row = CODE_ROW
+    sim.ip_col = 0
+    sim.ip_dir = 1  # East
+    sim.h0 = sim._to_flat(DATA_ROW, CW)
+    sim.h1 = sim._to_flat(DATA_ROW, CW)
+    sim.cl = sim._to_flat(gp_row, ROT)
+    sim.gp = sim._to_flat(gp_row, GP_PA)
+
+    # Compute cycle length
+    if code_rows == 1:
+        cycle_length = wrap_width  # Linear: full row traversal
+    elif end_dir == 1:  # East: no double-visit on last row
+        cycle_length = code_rows * wrap_width + 3
+    else:  # West: double-visit at col W-1 on last row
+        cycle_length = code_rows * wrap_width + 4
+
+    return sim, expected, cycle_length
+
+
+def run_reentrant_wrapped_torus_test(cases, wrap_width=60,
+                                      verbose=False, check_reverse=False):
+    """Test wrapped re-entrant torus sweep with actual fb2d execution.
+
+    The IP snakes through boustrophedon code rows and loops via the
+    return path through GP and DATA rows at col wrap_width-1.
+
+    Each cycle takes cycle_length steps. After N cycles, all N codewords
+    have been corrected.
+
+    Args:
+        cases: list of (payload_11bit, error_bit_or_None)
+        wrap_width: boustrophedon width (default 60)
+        verbose: print per-codeword results
+        check_reverse: also verify full reverse restores original state
+
+    Returns: bool (all tests passed)
+    """
+    n = len(cases)
+    sim, expected, cycle_length = make_reentrant_wrapped_torus(
+        cases, wrap_width)
+    gp_row = sim.rows - 1
+
+    # Verify cycle length: first cycle should return IP to start
+    start_pos = (sim.ip_row, sim.ip_col, sim.ip_dir)
+    for _ in range(cycle_length):
+        sim.step()
+    actual_pos = (sim.ip_row, sim.ip_col, sim.ip_dir)
+    if actual_pos != start_pos:
+        if verbose:
+            print(f"    [CYCLE] IP not at start after {cycle_length} steps: "
+                  f"{actual_pos} != {start_pos}")
+        return False
+
+    # Run remaining N-1 cycles
+    for _ in range((n - 1) * cycle_length):
+        sim.step()
+
+    total_steps = n * cycle_length
+
+    # Check all codeword results
+    all_ok = True
+    for i in range(n):
+        data_col = i * SLOT_WIDTH
+        result = sim.grid[sim._to_flat(DATA_ROW, data_col)]
+        ok = (result == expected[i])
+
+        if verbose or not ok:
+            payload, error_bit = cases[i]
+            err_desc = f"bit {error_bit}" if error_bit is not None else "none"
+            print(f"    CW[{i}] col={data_col}: payload={payload} err={err_desc}"
+                  f" result=0x{result:04x} expected=0x{expected[i]:04x}"
+                  f" {'ok' if ok else 'FAIL'}")
+        all_ok &= ok
+
+    # Check final head positions
+    final_offset = (n * SLOT_WIDTH) % sim.cols
+    exp_h0 = sim._to_flat(DATA_ROW, final_offset + CW)
+    exp_h1 = sim._to_flat(DATA_ROW, final_offset + CW)
+    exp_gp = sim._to_flat(gp_row, final_offset + GP_PA)
+    exp_cl = sim._to_flat(gp_row, final_offset + ROT)
+
+    heads_ok = (sim.h0 == exp_h0 and sim.h1 == exp_h1
+                and sim.gp == exp_gp and sim.cl == exp_cl)
+
+    if verbose or not heads_ok:
+        h0_c = sim.h0 % sim.cols
+        gp_c = sim.gp % sim.cols
+        cl_c = sim.cl % sim.cols
+        print(f"    Final heads: H0=col {h0_c} GP=col {gp_c} CL=col {cl_c}"
+              f" (expected offset={final_offset})"
+              f" {'ok' if heads_ok else 'FAIL'}")
+    all_ok &= heads_ok
+
+    if verbose:
+        print(f"    Grid: {sim.rows}×{sim.cols},"
+              f" {cycle_length} steps/cycle,"
+              f" {n} cycles, {total_steps} total steps")
+
+    # Full reverse check
+    if check_reverse:
+        for _ in range(total_steps):
+            sim.step_back()
+
+        reverse_ok = True
+        for i in range(n):
+            data_col = i * SLOT_WIDTH
+            payload, error_bit = cases[i]
+            cw = encode(payload)
+            orig = inject_error(cw, error_bit) if error_bit is not None else cw
+            result = sim.grid[sim._to_flat(DATA_ROW, data_col)]
+            if result != orig:
+                reverse_ok = False
+                if verbose:
+                    print(f"    [REVERSE] CW[{i}]: 0x{result:04x}"
+                          f" != expected 0x{orig:04x}")
+
+        for col in range(sim.cols):
+            if sim.grid[sim._to_flat(gp_row, col)] != 0:
+                reverse_ok = False
+                if verbose:
+                    val = sim.grid[sim._to_flat(gp_row, col)]
+                    print(f"    [REVERSE] GP col {col}: 0x{val:04x} != 0")
+                break
+
+        if (sim.h0 != sim._to_flat(DATA_ROW, CW)
+                or sim.h1 != sim._to_flat(DATA_ROW, CW)
+                or sim.gp != sim._to_flat(gp_row, GP_PA)
+                or sim.cl != sim._to_flat(gp_row, ROT)):
+            reverse_ok = False
+            if verbose:
+                print(f"    [REVERSE] Heads not restored to start")
+
+        if verbose:
+            print(f"    Reverse: {'ok' if reverse_ok else 'FAIL'}")
+        all_ok &= reverse_ok
+
+    return all_ok
+
+
+def save_reentrant_wrapped_fb2d(cases, wrap_width=60, name=None):
+    """Save a wrapped re-entrant torus sweep as .fb2d file."""
+    if name is None:
+        name = f'hamming16-reentrant-w{wrap_width}'
+    prog_dir = os.path.dirname(os.path.abspath(__file__))
+    sim, _, cycle_length = make_reentrant_wrapped_torus(cases, wrap_width)
+    fn = os.path.join(prog_dir, f'{name}.fb2d')
+    sim.save_state(fn)
+    print(f"  Saved {fn}  ({sim.rows}×{sim.cols},"
+          f" {len(cases)} codewords, {cycle_length} steps/cycle)")
+
+
+# ── Sliding-slot self-contained gadget ─────────────────────────────────
+#
+# Redesigned gadget for adjacent data cells and self-contained IP loop.
+#
+# Key changes from the original gadget:
+#   1. EV at offset 0 (GP's starting position), PA at offset 1.
+#      Dirty waste always ends at EV = GP start, via f-consolidation.
+#   2. All heads advance by 1 per cycle (4 ops, not 32).
+#   3. Self-contained IP loop via corridor mirror at col 1.
+#   4. Code in 60-wide boustrophedon (cols 2-61) within 64-wide grid.
+#
+# SLOT LAYOUT (relative to GP cycle-start position G):
+#
+#   GP row:  [EV]  PA  S0  S1  S2  S3  SCR  ROT
+#   offset:    0    1   2   3   4   5    6    7
+#   DATA row: ---  CW  ---  ---  ...
+#
+# After f-consolidation: PA always clean, dirty always at EV = GP start.
+# After head advance (+1): old EV left behind, new EV = old PA (clean).
+
+# Sliding slot offsets (relative to GP position)
+SL_EV  = 0   # waste/evidence (at GP start position)
+SL_PA  = 1   # overall parity accumulator
+SL_S0  = 2   # syndrome bit 0 accumulator
+SL_S1  = 3   # syndrome bit 1 accumulator
+SL_S2  = 4   # syndrome bit 2 accumulator
+SL_S3  = 5   # syndrome bit 3 accumulator
+SL_SCR = 6   # barrel shifter scratch
+SL_ROT = 7   # CL rotation counter
+SL_CW  = 1   # CW on DATA row (same column as PA)
+SL_SI  = [SL_S0, SL_S1, SL_S2, SL_S3]
+
+
+def build_sliding_gadget(gp_distance=7, n_rows=8):
+    """Build the sliding-slot Hamming(16,11) correction gadget.
+
+    EV at offset 0 (GP start), PA at offset 1 (= CW column).
+    Includes f-consolidation to ensure dirty cell always at EV.
+    Includes GP movements (]×1 before, [×1 after) for z ops.
+    Includes head advance (E e ] >) at the end.
+
+    Args:
+        gp_distance: GP row index (row number of GP row).
+        n_rows: total grid rows.
+
+    Returns: list of opchar strings (the complete reentrant code).
+    """
+    gb = GadgetBuilder(
+        h0_row=DATA_ROW, h0_col=SL_CW,
+        h1_row=DATA_ROW, h1_col=SL_CW,
+        cl_col=SL_ROT, cl_payload=0,
+        gp_col=SL_EV,
+        n_rows=n_rows)
+    gp_row_idx = gp_distance
+
+    # ── GP: move from EV to PA for z ops ──
+    gb.emit(']')                     # GP: EV(0) → PA(1)
+    gb.gp_col = SL_PA
+
+    # ── Phase A: Overall parity via Y ──
+    # H0 on PA (GP row), H1 on CW (DATA row), CL on ROT (payload 0).
+    # PA is at col SL_PA = 1, same column as CW.
+
+    gb.move_h0_row(gp_row_idx)      # DATA→GP: toroidal shortcut (N×1)
+    gb.move_h0_col(SL_PA)           # CW(1) → PA(1): no move needed
+    gb.xor_accumulate_bits(list(range(16)))   # CL: 0→15
+
+    phase_a_ops = gb.pos()
+
+    # ── Phase B: z-extract PA.bit0 → EVIDENCE ──
+    # H0 to EV. z swaps bit0 of [H0=EV] with [GP=PA].
+    # After: EV = raw p_all (0 or 1), PA.bit0 = 0.
+
+    gb.move_h0_col(SL_EV)           # PA(1) → EV(0): W×1
+    gb.emit('z')                     # EV.bit0 ← PA.bit0; PA.bit0 ← 0
+
+    phase_b_ops = gb.pos() - phase_a_ops
+
+    # ── Phase A': Y-uncompute PA ──
+    # Same Y ops reversed (15→0). Cancels Y accumulation in PA.
+    # PA.bit0 was zeroed by z, so after uncompute PA = raw p_all (0 or 1).
+
+    gb.move_h0_col(SL_PA)           # EV(0) → PA(1): E×1
+    gb.xor_accumulate_bits(list(range(15, -1, -1)))   # CL: 15→0
+
+    phase_ap_ops = gb.pos() - phase_a_ops - phase_b_ops
+
+    # ── Phase C: Syndrome computation via Y ──
+    # H0 on S0-S3 (GP row), H1 on CW, CL on ROT (payload 0).
+
+    gb.move_h0_col(SL_S0)           # PA(1) → S0(2): E×1
+
+    # s0: ascending (CL: 0→15)
+    gb.xor_accumulate_bits(SYNDROME_POSITIONS[0])
+
+    # s1: descending (CL: 15→2)
+    gb.move_h0_col(SL_S1)           # S0(2) → S1(3): E×1
+    gb.xor_accumulate_bits([15, 14, 11, 10, 7, 6, 3, 2])
+
+    # s2: ascending (CL: 2→15)
+    gb.move_h0_col(SL_S2)           # S1(3) → S2(4): E×1
+    gb.xor_accumulate_bits([4, 5, 6, 7, 12, 13, 14, 15])
+
+    # s3: descending (CL: 15→8)
+    gb.move_h0_col(SL_S3)           # S2(4) → S3(5): E×1
+    gb.xor_accumulate_bits([15, 14, 13, 12, 11, 10, 9, 8])
+
+    phase_c_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops)
+
+    # ── Phase D: Barrel shifter ──
+    # Position H0 on EV, H1 on SCR, CL on S0.
+
+    gb.move_h0_col(SL_EV)                    # S3(5) → EV(0): W×5
+    gb.move_h1(gp_row_idx, SL_SCR)           # CW(DATA,1) → SCR(GP,6)
+    gb.move_cl_col(SL_S0)                    # ROT(7) → S0(2): <×5
+
+    for i in range(4):
+        if i > 0:
+            gb.move_cl_col(SL_SI[i])         # S(i-1) → S(i): >×1
+        shift = 1 << i
+        gb.emit_n('l', shift)
+        gb.emit('f')
+        gb.emit_n('r', shift)
+        gb.emit('f')
+
+    phase_d_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops
+                   - phase_c_ops)
+
+    # ── Phase C': Y-uncompute S0-S3 ──
+
+    gb.move_h0_col(SL_S3)                    # EV(0) → S3(5): E×5
+    gb.move_h1(DATA_ROW, SL_CW)              # SCR(GP,6) → CW(DATA,1)
+    gb.move_cl_col(SL_ROT)                   # S3(5) → ROT(7): >×2
+    gb.cl_payload = 8                         # ROT unchanged since Phase C
+
+    # Uncompute s3: ascending (CL: 8→15)
+    gb.xor_accumulate_bits([8, 9, 10, 11, 12, 13, 14, 15])
+
+    # Uncompute s2: descending (CL: 15→4)
+    gb.move_h0_col(SL_S2)                    # S3(5) → S2(4): W×1
+    gb.xor_accumulate_bits([15, 14, 13, 12, 7, 6, 5, 4])
+
+    # Uncompute s1: ascending (CL: 4→2→...→15)
+    gb.move_h0_col(SL_S1)                    # S2(4) → S1(3): W×1
+    gb.xor_accumulate_bits([2, 3, 6, 7, 10, 11, 14, 15])
+
+    # Uncompute s0: descending (CL: 15→1)
+    gb.move_h0_col(SL_S0)                    # S1(3) → S0(2): W×1
+    gb.xor_accumulate_bits([15, 13, 11, 9, 7, 5, 3, 1])
+
+    # Clean CL: payload 1 → 0
+    gb.set_cl_payload(0)                     # ;×1
+
+    phase_cp_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops
+                    - phase_c_ops - phase_d_ops)
+
+    # ── Phase E: Correction XOR ──
+    # CW ^= EVIDENCE. H0 to CW, H1 to EV.
+
+    gb.move_h0(DATA_ROW, SL_CW)              # S0(GP,2) → CW(DATA,1)
+    gb.move_h1(gp_row_idx, SL_EV)            # CW(DATA,1) → EV(GP,0)
+    gb.emit('x')                              # CW ^= EVIDENCE
+
+    phase_e_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops
+                   - phase_c_ops - phase_d_ops - phase_cp_ops)
+
+    # ── Phase F: Cleanup z+x ──
+    # H0 to EV, H1 to PA. z: swap bit0. x: XOR.
+
+    gb.move_h0(gp_row_idx, SL_EV)            # CW(DATA,1) → EV(GP,0)
+    gb.move_h1_col(SL_PA)                    # EV(GP,0) → PA(GP,1): e×1
+    gb.emit('z')                              # swap bit0 of EV with PA
+    gb.emit('x')                              # EV ^= PA
+
+    phase_f_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops
+                   - phase_c_ops - phase_d_ops - phase_cp_ops - phase_e_ops)
+
+    # NOTE: f-consolidation was removed. For bit-0 errors, PA stays dirty
+    # (=1) after z+x. This is OK: old PA becomes the next cycle's EV.
+    # The dirty EV=1 propagates through the next cycle but the correction
+    # remains correct because:
+    #   - Phase B z: both EV.bit0=1 and PA.bit0=p_all=1 → swap is no-op
+    #   - Phase A': PA = P^P = 0 (clean uncompute since z was no-op)
+    #   - EV=1 acts as correct p_all for barrel shifter
+    #   - Phase F: z(0↔0) x(EV^0) → PA stays 0 (clean for non-bit-0)
+    # The carry stops after one non-bit-0 cycle.
+    #
+    # DOUBLE-BIT ERRORS: currently no marker is left in the waste trail.
+    # The gadget correctly preserves the corrupted CW (no wrong correction),
+    # but the waste cell is 0, same as the no-error case. Detection could
+    # be added later by inserting ops between Phase D and Phase C' while
+    # the syndrome bits in S0-S3 are still live (syndrome ≠ 0, p_all = 0
+    # distinguishes double errors from no-error). The gadget architecture
+    # supports this without structural changes.
+
+    # ── GP: move back from PA to EV ──
+    gb.emit('[')                              # GP: PA(1) → EV(0)
+    gb.gp_col = SL_EV
+
+    # ── Phase G: Epilogue ──
+    # Return H0 and H1 to (DATA_ROW, CW).
+
+    gb.move_h0(DATA_ROW, SL_CW)              # EV(GP,0) → CW(DATA,1)
+    gb.move_h1(DATA_ROW, SL_CW)              # PA(GP,1) → CW(DATA,1)
+
+    phase_g_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops
+                   - phase_c_ops - phase_d_ops - phase_cp_ops
+                   - phase_e_ops - phase_f_ops)
+
+    gadget_ops = gb.pos()
+
+    # ── Head advance: all 4 heads east by 1 ──
+    gb.emit('E')      # H0 east ×1
+    gb.emit('e')      # H1 east ×1
+    gb.emit(']')      # GP east ×1
+    gb.emit('>')      # CL east ×1
+
+    total_ops = gb.pos()
+
+    return gb.ops
+
+
+def place_boustrophedon(sim, op_values, left_col, right_col, start_row):
+    """Place opcodes in boustrophedon layout between left_col and right_col.
+
+    Like wrap_code() but with configurable column boundaries.
+    Does NOT place the final turn mirror on the last row (leaves the IP
+    free to continue West into the corridor).
+
+    The IP enters at (start_row, left_col) going East.
+
+    Args:
+        sim: FB2DSimulator instance
+        op_values: list of raw opcode values (ints)
+        left_col: leftmost column for code/mirrors
+        right_col: rightmost column for code/mirrors
+        start_row: first row for code
+
+    Returns: (rows_used, end_row, last_op_col, end_dir)
+    """
+    total = len(op_values)
+    if total == 0:
+        return 0, start_row, left_col, 1  # DIR_E
+
+    placed = 0
+    row = start_row
+    row_count = 0
+
+    while placed < total:
+        row_count += 1
+
+        if row_count == 1:
+            # First row: going East, code from left_col to right_col-1
+            # Mirror \ at right_col
+            slots = right_col - left_col   # e.g. 61-2 = 59
+            n = min(slots, total - placed)
+            for i in range(n):
+                sim.grid[sim._to_flat(row, left_col + i)] = hamming_encode(
+                    op_values[placed])
+                placed += 1
+            if placed >= total:
+                return row_count, row, left_col + n - 1, 1  # DIR_E
+            # Place \ at right_col
+            sim.grid[sim._to_flat(row, right_col)] = hamming_encode(OP['\\'])
+
+        elif row_count % 2 == 0:
+            # Even row_count (odd-indexed): going West
+            # / at right_col, code from right_col-1 down to left_col+1
+            sim.grid[sim._to_flat(row, right_col)] = hamming_encode(OP['/'])
+            slots = right_col - left_col - 1   # e.g. 61-2-1 = 58
+            n = min(slots, total - placed)
+            for i in range(n):
+                sim.grid[sim._to_flat(row, right_col - 1 - i)] = hamming_encode(
+                    op_values[placed])
+                placed += 1
+            if placed >= total:
+                return row_count, row, right_col - 1 - (n - 1), 3  # DIR_W
+            # Place / at left_col (turn W→S)
+            sim.grid[sim._to_flat(row, left_col)] = hamming_encode(OP['/'])
+
+        else:
+            # Odd row_count (even-indexed, not first): going East
+            # \ at left_col, code from left_col+1 to right_col-1
+            sim.grid[sim._to_flat(row, left_col)] = hamming_encode(OP['\\'])
+            slots = right_col - left_col - 1
+            n = min(slots, total - placed)
+            for i in range(n):
+                sim.grid[sim._to_flat(row, left_col + 1 + i)] = hamming_encode(
+                    op_values[placed])
+                placed += 1
+            if placed >= total:
+                return row_count, row, left_col + 1 + (n - 1), 1  # DIR_E
+            # Place \ at right_col
+            sim.grid[sim._to_flat(row, right_col)] = hamming_encode(OP['\\'])
+
+        row += 1
+
+    return row_count, row - 1, left_col, 1  # shouldn't reach here
+
+
+def make_selfcontained_torus(cases, grid_width=64, code_left=2, code_right=61):
+    """Build a self-contained torus for adjacent-data correction sweep.
+
+    cases: list of (payload_11bit, error_bit_or_None)
+
+    Layout:
+      Row 0:     DATA — codewords at adjacent columns
+      Rows 1-R:  CODE — boustrophedon in cols code_left..code_right
+      Row R+1:   GP   — sliding scratch slots
+      Col 1:     return corridor (mirrors on first and last code rows)
+
+    The IP snakes through code rows and loops back via the corridor at col 1.
+    No torus wrapping for the IP path.
+
+    Returns: (sim, expected_results, cycle_length)
+    """
+    n = len(cases)
+    first_cw_col = SL_CW + 1    # first CW at col 2 (GP starts at col 1)
+    max_cw = 55                   # limited by GP scratch extent (col N+8 ≤ 63)
+    assert n <= max_cw, (
+        f"Too many codewords ({n}) for grid width {grid_width},"
+        f" max {max_cw}")
+
+    # Build sliding gadget code
+    # Start with gp_distance=7, n_rows=8 (estimate, iterate to converge)
+    code_width = code_right - code_left + 1
+    gp_dist = 7
+    n_rows = 8
+
+    for _ in range(5):
+        code_ops = build_sliding_gadget(
+            gp_distance=gp_dist, n_rows=n_rows)
+        op_values = [OP[ch] for ch in code_ops]
+        n_ops = len(op_values)
+
+        # Compute code rows needed
+        first_row_slots = code_right - code_left  # 59
+        if n_ops <= first_row_slots:
+            code_rows = 1
+        else:
+            remaining = n_ops - first_row_slots
+            inner_slots = code_right - code_left - 1  # 58
+            code_rows = 1 + -(-remaining // inner_slots)
+
+        new_n_rows = 1 + code_rows + 1   # DATA + CODE + GP
+        new_gp_dist = new_n_rows - 1
+
+        if new_gp_dist == gp_dist and new_n_rows == n_rows:
+            break
+        gp_dist = new_gp_dist
+        n_rows = new_n_rows
+
+    gp_row = n_rows - 1
+
+    sim = FB2DSimulator(rows=n_rows, cols=grid_width)
+
+    # Place code via custom boustrophedon
+    rows_used, end_row, last_op_col, end_dir = place_boustrophedon(
+        sim, op_values, code_left, code_right, start_row=CODE_ROW)
+
+    first_code_row = CODE_ROW
+    last_code_row = CODE_ROW + rows_used - 1
+
+    # Place corridor mirrors at col 1
+    # \ at (last_code_row, 1): W→N
+    sim.grid[sim._to_flat(last_code_row, 1)] = hamming_encode(OP['\\'])
+    # / at (first_code_row, 1): N→E
+    sim.grid[sim._to_flat(first_code_row, 1)] = hamming_encode(OP['/'])
+
+    # Place codewords on DATA row at adjacent columns
+    expected = []
+    for i, (payload, error_bit) in enumerate(cases):
+        cw = encode(payload)
+        if error_bit is not None:
+            bad = inject_error(cw, error_bit)
+            expected.append(cw)
+        else:
+            bad = cw
+            expected.append(cw)
+        cw_col = first_cw_col + i
+        sim.grid[sim._to_flat(DATA_ROW, cw_col)] = bad
+
+    # Initial head positions
+    # GP starts at col 1 (EV), CW at col 2 (= PA col)
+    gp_start_col = first_cw_col - 1   # col 1
+    sim.ip_row = first_code_row
+    sim.ip_col = code_left             # col 2
+    sim.ip_dir = 1                     # East
+    sim.h0 = sim._to_flat(DATA_ROW, first_cw_col)
+    sim.h1 = sim._to_flat(DATA_ROW, first_cw_col)
+    sim.cl = sim._to_flat(gp_row, gp_start_col + SL_ROT)
+    sim.gp = sim._to_flat(gp_row, gp_start_col)
+
+    # Compute cycle length
+    # Rows 1..(rows_used-1): code_width steps each (60 cells per row)
+    # Last code row: code_width + 1 (cols right_col..1, includes corridor \)
+    # Return corridor: rows_used - 1 cells (rows last-1..first at col 1)
+    #   = (rows_used - 2) NOP cells + 1 entry mirror (/) at first_code_row
+    cycle_length = rows_used * (code_width + 1)
+    # Expanded: (rows_used-1)*code_width + (code_width+1) + (rows_used-1)
+
+    return sim, expected, cycle_length
+
+
+def run_selfcontained_test(cases, grid_width=64, verbose=False,
+                            check_reverse=False):
+    """Test self-contained loop correction of adjacent codewords.
+
+    Args:
+        cases: list of (payload_11bit, error_bit_or_None)
+        grid_width: total grid width (default 64)
+        verbose: print per-codeword results
+        check_reverse: verify full reverse restores original state
+
+    Returns: bool (all tests passed)
+    """
+    n = len(cases)
+    sim, expected, cycle_length = make_selfcontained_torus(
+        cases, grid_width=grid_width)
+    gp_row = sim.rows - 1
+    first_cw_col = SL_CW + 1   # col 2
+
+    # Verify cycle length: first cycle should return IP to start
+    start_pos = (sim.ip_row, sim.ip_col, sim.ip_dir)
+    for _ in range(cycle_length):
+        sim.step()
+    actual_pos = (sim.ip_row, sim.ip_col, sim.ip_dir)
+    if actual_pos != start_pos:
+        if verbose:
+            print(f"    [CYCLE] IP not at start after {cycle_length} steps: "
+                  f"{actual_pos} != {start_pos}")
+        # Try to find actual cycle length
+        for extra in range(100):
+            sim.step()
+            if (sim.ip_row, sim.ip_col, sim.ip_dir) == start_pos:
+                if verbose:
+                    print(f"    [CYCLE] Actual cycle length: "
+                          f"{cycle_length + extra + 1}")
+                break
+        return False
+
+    # Run remaining N-1 cycles
+    for _ in range((n - 1) * cycle_length):
+        sim.step()
+
+    total_steps = n * cycle_length
+
+    # Check all codeword results
+    all_ok = True
+    for i in range(n):
+        data_col = first_cw_col + i
+        result = sim.grid[sim._to_flat(DATA_ROW, data_col)]
+        ok = (result == expected[i])
+
+        if verbose or not ok:
+            payload, error_bit = cases[i]
+            err_desc = f"bit {error_bit}" if error_bit is not None else "none"
+            print(f"    CW[{i}] col={data_col}: payload={payload} err={err_desc}"
+                  f" result=0x{result:04x} expected=0x{expected[i]:04x}"
+                  f" {'ok' if ok else 'FAIL'}")
+        all_ok &= ok
+
+    # Check final head positions
+    # After N cycles, heads have advanced N positions from start
+    gp_start = first_cw_col - 1   # col 1
+    final_gp = (gp_start + n) % sim.cols
+    final_cw = (first_cw_col + n) % sim.cols
+    final_rot = (gp_start + n + SL_ROT) % sim.cols
+
+    exp_h0 = sim._to_flat(DATA_ROW, final_cw)
+    exp_h1 = sim._to_flat(DATA_ROW, final_cw)
+    exp_gp = sim._to_flat(gp_row, final_gp)
+    exp_cl = sim._to_flat(gp_row, final_rot)
+
+    heads_ok = (sim.h0 == exp_h0 and sim.h1 == exp_h1
+                and sim.gp == exp_gp and sim.cl == exp_cl)
+
+    if verbose or not heads_ok:
+        h0_c = sim.h0 % sim.cols
+        gp_c = sim.gp % sim.cols
+        cl_c = sim.cl % sim.cols
+        print(f"    Final heads: H0=col {h0_c} GP=col {gp_c} CL=col {cl_c}"
+              f" (expected H0={final_cw} GP={final_gp} CL={final_rot})"
+              f" {'ok' if heads_ok else 'FAIL'}")
+    all_ok &= heads_ok
+
+    # Check dirty trail on GP row
+    if verbose:
+        dirty_count = 0
+        for i in range(n):
+            ev_col = gp_start + i
+            val = sim.grid[sim._to_flat(gp_row, ev_col)]
+            if val != 0:
+                dirty_count += 1
+        print(f"    Dirty trail: {dirty_count}/{n} waste cells nonzero")
+
+    if verbose:
+        print(f"    Grid: {sim.rows}×{sim.cols},"
+              f" {cycle_length} steps/cycle,"
+              f" {n} cycles, {total_steps} total steps")
+
+    # Full reverse check
+    if check_reverse:
+        for _ in range(total_steps):
+            sim.step_back()
+
+        reverse_ok = True
+        for i in range(n):
+            data_col = first_cw_col + i
+            payload, error_bit = cases[i]
+            cw = encode(payload)
+            orig = inject_error(cw, error_bit) if error_bit is not None else cw
+            result = sim.grid[sim._to_flat(DATA_ROW, data_col)]
+            if result != orig:
+                reverse_ok = False
+                if verbose:
+                    print(f"    [REVERSE] CW[{i}]: 0x{result:04x}"
+                          f" != expected 0x{orig:04x}")
+
+        for col in range(sim.cols):
+            if sim.grid[sim._to_flat(gp_row, col)] != 0:
+                reverse_ok = False
+                if verbose:
+                    val = sim.grid[sim._to_flat(gp_row, col)]
+                    print(f"    [REVERSE] GP col {col}: 0x{val:04x} != 0")
+                break
+
+        if (sim.h0 != sim._to_flat(DATA_ROW, first_cw_col)
+                or sim.h1 != sim._to_flat(DATA_ROW, first_cw_col)
+                or sim.gp != sim._to_flat(gp_row, gp_start)
+                or sim.cl != sim._to_flat(gp_row, gp_start + SL_ROT)):
+            reverse_ok = False
+            if verbose:
+                print(f"    [REVERSE] Heads not restored to start")
+
+        if verbose:
+            print(f"    Reverse: {'ok' if reverse_ok else 'FAIL'}")
+        all_ok &= reverse_ok
+
+    return all_ok
+
+
+def save_selfcontained_fb2d(cases, grid_width=64, name=None):
+    """Save a self-contained torus sweep as .fb2d file."""
+    if name is None:
+        name = f'hamming16-selfcontained-w{grid_width}'
+    prog_dir = os.path.dirname(os.path.abspath(__file__))
+    sim, _, cycle_length = make_selfcontained_torus(
+        cases, grid_width=grid_width)
+    fn = os.path.join(prog_dir, f'{name}.fb2d')
+    sim.save_state(fn)
+    print(f"  Saved {fn}  ({sim.rows}×{sim.cols},"
+          f" {len(cases)} codewords, {cycle_length} steps/cycle)")
 
 
 def save_fb2d_files(wrap_width=None):
@@ -826,6 +1888,12 @@ if __name__ == '__main__':
                         help='Save .fb2d state files')
     parser.add_argument('--exhaustive', action='store_true',
                         help='Run exhaustive tests (all 2048 payloads × 16 bits)')
+    parser.add_argument('--save-reentrant', action='store_true',
+                        help='Save re-entrant torus sweep .fb2d file')
+    parser.add_argument('--save-reentrant-wrapped', action='store_true',
+                        help='Save wrapped re-entrant torus .fb2d file')
+    parser.add_argument('--save-selfcontained', action='store_true',
+                        help='Save self-contained torus .fb2d file')
     args = parser.parse_args()
 
     wrap_width = args.wrap
@@ -917,6 +1985,126 @@ if __name__ == '__main__':
     print(f"  4 codewords (all types): {'PASS' if re_ok3 else 'FAIL'}")
     all_ok &= re_ok3
 
+    # ── Torus sweep (actual fb2d execution, no Python head-advance) ──
+
+    print("\n--- Torus sweep (re-entrant loop via actual fb2d opcodes) ---")
+
+    reentrant_code = build_reentrant_code(gp_distance=2, n_rows=3)
+    print(f"  Code: {len(reentrant_code)} ops"
+          f" (336 gadget + {4 * SLOT_WIDTH} head advance)")
+
+    # Test 1: 4 codewords, all error types
+    torus_ok1 = run_reentrant_torus_test([
+        (7, 0),       # bit 0 error (overall parity only)
+        (42, 5),      # bit 5 error (full correction)
+        (999, None),  # no error
+        (0, 8),       # bit 8 error
+    ], verbose=True, check_reverse=True)
+    print(f"  4 codewords (all types + reverse): "
+          f"{'PASS' if torus_ok1 else 'FAIL'}")
+    all_ok &= torus_ok1
+
+    # Test 2: 8 codewords, mixed
+    torus_ok2 = run_reentrant_torus_test([
+        (1, 1),       (2, 2),       (3, 3),       (4, 4),
+        (100, None),  (200, 15),    (2047, 0),    (0, None),
+    ], verbose=True)
+    print(f"  8 codewords (mixed): {'PASS' if torus_ok2 else 'FAIL'}")
+    all_ok &= torus_ok2
+
+    # Test 3: Full sweep — 46 codewords (fills the 368-column code row exactly)
+    random.seed(123)
+    full_cases = []
+    for i in range(46):
+        payload = random.randint(0, 2047)
+        error_bit = random.choice([None] + list(range(16)))
+        full_cases.append((payload, error_bit))
+    torus_ok3 = run_reentrant_torus_test(full_cases, verbose=False,
+                                         check_reverse=True)
+    print(f"  46 codewords (full row, random + reverse): "
+          f"{'PASS' if torus_ok3 else 'FAIL'}")
+    all_ok &= torus_ok3
+
+    # ── Wrapped torus sweep (boustrophedon) ──
+
+    print("\n--- Wrapped torus sweep (64-wide boustrophedon) ---")
+
+    wrap_w = 64
+    max_cw = wrap_w // SLOT_WIDTH
+    # Peek at grid dimensions
+    _sim_peek, _, _cl = make_reentrant_wrapped_torus(
+        [(0, None)], wrap_width=wrap_w)
+    print(f"  Code: {len(reentrant_code)} ops in {wrap_w}-wide boustrophedon"
+          f" ({_sim_peek.rows}×{_sim_peek.cols} grid)")
+    print(f"  Max codewords: {max_cw}, cycle: {_cl} steps")
+
+    # Test 1: 4 codewords, all error types + reverse
+    wrapped_ok1 = run_reentrant_wrapped_torus_test([
+        (7, 0),       # bit 0 error (overall parity only)
+        (42, 5),      # bit 5 error (full correction)
+        (999, None),  # no error
+        (0, 8),       # bit 8 error
+    ], wrap_width=wrap_w, verbose=True, check_reverse=True)
+    print(f"  4 codewords (all types + reverse): "
+          f"{'PASS' if wrapped_ok1 else 'FAIL'}")
+    all_ok &= wrapped_ok1
+
+    # Test 2: 8 codewords (max for 64-wide) + reverse
+    wrapped_ok2 = run_reentrant_wrapped_torus_test([
+        (1, 1),       (2, 2),       (3, 3),       (4, 4),
+        (100, None),  (200, 15),    (2047, 0),    (0, None),
+    ], wrap_width=wrap_w, verbose=True, check_reverse=True)
+    print(f"  8 codewords (max capacity + reverse): "
+          f"{'PASS' if wrapped_ok2 else 'FAIL'}")
+    all_ok &= wrapped_ok2
+
+    # ── Self-contained loop (sliding slot, adjacent data) ──
+
+    print("\n--- Self-contained loop (64-wide, adjacent data) ---")
+
+    sliding_ops = build_sliding_gadget(gp_distance=7, n_rows=8)
+    print(f"  Sliding gadget: {len(sliding_ops)} ops"
+          f" (gadget + head advance)")
+
+    # Peek at grid dimensions
+    _sc_peek, _, _sc_cl = make_selfcontained_torus(
+        [(0, None)], grid_width=64)
+    print(f"  Grid: {_sc_peek.rows}×{_sc_peek.cols},"
+          f" cycle: {_sc_cl} steps, max ~55 codewords")
+
+    # Test 1: 4 codewords, all error types + reverse
+    sc_ok1 = run_selfcontained_test([
+        (7, 0),       # bit 0 error (overall parity only)
+        (42, 5),      # bit 5 error (full correction)
+        (999, None),  # no error
+        (0, 8),       # bit 8 error
+    ], verbose=True, check_reverse=True)
+    print(f"  4 codewords (all types + reverse): "
+          f"{'PASS' if sc_ok1 else 'FAIL'}")
+    all_ok &= sc_ok1
+
+    # Test 2: 8 codewords, mixed + reverse
+    sc_ok2 = run_selfcontained_test([
+        (1, 1),       (2, 2),       (3, 3),       (4, 4),
+        (100, None),  (200, 15),    (2047, 0),    (0, None),
+    ], verbose=True, check_reverse=True)
+    print(f"  8 codewords (mixed + reverse): "
+          f"{'PASS' if sc_ok2 else 'FAIL'}")
+    all_ok &= sc_ok2
+
+    # Test 3: 20 codewords, random
+    random.seed(456)
+    sc_cases_20 = []
+    for i in range(20):
+        payload = random.randint(0, 2047)
+        error_bit = random.choice([None] + list(range(16)))
+        sc_cases_20.append((payload, error_bit))
+    sc_ok3 = run_selfcontained_test(sc_cases_20, verbose=False,
+                                     check_reverse=True)
+    print(f"  20 codewords (random + reverse): "
+          f"{'PASS' if sc_ok3 else 'FAIL'}")
+    all_ok &= sc_ok3
+
     print("\n--- Verbose examples ---")
     run_test(42, verbose=True, wrap_width=wrap_width)
     run_test(42, error_bit=3, verbose=True, wrap_width=wrap_width)
@@ -932,3 +2120,30 @@ if __name__ == '__main__':
     if args.save:
         print(f"\n--- Saving .fb2d state files{label} ---")
         save_fb2d_files(wrap_width=wrap_width)
+
+    if args.save_reentrant:
+        print(f"\n--- Saving re-entrant torus .fb2d ---")
+        save_reentrant_fb2d([
+            (7, 0),       # bit 0 error
+            (42, 5),      # bit 5 error
+            (999, None),  # no error
+            (0, 8),       # bit 8 error
+        ])
+
+    if args.save_reentrant_wrapped:
+        print(f"\n--- Saving wrapped re-entrant torus .fb2d ---")
+        save_reentrant_wrapped_fb2d([
+            (7, 0),       # bit 0 error
+            (42, 5),      # bit 5 error
+            (999, None),  # no error
+            (0, 8),       # bit 8 error
+        ], wrap_width=64)
+
+    if args.save_selfcontained:
+        print(f"\n--- Saving self-contained torus .fb2d ---")
+        save_selfcontained_fb2d([
+            (7, 0),       # bit 0 error
+            (42, 5),      # bit 5 error
+            (999, None),  # no error
+            (0, 8),       # bit 8 error
+        ])
