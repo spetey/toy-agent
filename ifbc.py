@@ -33,6 +33,7 @@ Nested loop strategy:
 
 import sys
 import re
+from fb2d import hamming_encode, PAYLOAD_MASK, cell_to_payload
 
 # ── fb2d opcode values (must match fb2d.py) ────────────────────────
 OP = {
@@ -355,11 +356,11 @@ class Compiler:
         # Build flat grid
         grid_flat = [0] * (rows * cols)
 
-        # Place variable initial values
+        # Place variable initial values (Hamming-encoded)
         for col_idx, value in self.data_values.items():
-            grid_flat[DATA_ROW * cols + col_idx] = value
+            grid_flat[DATA_ROW * cols + col_idx] = hamming_encode(value)
 
-        # Place compiled opcodes
+        # Place compiled opcodes (already Hamming-encoded by _emit)
         for (r, c), val in self.grid.items():
             if 0 <= r < rows and 0 <= c < cols:
                 grid_flat[r * cols + c] = val
@@ -382,8 +383,8 @@ class Compiler:
         return rows, cols, grid_flat, header
 
     def _emit(self, row, col, opcode_char):
-        """Place an opcode on the grid."""
-        self.grid[(row, col)] = OP[opcode_char]
+        """Place an opcode on the grid (Hamming-encoded)."""
+        self.grid[(row, col)] = hamming_encode(OP[opcode_char])
         self.max_col = max(self.max_col, col)
 
     def _emit_at_cursor(self, opcode_char, level):
@@ -994,11 +995,11 @@ class CompilerV2:
         grid_flat = [0] * (rows * cols)
 
         for col_idx, value in self.data_values.items():
-            grid_flat[DATA_ROW * cols + col_idx] = value
+            grid_flat[DATA_ROW * cols + col_idx] = hamming_encode(value)
 
         for (r, c), val in self.grid.items():
             if 0 <= r < rows and 0 <= c < cols:
-                grid_flat[r * cols + c] = val
+                grid_flat[r * cols + c] = val  # already Hamming-encoded by _emit
 
         gp_flat = self.gp_row * cols + 0
 
@@ -1032,7 +1033,7 @@ class CompilerV2:
         return d
 
     def _emit(self, row, col, opcode_char):
-        self.grid[(row, col)] = OP[opcode_char]
+        self.grid[(row, col)] = hamming_encode(OP[opcode_char])
         self.max_col = max(self.max_col, col)
 
     def _var_col(self, name):
@@ -1592,10 +1593,10 @@ var x = 202
 var y = 202
 rotl x
 rotr y
-// rotl(0b11001010) = 0b10010101 = 149
-// rotr(0b11001010) = 0b01100101 = 101
+// rotl/rotr are raw 16-bit cell ops (rotate full codeword)
+// 16-bit rotl(encode(202)) payload = 390, rotr payload = 101 (standard form)
 """,
-        'expected': {'x': 149, 'y': 101},
+        'expected': {'x': 390, 'y': 101},  # 16-bit cell rotation (raw 16-bit op)
     },
     'rotate_inverse': {
         'source': """\
@@ -1660,14 +1661,14 @@ end
         # then pairs (delta, old_prev) at cols 3-4, 5-6, etc.
         # Output deltas are at positions: col 1, 3, 5, 7, 9, 11, 13, 15
         'expected_gp_trail_positions': {
-            1: 10,   # first byte literal
-            3: 3,    # delta: 13-10
-            5: 254,  # delta: 11-13 mod 256
-            7: 4,    # delta: 15-11
-            9: 255,  # delta: 14-15 mod 256
-            11: 0,   # delta: 14-14
-            13: 4,   # delta: 18-14
-            15: 250, # delta: 12-18 mod 256
+            1: 10,    # first byte literal
+            3: 3,     # delta: 13-10
+            5: 2046,  # delta: 11-13 mod 2048 (16-bit payload)
+            7: 4,     # delta: 15-11
+            9: 2047,  # delta: 14-15 mod 2048
+            11: 0,    # delta: 14-14
+            13: 4,    # delta: 18-14
+            15: 2042, # delta: 12-18 mod 2048
         },
     },
 }
@@ -1730,7 +1731,8 @@ def run_test(name, verbose=False):
 
     results = {}
     for vname, vcol in var_map.items():
-        results[vname] = sim.grid[DATA_ROW * cols + vcol]
+        raw = sim.grid[DATA_ROW * cols + vcol]
+        results[vname] = cell_to_payload(raw)  # extract payload from standard form
 
     ok = True
     for vname, exp_val in expected.items():
@@ -1746,7 +1748,7 @@ def run_test(name, verbose=False):
         gp_row = compiler.gp_row
         trail_ok = True
         for gp_col, exp_val in sorted(expected_positions.items()):
-            got = sim.grid[gp_row * cols + gp_col]
+            got = cell_to_payload(sim.grid[gp_row * cols + gp_col])
             if got != exp_val:
                 trail_ok = False
                 print(f"  GP trail[{gp_col}]: expected={exp_val}, got={got} FAIL")
@@ -1768,18 +1770,20 @@ def run_test(name, verbose=False):
         if isinstance(s, VarDecl):
             vcol = var_map[s.name]
             got = sim.grid[DATA_ROW * cols + vcol]
-            if got != s.value:
+            exp_encoded = hamming_encode(s.value)
+            if got != exp_encoded:
                 reverse_ok = False
-                print(f"  REVERSE FAIL: {s.name}: expected={s.value}, got={got}")
+                print(f"  REVERSE FAIL: {s.name}: expected={exp_encoded} (enc {s.value}), got={got}")
 
     # Check input bytes restored after reverse
     if compiler.input_bytes and compiler.input_start_col is not None:
         for i, exp_byte in enumerate(compiler.input_bytes):
             col = compiler.input_start_col + i
             got = sim.grid[DATA_ROW * cols + col]
-            if got != exp_byte:
+            exp_encoded = hamming_encode(exp_byte)
+            if got != exp_encoded:
                 reverse_ok = False
-                print(f"  REVERSE FAIL: input[{i}]: expected={exp_byte}, got={got}")
+                print(f"  REVERSE FAIL: input[{i}]: expected={exp_encoded} (enc {exp_byte}), got={got}")
 
     gp_start = compiler.gp_row * cols
     gp_clean = all(sim.grid[gp_start + c] == 0 for c in range(cols))

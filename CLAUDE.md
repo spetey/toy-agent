@@ -193,6 +193,82 @@ python3 fb2d.py
 # Then: load factorial-03
 ```
 
+## Self-Correcting Agent Architecture (Design Sketch)
+
+The long-term goal: an agent on the torus that resists its own degradation
+by noise. The architecture has several layers:
+
+### Grid Layout
+
+```
+[FUEL rows: compressible data, consumed in-place leaving waste behind]
+[AGENT rows: code (correction gadgets + loops) in boustrophedon layout]
+[GP row(s): dirty trail behind GP ← GP ← clean zeros ahead]
+```
+
+The agent sweeps its own code and data, correcting single-bit errors via
+Hamming SECDED. Each correction consumes ~2 clean GP cells (PA, SYND).
+
+### Fuel → Zeros → Corrections
+
+- Clean zeros are the fundamental resource. They power GP-based computation.
+- A "compressor" gadget converts compressible fuel into clean zeros.
+- Those zeros are swapped into the GP row ahead of the correction gadget.
+- A reservoir of pre-made zeros IS already-compressed fuel — same thing.
+- The system is viable as long as zero production rate ≥ consumption rate.
+
+### Bootstrapping: Mutual Correction
+
+A single Hamming gadget (~253 ops) can't correct itself — if any of its
+opcodes is corrupted, the whole correction is wrong. Solution: **multiple
+gadgets correcting each other**.
+
+- **Minimum viable**: 2 gadgets, A sweeps B's code, B sweeps A's code.
+  Works if errors are sparse enough that both aren't corrupted at once.
+- **Longer-term**: 3+ components (A→B→C→A), each correcting + compressing
+  for the next. Each has its own IP + heads.
+- **Multiple IPs**: each gadget runs on its own IP with independent heads,
+  executing simultaneously on the shared grid. Required for real-time
+  mutual correction.
+
+### 16-Bit Cells (Planned)
+
+Upgrade from 8-bit to 16-bit cells with systematic Hamming(16,11) SECDED:
+- 11 data bits (payload): opcodes (0–48) + data values (0–2047)
+- 5 parity bits: maintained by Δp fixup on arithmetic ops (+, -, etc.)
+- IP reads `cell % 2048` as the opcode. Valid opcode → execute, else NOP.
+- Bit-level ops (r, l, R, L, Y, z, x) act on full 16 bits — needed by
+  the correction gadget to access parity bit positions.
+- Arithmetic ops (+, -, ., ,, :, ;) preserve the Hamming invariant via
+  Δp parity fixup. Bijective on all 65536 values, not just valid codewords.
+
+### Adaptive Sweep Boundaries (Future)
+
+Instead of hardcoding which rows each gadget sweeps, detect agent
+boundaries adaptively by testing for N consecutive NOPs. Implementation:
+nested conditional mirrors — each level moves H0 east, loads the cell
+value into a testable head (CL via T), and tests with `?` (CL==0). If
+all N tests pass (N consecutive NOPs), take the "reverse" path. If any
+test fails, backtrack head movements and continue sweeping. N=3 or 4
+should suffice.
+
+Open problem: we currently have no "test for NOP" opcode — only ==0 and
+!=0 tests. For 16-bit cells, NOP is any payload not in {1–48}, not just
+zero. A range test or opcode-validity test may be needed as a new opcode.
+For now, hardcode sweep ranges.
+
+### Development Roadmap
+
+1. Upgrade to 16-bit cells with systematic Hamming(16,11) SECDED, so that
+   opcodes are Hamming-protected codewords.
+2. Build new Hamming(16,11) correction gadget.
+3. Add multiple IP support to the simulator.
+4. Start with infinite zero reservoir (special GP row), get two correction
+   gadgets correcting each other under simulated noise.
+5. Add simple compression (XOR-of-identical-pairs) to replace infinite
+   reservoir with finite fuel.
+6. Explore adaptive sweep boundaries and learning/adaptation.
+
 ## Design Decisions Log
 
 - **x -> X rename (v1.6)**: byte-level swap promoted to uppercase `X`.

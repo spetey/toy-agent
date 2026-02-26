@@ -98,9 +98,9 @@ OPCODES = {
     'l':  41,  # [H0] rotate left 1 bit   (bit7→bit0, inverse: r)
     'f':  42,  # if [CL]&1: swap([H0], [H1])  (bit-0 Fredkin, self-inverse)
     'z':  43,  # swap(bit0 of [H0], bit0 of [GP])  (bit-level GP swap, self-inverse)
-    'R':  44,  # [H0] rotate right by ([CL] & 7) bits  (inverse: L)
-    'L':  45,  # [H0] rotate left  by ([CL] & 7) bits  (inverse: R)
-    'Y':  46,  # [H0] ^= ror([H1], [CL] & 7)  (fused rotate-XOR, self-inverse)
+    'R':  44,  # [H0] rotate right by ([CL] & 15) bits  (inverse: L)
+    'L':  45,  # [H0] rotate left  by ([CL] & 15) bits  (inverse: R)
+    'Y':  46,  # [H0] ^= ror([H1], [CL] & 15)  (fused rotate-XOR, self-inverse)
     ':':  47,  # [CL]++  (inverse: ;)
     ';':  48,  # [CL]--  (inverse: :)
 }
@@ -114,6 +114,127 @@ HEAD_MOVE_INVERSE = {
     11: DIR_S, 12: DIR_N, 13: DIR_W, 14: DIR_E,  # H1: N↔S, E↔W
     29: DIR_W, 30: DIR_E, 31: DIR_N, 32: DIR_S,  # GP: ]↔[, }↔{
 }
+
+# ─── 16-bit Hamming(16,11) SECDED Constants ──────────────────────────
+#
+# Standard-form Hamming(16,11) SECDED.
+# Bit layout:
+#   Bit:  15  14  13  12  11  10   9   8   7   6   5   4   3   2   1   0
+#         d10 d9  d8  d7  d6  d5  d4  p3  d3  d2  d1  p2  d0  p1  p0  p∀
+#   Syn:  15  14  13  12  11  10   9   8   7   6   5   4   3   2   1   0
+#
+# Key property: syndrome value = bit position of error.  This makes
+# the R/L correction trick work: R(cw, syn), XOR bit0, L(cw, syn).
+#
+# Two op categories:
+#   Raw 16-bit ops (r,l,R,L,Y,z,x,X,F,Z,f): act on full 16 bits
+#   Δp arithmetic ops (+,-,.,,,P,Q,:,;): modify payload, adjust parity
+
+CELL_BITS = 16
+CELL_MASK = 0xFFFF          # 16-bit cell values
+PAYLOAD_MASK = 0x7FF        # 11-bit mask for payload VALUE arithmetic
+PAYLOAD_BITS = 11
+ROTATION_MASK = 0x0F        # & 15 for 16-bit rotations
+
+# Standard-form data bit positions (non-powers-of-2, excluding 0)
+DATA_POSITIONS = [3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]  # d0-d10
+DATA_MASK = 0xFEE8          # OR of all data bit positions
+
+# Standard-form: syndrome column i IS bit position i.
+SYNDROME_SIG = list(range(16))  # [0, 1, 2, ..., 15]
+
+# Syndrome check masks (classic Hamming: all positions with bit i set).
+_SYNDROME_MASKS = [0xAAAA, 0xCCCC, 0xF0F0, 0xFF00]
+
+# Parity generator masks: data positions in each Hamming parity's check set.
+# (Same as _SYNDROME_MASKS but excluding the parity bit itself.)
+_PARITY_MASKS = [
+    0xAAA8,  # p0 (bit 1): positions {3,5,7,9,11,13,15}
+    0xCCC8,  # p1 (bit 2): positions {3,6,7,10,11,14,15}
+    0xF0E0,  # p2 (bit 4): positions {5,6,7,12,13,14,15}
+    0xFE00,  # p3 (bit 8): positions {9,10,11,12,13,14,15}
+]
+
+def _popcount(x):
+    """Count set bits."""
+    return bin(x).count('1')
+
+# Build scatter/gather tables for standard-form payload extraction.
+# _PAYLOAD_TO_CELL: 11-bit payload → 16-bit cell (data bits only, no parity)
+# _CELL_TO_PAYLOAD: 16-bit cell → 11-bit payload (ignores parity bits)
+_PAYLOAD_TO_CELL = [0] * 2048
+for _p in range(2048):
+    _c = 0
+    for _i, _bp in enumerate(DATA_POSITIONS):
+        if (_p >> _i) & 1:
+            _c |= (1 << _bp)
+    _PAYLOAD_TO_CELL[_p] = _c
+
+_CELL_TO_PAYLOAD = [0] * 65536
+for _v in range(65536):
+    _p = 0
+    for _i, _bp in enumerate(DATA_POSITIONS):
+        if (_v >> _bp) & 1:
+            _p |= (1 << _i)
+    _CELL_TO_PAYLOAD[_v] = _p
+
+del _p, _c, _i, _bp, _v
+
+def cell_to_payload(cell):
+    """Extract the 11-bit payload from a standard-form Hamming codeword."""
+    return _CELL_TO_PAYLOAD[cell & CELL_MASK]
+
+def hamming_encode(payload):
+    """Encode an 11-bit payload into a 16-bit standard-form Hamming(16,11)
+    SECDED codeword."""
+    payload &= PAYLOAD_MASK
+    cell = _PAYLOAD_TO_CELL[payload]
+    # Compute Hamming parity bits (at positions 1, 2, 4, 8)
+    for i in range(4):
+        if _popcount(cell & _PARITY_MASKS[i]) & 1:
+            cell |= (1 << (1 << i))  # set parity bit at position 2^i
+    # Overall parity at bit 0
+    if _popcount(cell) & 1:
+        cell |= 1
+    return cell
+
+def hamming_syndrome(codeword):
+    """Compute 4-bit syndrome + overall parity error bit.
+    Returns (syndrome, p_all_err).
+    In standard form, syndrome value = bit position of error."""
+    s = 0
+    for i in range(4):
+        if _popcount(codeword & _SYNDROME_MASKS[i]) & 1:
+            s |= (1 << i)
+    p_all_err = _popcount(codeword) & 1  # 0 for valid codeword
+    return s, p_all_err
+
+# Precompute PAYLOAD_FLIP_TO_CELL_FLIP: for each 11-bit payload flip mask,
+# the complete 16-bit cell XOR mask (scattered data bits + parity fixup +
+# overall parity).  Usage: cell ^= PAYLOAD_FLIP_TO_CELL_FLIP[payload_flip]
+PAYLOAD_FLIP_TO_CELL_FLIP = [0] * 2048
+for _pf in range(2048):
+    _cf = _PAYLOAD_TO_CELL[_pf]   # scatter payload flips to data bit positions
+    # Compute parity bit flips
+    for _i in range(4):
+        if _popcount(_cf & _PARITY_MASKS[_i]) & 1:
+            _cf ^= (1 << (1 << _i))
+    # Overall parity flip
+    if _popcount(_cf) & 1:
+        _cf ^= 1
+    PAYLOAD_FLIP_TO_CELL_FLIP[_pf] = _cf
+
+# Precompute INC_XOR / DEC_XOR for fast single-step inc/dec.
+# hamming_inc(cell) = cell ^ INC_XOR[cell_to_payload(cell)]
+INC_XOR = [0] * 2048
+DEC_XOR = [0] * 2048
+for _p in range(2048):
+    _new = (_p + 1) & PAYLOAD_MASK
+    INC_XOR[_p] = PAYLOAD_FLIP_TO_CELL_FLIP[_p ^ _new]
+    _new = (_p - 1) & PAYLOAD_MASK
+    DEC_XOR[_p] = PAYLOAD_FLIP_TO_CELL_FLIP[_p ^ _new]
+
+del _pf, _cf, _i, _p, _new
 
 # ─── ANSI Color Codes ─────────────────────────────────────────────────
 
@@ -192,7 +313,7 @@ class FB2DSimulator:
     def step(self):
         """Execute one instruction: read, execute, advance IP."""
         flat_ip = self._ip_flat()
-        opcode = self.grid[flat_ip]
+        opcode = _CELL_TO_PAYLOAD[self.grid[flat_ip]]  # extract payload
         old_dir = self.ip_dir
 
         # ── Execute ──
@@ -202,20 +323,20 @@ class FB2DSimulator:
         elif opcode == 2:    # \ unconditional reflect
             self.ip_dir = BACKSLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 3:    # % / reflect if grid[CL] ≠ 0
-            if self.grid[self.cl] != 0:
+        elif opcode == 3:    # % / reflect if payload(CL) ≠ 0
+            if self.grid[self.cl] & DATA_MASK:
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 4:    # ? / reflect if grid[CL] = 0
-            if self.grid[self.cl] == 0:
+        elif opcode == 4:    # ? / reflect if payload(CL) = 0
+            if not (self.grid[self.cl] & DATA_MASK):
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 5:    # & \ reflect if grid[CL] ≠ 0
-            if self.grid[self.cl] != 0:
+        elif opcode == 5:    # & \ reflect if payload(CL) ≠ 0
+            if self.grid[self.cl] & DATA_MASK:
                 self.ip_dir = BACKSLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 6:    # ! \ reflect if grid[CL] = 0
-            if self.grid[self.cl] == 0:
+        elif opcode == 6:    # ! \ reflect if payload(CL) = 0
+            if not (self.grid[self.cl] & DATA_MASK):
                 self.ip_dir = BACKSLASH_REFLECT[self.ip_dir]
 
         elif opcode in (7, 8, 9, 10):    # H0 movement N/S/E/W
@@ -226,24 +347,30 @@ class FB2DSimulator:
             dirs = {11: DIR_N, 12: DIR_S, 13: DIR_E, 14: DIR_W}
             self.h1 = self._move_head(self.h1, dirs[opcode])
 
-        elif opcode == 15:   # + grid[H0]++
-            self.grid[self.h0] = (self.grid[self.h0] + 1) & 0xFF
+        elif opcode == 15:   # + payload(H0)++ with Δp parity fixup
+            self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
-        elif opcode == 16:   # - grid[H0]--
-            self.grid[self.h0] = (self.grid[self.h0] - 1) & 0xFF
+        elif opcode == 16:   # - payload(H0)-- with Δp parity fixup
+            self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
-        elif opcode == 17:   # . grid[H0] += grid[H1]
-            self.grid[self.h0] = (self.grid[self.h0] + self.grid[self.h1]) & 0xFF
+        elif opcode == 17:   # . payload(H0) += payload(H1) with Δp
+            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+            _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+            _fl = _op ^ _np
+            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
-        elif opcode == 18:   # , grid[H0] -= grid[H1]
-            self.grid[self.h0] = (self.grid[self.h0] - self.grid[self.h1]) & 0xFF
+        elif opcode == 18:   # , payload(H0) -= payload(H1) with Δp
+            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+            _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+            _fl = _op ^ _np
+            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 19:   # X swap([H0], [H1])
             self.grid[self.h0], self.grid[self.h1] = \
                 self.grid[self.h1], self.grid[self.h0]
 
-        elif opcode == 20:   # F Fredkin: if [CL]!=0: swap([H0], [H1])
-            if self.grid[self.cl] != 0:
+        elif opcode == 20:   # F Fredkin: if payload(CL)!=0: swap([H0], [H1])
+            if self.grid[self.cl] & DATA_MASK:
                 self.grid[self.h0], self.grid[self.h1] = \
                     self.grid[self.h1], self.grid[self.h0]
 
@@ -267,11 +394,11 @@ class FB2DSimulator:
             self.cl = self._move_head(self.cl, DIR_S)
 
         # ── GP (garbage pointer) operations ──
-        elif opcode == 27:   # P grid[GP]++
-            self.grid[self.gp] = (self.grid[self.gp] + 1) & 0xFF
+        elif opcode == 27:   # P payload(GP)++ with Δp parity fixup
+            self.grid[self.gp] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.gp]]]
 
-        elif opcode == 28:   # Q grid[GP]--
-            self.grid[self.gp] = (self.grid[self.gp] - 1) & 0xFF
+        elif opcode == 28:   # Q payload(GP)-- with Δp parity fixup
+            self.grid[self.gp] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.gp]]]
 
         elif opcode == 29:   # ] GP East
             self.gp = self._move_head(self.gp, DIR_E)
@@ -289,20 +416,20 @@ class FB2DSimulator:
         elif opcode == 33:   # K swap(CL_register, GP_register)
             self.cl, self.gp = self.gp, self.cl
 
-        elif opcode == 34:   # ( \ reflect if grid[GP] ≠ 0
-            if self.grid[self.gp] != 0:
+        elif opcode == 34:   # ( \ reflect if payload(GP) ≠ 0
+            if self.grid[self.gp] & DATA_MASK:
                 self.ip_dir = BACKSLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 35:   # ) \ reflect if grid[GP] = 0
-            if self.grid[self.gp] == 0:
+        elif opcode == 35:   # ) \ reflect if payload(GP) = 0
+            if not (self.grid[self.gp] & DATA_MASK):
                 self.ip_dir = BACKSLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 36:   # # / reflect if grid[GP] = 0
-            if self.grid[self.gp] == 0:
+        elif opcode == 36:   # # / reflect if payload(GP) = 0
+            if not (self.grid[self.gp] & DATA_MASK):
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 37:   # $ / reflect if grid[GP] ≠ 0
-            if self.grid[self.gp] != 0:
+        elif opcode == 37:   # $ / reflect if payload(GP) ≠ 0
+            if self.grid[self.gp] & DATA_MASK:
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
         elif opcode == 38:   # Z swap([H0], [GP])
@@ -313,52 +440,52 @@ class FB2DSimulator:
         elif opcode == 39:   # x  [H0] ^= [H1]  (XOR, self-inverse)
             self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
 
-        elif opcode == 40:   # r  [H0] rotate right 1 bit
+        elif opcode == 40:   # r  [H0] rotate right 1 bit (raw 16-bit)
             v = self.grid[self.h0]
-            self.grid[self.h0] = ((v >> 1) | ((v & 1) << 7)) & 0xFF
+            self.grid[self.h0] = ((v >> 1) | ((v & 1) << 15)) & CELL_MASK
 
-        elif opcode == 41:   # l  [H0] rotate left 1 bit
+        elif opcode == 41:   # l  [H0] rotate left 1 bit (raw 16-bit)
             v = self.grid[self.h0]
-            self.grid[self.h0] = (((v << 1) & 0xFF) | (v >> 7)) & 0xFF
+            self.grid[self.h0] = (((v << 1) & CELL_MASK) | (v >> 15)) & CELL_MASK
 
         elif opcode == 42:   # f  if [CL]&1: swap([H0], [H1])  (bit-0 Fredkin)
             if self.grid[self.cl] & 1:
                 self.grid[self.h0], self.grid[self.h1] = \
                     self.grid[self.h1], self.grid[self.h0]
 
-        elif opcode == 43:   # z  swap bit0 of [H0] with bit0 of [GP]
+        elif opcode == 43:   # z  swap bit0 of [H0] with bit0 of [GP] (raw 16-bit)
             a = self.grid[self.h0]
             b = self.grid[self.gp]
             a_bit = a & 1
             b_bit = b & 1
-            self.grid[self.h0] = (a & 0xFE) | b_bit
-            self.grid[self.gp] = (b & 0xFE) | a_bit
+            self.grid[self.h0] = (a & 0xFFFE) | b_bit
+            self.grid[self.gp] = (b & 0xFFFE) | a_bit
 
-        elif opcode == 44:   # R  [H0] rotate right by ([CL] & 7) bits
-            n = self.grid[self.cl] & 7
+        elif opcode == 44:   # R  [H0] ror by (payload([CL]) & 15) bits (raw 16-bit)
+            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
             if n:
                 v = self.grid[self.h0]
-                self.grid[self.h0] = ((v >> n) | (v << (8 - n))) & 0xFF
+                self.grid[self.h0] = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK
 
-        elif opcode == 45:   # L  [H0] rotate left by ([CL] & 7) bits
-            n = self.grid[self.cl] & 7
+        elif opcode == 45:   # L  [H0] rol by (payload([CL]) & 15) bits (raw 16-bit)
+            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
             if n:
                 v = self.grid[self.h0]
-                self.grid[self.h0] = ((v << n) & 0xFF | (v >> (8 - n))) & 0xFF
+                self.grid[self.h0] = ((v << n) & CELL_MASK | (v >> (CELL_BITS - n))) & CELL_MASK
 
-        elif opcode == 46:   # Y  [H0] ^= ror([H1], [CL] & 7)  (self-inverse)
-            n = self.grid[self.cl] & 7
+        elif opcode == 46:   # Y  [H0] ^= ror([H1], payload([CL]) & 15)  (raw 16-bit, self-inverse)
+            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
             v = self.grid[self.h1]
-            rotated = ((v >> n) | (v << (8 - n))) & 0xFF if n else v
+            rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v
             self.grid[self.h0] = self.grid[self.h0] ^ rotated
 
-        elif opcode == 47:   # :  [CL]++
-            self.grid[self.cl] = (self.grid[self.cl] + 1) & 0xFF
+        elif opcode == 47:   # :  payload(CL)++ with Δp parity fixup
+            self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
-        elif opcode == 48:   # ;  [CL]--
-            self.grid[self.cl] = (self.grid[self.cl] - 1) & 0xFF
+        elif opcode == 48:   # ;  payload(CL)-- with Δp parity fixup
+            self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
-        # else: NOP (0 or 49–255)
+        # else: NOP (0 or 49–2047 payload)
 
         # ── Trace output ──
         if self.trace:
@@ -382,28 +509,28 @@ class FB2DSimulator:
         prev_row = (self.ip_row - DR[self.ip_dir]) % self.rows
         prev_col = (self.ip_col - DC[self.ip_dir]) % self.cols
         prev_flat = self._to_flat(prev_row, prev_col)
-        opcode = self.grid[prev_flat]
+        opcode = _CELL_TO_PAYLOAD[self.grid[prev_flat]]  # extract payload
 
         # ── Determine previous direction ──
         if opcode == 1:      # / always reflects
             prev_dir = SLASH_REFLECT[self.ip_dir]
         elif opcode == 2:    # \ always reflects
             prev_dir = BACKSLASH_REFLECT[self.ip_dir]
-        elif opcode in (3, 4):  # conditional / mirrors
-            cond = (self.grid[self.cl] != 0) if opcode == 3 else \
-                   (self.grid[self.cl] == 0)
+        elif opcode in (3, 4):  # conditional / mirrors (payload test)
+            cond = bool(self.grid[self.cl] & DATA_MASK) if opcode == 3 else \
+                   (not (self.grid[self.cl] & DATA_MASK))
             prev_dir = SLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
-        elif opcode in (5, 6):  # conditional \ mirrors
-            cond = (self.grid[self.cl] != 0) if opcode == 5 else \
-                   (self.grid[self.cl] == 0)
+        elif opcode in (5, 6):  # conditional \ mirrors (payload test)
+            cond = bool(self.grid[self.cl] & DATA_MASK) if opcode == 5 else \
+                   (not (self.grid[self.cl] & DATA_MASK))
             prev_dir = BACKSLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
-        elif opcode in (34, 35):  # conditional \ mirrors on grid[GP]
-            cond = (self.grid[self.gp] != 0) if opcode == 34 else \
-                   (self.grid[self.gp] == 0)
+        elif opcode in (34, 35):  # conditional \ mirrors on payload(GP)
+            cond = bool(self.grid[self.gp] & DATA_MASK) if opcode == 34 else \
+                   (not (self.grid[self.gp] & DATA_MASK))
             prev_dir = BACKSLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
-        elif opcode in (36, 37):  # conditional / mirrors on grid[GP]
-            cond = (self.grid[self.gp] == 0) if opcode == 36 else \
-                   (self.grid[self.gp] != 0)
+        elif opcode in (36, 37):  # conditional / mirrors on payload(GP)
+            cond = (not (self.grid[self.gp] & DATA_MASK)) if opcode == 36 else \
+                   bool(self.grid[self.gp] & DATA_MASK)
             prev_dir = SLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
         else:
             prev_dir = self.ip_dir
@@ -415,24 +542,30 @@ class FB2DSimulator:
         elif opcode in (11, 12, 13, 14):  # H1 was moved, undo
             self.h1 = self._move_head(self.h1, HEAD_MOVE_INVERSE[opcode])
 
-        elif opcode == 15:   # was ++, undo --
-            self.grid[self.h0] = (self.grid[self.h0] - 1) & 0xFF
+        elif opcode == 15:   # was ++, undo -- (Δp dec)
+            self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
-        elif opcode == 16:   # was --, undo ++
-            self.grid[self.h0] = (self.grid[self.h0] + 1) & 0xFF
+        elif opcode == 16:   # was --, undo ++ (Δp inc)
+            self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
-        elif opcode == 17:   # was +=, undo -=
-            self.grid[self.h0] = (self.grid[self.h0] - self.grid[self.h1]) & 0xFF
+        elif opcode == 17:   # was +=, undo -= (Δp sub)
+            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+            _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+            _fl = _op ^ _np
+            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
-        elif opcode == 18:   # was -=, undo +=
-            self.grid[self.h0] = (self.grid[self.h0] + self.grid[self.h1]) & 0xFF
+        elif opcode == 18:   # was -=, undo += (Δp add)
+            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+            _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+            _fl = _op ^ _np
+            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 19:   # x is self-inverse
             self.grid[self.h0], self.grid[self.h1] = \
                 self.grid[self.h1], self.grid[self.h0]
 
-        elif opcode == 20:   # F is self-inverse
-            if self.grid[self.cl] != 0:
+        elif opcode == 20:   # F is self-inverse (payload test)
+            if self.grid[self.cl] & DATA_MASK:
                 self.grid[self.h0], self.grid[self.h1] = \
                     self.grid[self.h1], self.grid[self.h0]
 
@@ -456,11 +589,11 @@ class FB2DSimulator:
             self.cl = self._move_head(self.cl, DIR_N)
 
         # ── GP (garbage pointer) undo operations ──
-        elif opcode == 27:   # P was ++, undo --
-            self.grid[self.gp] = (self.grid[self.gp] - 1) & 0xFF
+        elif opcode == 27:   # P was ++, undo -- (Δp dec)
+            self.grid[self.gp] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.gp]]]
 
-        elif opcode == 28:   # Q was --, undo ++
-            self.grid[self.gp] = (self.grid[self.gp] + 1) & 0xFF
+        elif opcode == 28:   # Q was --, undo ++ (Δp inc)
+            self.grid[self.gp] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.gp]]]
 
         elif opcode in (29, 30, 31, 32):  # GP movement, undo
             self.gp = self._move_head(self.gp, HEAD_MOVE_INVERSE[opcode])
@@ -476,50 +609,50 @@ class FB2DSimulator:
         elif opcode == 39:   # x XOR is self-inverse
             self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
 
-        elif opcode == 40:   # r was rotate-right, undo with rotate-left
+        elif opcode == 40:   # r was ror-1, undo with rol-1 (raw 16-bit)
             v = self.grid[self.h0]
-            self.grid[self.h0] = (((v << 1) & 0xFF) | (v >> 7)) & 0xFF
+            self.grid[self.h0] = (((v << 1) & CELL_MASK) | (v >> 15)) & CELL_MASK
 
-        elif opcode == 41:   # l was rotate-left, undo with rotate-right
+        elif opcode == 41:   # l was rol-1, undo with ror-1 (raw 16-bit)
             v = self.grid[self.h0]
-            self.grid[self.h0] = ((v >> 1) | ((v & 1) << 7)) & 0xFF
+            self.grid[self.h0] = ((v >> 1) | ((v & 1) << 15)) & CELL_MASK
 
         elif opcode == 42:   # f bit-0 Fredkin is self-inverse
             if self.grid[self.cl] & 1:
                 self.grid[self.h0], self.grid[self.h1] = \
                     self.grid[self.h1], self.grid[self.h0]
 
-        elif opcode == 43:   # z bit-0 GP swap is self-inverse
+        elif opcode == 43:   # z bit-0 GP swap is self-inverse (raw 16-bit)
             a = self.grid[self.h0]
             b = self.grid[self.gp]
             a_bit = a & 1
             b_bit = b & 1
-            self.grid[self.h0] = (a & 0xFE) | b_bit
-            self.grid[self.gp] = (b & 0xFE) | a_bit
+            self.grid[self.h0] = (a & 0xFFFE) | b_bit
+            self.grid[self.gp] = (b & 0xFFFE) | a_bit
 
-        elif opcode == 44:   # R was rotate-right-by-CL, undo with rotate-left-by-CL
-            n = self.grid[self.cl] & 7
+        elif opcode == 44:   # R was ror-by-CL, undo with rol-by-CL (payload 16-bit)
+            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
             if n:
                 v = self.grid[self.h0]
-                self.grid[self.h0] = ((v << n) & 0xFF | (v >> (8 - n))) & 0xFF
+                self.grid[self.h0] = ((v << n) & CELL_MASK | (v >> (CELL_BITS - n))) & CELL_MASK
 
-        elif opcode == 45:   # L was rotate-left-by-CL, undo with rotate-right-by-CL
-            n = self.grid[self.cl] & 7
+        elif opcode == 45:   # L was rol-by-CL, undo with ror-by-CL (payload 16-bit)
+            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
             if n:
                 v = self.grid[self.h0]
-                self.grid[self.h0] = ((v >> n) | (v << (8 - n))) & 0xFF
+                self.grid[self.h0] = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK
 
-        elif opcode == 46:   # Y is self-inverse (XOR twice cancels)
-            n = self.grid[self.cl] & 7
+        elif opcode == 46:   # Y is self-inverse (payload 16-bit)
+            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
             v = self.grid[self.h1]
-            rotated = ((v >> n) | (v << (8 - n))) & 0xFF if n else v
+            rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v
             self.grid[self.h0] = self.grid[self.h0] ^ rotated
 
-        elif opcode == 47:   # : was [CL]++, undo --
-            self.grid[self.cl] = (self.grid[self.cl] - 1) & 0xFF
+        elif opcode == 47:   # : was [CL]++, undo -- (Δp dec)
+            self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
-        elif opcode == 48:   # ; was [CL]--, undo ++
-            self.grid[self.cl] = (self.grid[self.cl] + 1) & 0xFF
+        elif opcode == 48:   # ; was [CL]--, undo ++ (Δp inc)
+            self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
         # Mirrors (incl 34–37) and NOP: no data effect to undo (direction handled above)
 
@@ -553,19 +686,20 @@ class FB2DSimulator:
         count = 0
         for ch in code:
             if ch in OPCODES and count < self.grid_size:
-                self.grid[count] = OPCODES[ch]
+                self.grid[count] = hamming_encode(OPCODES[ch])
                 count += 1
         return count
 
     def place_code(self, row, col, code, vertical=False):
         """Place code onto the grid starting at (row, col).
-        If vertical=True, place going South; else going East."""
+        If vertical=True, place going South; else going East.
+        Opcodes are stored as Hamming(16,11) SECDED codewords."""
         count = 0
         r, c = row, col
         for ch in code:
             if ch in OPCODES:
                 flat = self._to_flat(r % self.rows, c % self.cols)
-                self.grid[flat] = OPCODES[ch]
+                self.grid[flat] = hamming_encode(OPCODES[ch])
                 count += 1
                 if vertical:
                     r += 1
@@ -575,6 +709,7 @@ class FB2DSimulator:
 
     def wrap_code(self, opcodes, width, start_row=0, start_col=0):
         """Wrap a linear opcode sequence into a boustrophedon (serpentine) layout.
+        Opcodes are stored as Hamming(16,11) SECDED codewords.
 
         The IP enters at (start_row, start_col) going East and snakes through
         rows using mirrors at the edges:
@@ -590,7 +725,7 @@ class FB2DSimulator:
         Odd rows (going West):   cols W-2..1 = W-2 opcode slots.
 
         Args:
-            opcodes: list of opcode values (ints) to place
+            opcodes: list of raw opcode values (ints, e.g. 15 for +)
             width:   total grid width (must be >= 4)
             start_row: first row for code (default 0)
             start_col: first col for code on first row (default 0)
@@ -614,7 +749,7 @@ class FB2DSimulator:
         first_row_slots = width - 1 - start_col
         n = min(first_row_slots, total - placed)
         for i in range(n):
-            self.grid[self._to_flat(row, start_col + i)] = ops[placed]
+            self.grid[self._to_flat(row, start_col + i)] = hamming_encode(ops[placed])
             placed += 1
 
         if placed >= total:
@@ -622,7 +757,7 @@ class FB2DSimulator:
             return 1, row, start_col + n - 1, DIR_E
 
         # Need to wrap: place \ at col width-1 to reflect E→S
-        self.grid[self._to_flat(row, width - 1)] = OPCODES['\\']
+        self.grid[self._to_flat(row, width - 1)] = hamming_encode(OPCODES['\\'])
 
         row_count = 1
 
@@ -633,38 +768,38 @@ class FB2DSimulator:
             if row_count % 2 == 0:
                 # Odd-indexed row (0-indexed): going West
                 # / at col width-1 to reflect S→W
-                self.grid[self._to_flat(row, width - 1)] = OPCODES['/']
+                self.grid[self._to_flat(row, width - 1)] = hamming_encode(OPCODES['/'])
 
                 # Opcodes from col width-2 down to col 1
                 slots = width - 2
                 n = min(slots, total - placed)
                 for i in range(n):
-                    self.grid[self._to_flat(row, width - 2 - i)] = ops[placed]
+                    self.grid[self._to_flat(row, width - 2 - i)] = hamming_encode(ops[placed])
                     placed += 1
 
                 if placed >= total:
                     return row_count, row, width - 2 - (n - 1), DIR_W
 
                 # / at col 0 to reflect W→S
-                self.grid[self._to_flat(row, 0)] = OPCODES['/']
+                self.grid[self._to_flat(row, 0)] = hamming_encode(OPCODES['/'])
 
             else:
                 # Even-indexed row: going East
                 # \ at col 0 to reflect S→E
-                self.grid[self._to_flat(row, 0)] = OPCODES['\\']
+                self.grid[self._to_flat(row, 0)] = hamming_encode(OPCODES['\\'])
 
                 # Opcodes from col 1 to col width-2
                 slots = width - 2
                 n = min(slots, total - placed)
                 for i in range(n):
-                    self.grid[self._to_flat(row, 1 + i)] = ops[placed]
+                    self.grid[self._to_flat(row, 1 + i)] = hamming_encode(ops[placed])
                     placed += 1
 
                 if placed >= total:
                     return row_count, row, 1 + (n - 1), DIR_E
 
                 # \ at col width-1 to reflect E→S
-                self.grid[self._to_flat(row, width - 1)] = OPCODES['\\']
+                self.grid[self._to_flat(row, width - 1)] = hamming_encode(OPCODES['\\'])
 
         return row_count, row, 0, DIR_E  # shouldn't reach here
 
@@ -678,12 +813,14 @@ class FB2DSimulator:
         return f"{prefix}{text}{ANSI['reset']}" if prefix else text
 
     def _cell_char(self, value):
-        """Get display character for a grid cell value (always 1 char)."""
-        if value in OPCODE_TO_CHAR:
-            return OPCODE_TO_CHAR[value]
+        """Get display character for a grid cell value (always 1-3 chars).
+        Uses 11-bit payload for opcode lookup."""
+        payload = _CELL_TO_PAYLOAD[value]
+        if payload in OPCODE_TO_CHAR:
+            return OPCODE_TO_CHAR[payload]
         if value < 100:
             return f'{value:2d}'
-        return f'{value:02x}'
+        return f'{value:04x}'
 
     def _cell_display(self, ch):
         """Pad cell char to exactly 3 characters for grid alignment."""
@@ -796,7 +933,7 @@ class FB2DSimulator:
                   f"{self._color('GP', 'yellow')}")
 
     def display_values(self):
-        """Display raw byte values in a grid."""
+        """Display raw cell values in a grid (16-bit)."""
         cl_r, cl_c = self._to_rc(self.cl)
         h0_r, h0_c = self._to_rc(self.h0)
         h1_r, h1_c = self._to_rc(self.h1)
@@ -811,7 +948,7 @@ class FB2DSimulator:
         # Column headers
         hdr = "    "
         for c in range(self.cols):
-            hdr += f"{c:>4}"
+            hdr += f"{c:>6}"
         print(hdr)
 
         for r in range(self.rows):
@@ -822,11 +959,11 @@ class FB2DSimulator:
                 is_ip = (r == self.ip_row and c == self.ip_col)
 
                 if is_ip:
-                    line += self._color(f"{val:>4}", 'bold', 'red')
+                    line += self._color(f"{val:>6}", 'bold', 'red')
                 elif val != 0:
-                    line += f"{val:>4}"
+                    line += f"{val:>6}"
                 else:
-                    line += self._color(f"   ·", 'dim')
+                    line += self._color(f"     ·", 'dim')
             print(line)
 
     def display_both(self):
@@ -1324,7 +1461,7 @@ def interactive_session():
                         if v in OPCODES:
                             sim.grid[flat] = OPCODES[v]
                         else:
-                            sim.grid[flat] = int(v) & 0xFF
+                            sim.grid[flat] = int(v) & CELL_MASK
                     print(f"Set {len(args)-2} values starting at ({r},{c})")
                 else:
                     print("Usage: data <r> <c> <v1> [v2] ...")
@@ -1340,10 +1477,11 @@ def interactive_session():
                         if v in OPCODES:
                             sim.grid[flat] = OPCODES[v]
                         else:
-                            sim.grid[flat] = int(v) & 0xFF
+                            sim.grid[flat] = int(v) & CELL_MASK
                     val = sim.grid[flat]
-                    ch = OPCODE_TO_CHAR.get(val, f'data')
-                    print(f"grid[{r},{c}] = {val} ({ch})")
+                    pl = _CELL_TO_PAYLOAD[val]
+                    ch = OPCODE_TO_CHAR.get(pl, f'data')
+                    print(f"grid[{r},{c}] = {val} (payload={pl}, {ch})")
                 else:
                     print("Usage: cell <r> <c> [value]")
 

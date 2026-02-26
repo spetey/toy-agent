@@ -119,7 +119,7 @@ import os
 
 # Import the simulator
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + '/..')
-from fb2d import FB2DSimulator, OPCODES
+from fb2d import FB2DSimulator, OPCODES, hamming_encode, cell_to_payload
 
 def make_carry_demo(initial_value, num_digits=8, num_increments=1):
     """Build a carry corridor that increments a multi-cell number.
@@ -168,17 +168,17 @@ def make_carry_demo(initial_value, num_digits=8, num_increments=1):
 
     sim = FB2DSimulator(rows=rows, cols=cols)
 
-    # Place number on row 0
+    # Place number on row 0 (Hamming-encoded)
     for i, d in enumerate(digits):
-        sim.grid[sim._to_flat(0, i)] = d
+        sim.grid[sim._to_flat(0, i)] = hamming_encode(d)
 
     # Place carry gadgets on row 2
     for i in range(num_digits):
         base_col = corridor_start_col + i * gadget_width
-        sim.grid[sim._to_flat(2, base_col)] = OPCODES['+']     # [H0]++
-        sim.grid[sim._to_flat(2, base_col + 1)] = OPCODES['%'] # / if [CL]!=0
+        sim.grid[sim._to_flat(2, base_col)] = hamming_encode(OPCODES['+'])     # [H0]++
+        sim.grid[sim._to_flat(2, base_col + 1)] = hamming_encode(OPCODES['%']) # / if [CL]!=0
         if i < num_digits - 1:
-            sim.grid[sim._to_flat(2, base_col + 2)] = OPCODES['E']  # H0 East
+            sim.grid[sim._to_flat(2, base_col + 2)] = hamming_encode(OPCODES['E'])  # H0 East
             # CL also needs to move East. But we have H0 and CL at the same
             # position. CL movement is >.
             # Actually we need BOTH H0 and CL to advance.
@@ -193,21 +193,21 @@ def make_carry_demo(initial_value, num_digits=8, num_increments=1):
 
     sim = FB2DSimulator(rows=rows, cols=cols)
 
-    # Place number on row 0
+    # Place number on row 0 (Hamming-encoded)
     for i, d in enumerate(digits):
-        sim.grid[sim._to_flat(0, i)] = d
+        sim.grid[sim._to_flat(0, i)] = hamming_encode(d)
 
-    # Place carry gadgets on row 2
+    # Place carry gadgets on row 2 (Hamming-encoded opcodes)
     for i in range(num_digits):
         base_col = i * gadget_width
-        sim.grid[sim._to_flat(2, base_col)] = OPCODES['+']     # [H0]++
-        sim.grid[sim._to_flat(2, base_col + 1)] = OPCODES['%'] # / if [CL]!=0
+        sim.grid[sim._to_flat(2, base_col)] = hamming_encode(OPCODES['+'])     # [H0]++
+        sim.grid[sim._to_flat(2, base_col + 1)] = hamming_encode(OPCODES['%']) # / if [CL]!=0
         if i < num_digits - 1:
-            sim.grid[sim._to_flat(2, base_col + 2)] = OPCODES['E']  # H0 East
-            sim.grid[sim._to_flat(2, base_col + 3)] = OPCODES['>']  # CL East
+            sim.grid[sim._to_flat(2, base_col + 2)] = hamming_encode(OPCODES['E'])  # H0 East
+            sim.grid[sim._to_flat(2, base_col + 3)] = hamming_encode(OPCODES['>'])  # CL East
 
         # Place / on row 1 at the % column to catch the upward reflection
-        sim.grid[sim._to_flat(1, base_col + 1)] = OPCODES['/']  # N→E redirect
+        sim.grid[sim._to_flat(1, base_col + 1)] = hamming_encode(OPCODES['/'])  # N→E redirect
 
     # IP starts at row 2, col 0, going East
     sim.ip_row = 2
@@ -225,10 +225,11 @@ def make_carry_demo(initial_value, num_digits=8, num_increments=1):
 
 
 def read_number(sim, num_digits):
-    """Read the LE base-256 number from row 0, cols 0..num_digits-1."""
+    """Read the LE base-256 number from row 0, cols 0..num_digits-1.
+    Extracts payload (11-bit) from each Hamming-encoded cell."""
     result = 0
     for i in range(num_digits - 1, -1, -1):
-        result = result * 256 + sim.grid[sim._to_flat(0, i)]
+        result = result * 256 + (cell_to_payload(sim.grid[sim._to_flat(0, i)]))
     return result
 
 
@@ -242,7 +243,7 @@ def run_test(initial, label=""):
     print(f"{'='*60}")
 
     # Show initial state
-    digits_before = [sim.grid[sim._to_flat(0, i)] for i in range(num_digits)]
+    digits_before = [cell_to_payload(sim.grid[sim._to_flat(0, i)]) for i in range(num_digits)]
     print(f"  Before: {digits_before}  (decimal: {initial})")
 
     sim.display_grid()
@@ -255,7 +256,7 @@ def run_test(initial, label=""):
         if sim.ip_row == 1 and sim.ip_dir == 1:  # row 1, going East
             break
 
-    digits_after = [sim.grid[sim._to_flat(0, i)] for i in range(num_digits)]
+    digits_after = [cell_to_payload(sim.grid[sim._to_flat(0, i)]) for i in range(num_digits)]
     got = read_number(sim, num_digits)
 
     print(f"  After:  {digits_after}  (decimal: {got})")
@@ -266,7 +267,7 @@ def run_test(initial, label=""):
     for _ in range(forward_steps):
         sim.step_back()
 
-    digits_reversed = [sim.grid[sim._to_flat(0, i)] for i in range(num_digits)]
+    digits_reversed = [cell_to_payload(sim.grid[sim._to_flat(0, i)]) for i in range(num_digits)]
     reversed_val = read_number(sim, num_digits)
     reverse_ok = (reversed_val == initial)
 

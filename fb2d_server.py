@@ -4,7 +4,7 @@
 import os
 import json
 from flask import Flask, jsonify, request, send_file, abort
-from fb2d import FB2DSimulator, OPCODE_TO_CHAR, OPCODES
+from fb2d import FB2DSimulator, OPCODE_TO_CHAR, OPCODES, hamming_encode, cell_to_payload
 
 PROGRAMS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'programs')
 
@@ -131,7 +131,7 @@ def save_annotations():
 def set_cell():
     data = request.get_json(force=True)
     r, c, val = int(data['r']), int(data['c']), int(data['value'])
-    if 0 <= r < sim.rows and 0 <= c < sim.cols and 0 <= val <= 255:
+    if 0 <= r < sim.rows and 0 <= c < sim.cols and 0 <= val <= 65535:
         sim.grid[sim._to_flat(r, c)] = val
     return jsonify(serialize_state())
 
@@ -141,7 +141,7 @@ def set_cells():
     data = request.get_json(force=True)
     for cell in data.get('cells', []):
         r, c, val = int(cell['r']), int(cell['c']), int(cell['value'])
-        if 0 <= r < sim.rows and 0 <= c < sim.cols and 0 <= val <= 255:
+        if 0 <= r < sim.rows and 0 <= c < sim.cols and 0 <= val <= 65535:
             sim.grid[sim._to_flat(r, c)] = val
     return jsonify(serialize_state())
 

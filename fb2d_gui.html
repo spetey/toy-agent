@@ -212,6 +212,55 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 
 <script>
 // ── Constants ──────────────────────────────────────────────────
+// Standard-form Hamming(16,11) SECDED:
+//   Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
+//        d10 d9 d8 d7 d6 d5 d4 p3 d3 d2 d1 p2 d0 p1 p0 p∀
+const DATA_POSITIONS = [3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15];
+const DATA_MASK = 0xFEE8;
+const PARITY_POSITIONS = [0, 1, 2, 4, 8]; // p∀, p0, p1, p2, p3
+const SYNDROME_MASKS = [0xAAAA, 0xCCCC, 0xF0F0, 0xFF00];
+const PARITY_MASKS = [0xAAA8, 0xCCC8, 0xF0E0, 0xFE00]; // exclude parity bit itself
+
+function popcount16(x) {
+  x = x - ((x >> 1) & 0x5555);
+  x = (x & 0x3333) + ((x >> 2) & 0x3333);
+  x = (x + (x >> 4)) & 0x0F0F;
+  return (x + (x >> 8)) & 0x1F;
+}
+
+function cellToPayload(cell) {
+  let payload = 0;
+  for (let i = 0; i < 11; i++) {
+    if (cell & (1 << DATA_POSITIONS[i])) payload |= (1 << i);
+  }
+  return payload;
+}
+
+function hammingEncode(payload) {
+  let cell = 0;
+  for (let i = 0; i < 11; i++) {
+    if (payload & (1 << i)) cell |= (1 << DATA_POSITIONS[i]);
+  }
+  // Compute 4 Hamming parity bits at positions 1, 2, 4, 8
+  for (let s = 0; s < 4; s++) {
+    if (popcount16(cell & PARITY_MASKS[s]) & 1) {
+      cell |= (1 << (1 << s));
+    }
+  }
+  // Overall parity at bit 0
+  if (popcount16(cell) & 1) cell |= 1;
+  return cell;
+}
+
+function hammingSyndrome(cell) {
+  let syn = 0;
+  for (let s = 0; s < 4; s++) {
+    if (popcount16(cell & SYNDROME_MASKS[s]) & 1) syn |= (1 << s);
+  }
+  const pAll = popcount16(cell) & 1;
+  return { syn, pAll };
+}
+
 const DIR_ARROWS = ['\u2191', '\u2192', '\u2193', '\u2190']; // N E S W
 const OPCODE_CHARS = {
   0:'\u00b7', 1:'/', 2:'\\', 3:'%', 4:'?', 5:'&', 6:'!',
@@ -668,8 +717,9 @@ function drawRulers(r0, r1, c0, c1) {
 }
 
 function cellChar(val) {
-  if (val in OPCODE_CHARS) return OPCODE_CHARS[val];
-  return val.toString(16).padStart(2, '0');
+  const payload = cellToPayload(val);
+  if (payload in OPCODE_CHARS) return OPCODE_CHARS[payload];
+  return val.toString(16).padStart(4, '0');
 }
 
 // ── Scrollbars ────────────────────────────────────────────────
@@ -907,9 +957,11 @@ canvas.addEventListener('mousemove', (e) => {
     const flat = cell.r * state.cols + cell.c;
     const val = state.grid[flat];
     const ch = cellChar(val);
-    const name = OPCODE_NAMES[val] || (val === 0 ? 'NOP' : `NOP (0x${val.toString(16)})`);
-    const bits = val.toString(2).padStart(8, '0');
-    let text = `(${cell.r},${cell.c}) ${ch} = ${val}  ${bits}  ${name}`;
+    const payload = cellToPayload(val);
+    const name = OPCODE_NAMES[payload] || (payload === 0 ? 'NOP' : `NOP (payload=${payload})`);
+    const { syn, pAll } = hammingSyndrome(val);
+    const synStr = syn === 0 && pAll === 0 ? 'ok' : `${syn}${pAll ? '!' : ''}`;
+    let text = `(${cell.r},${cell.c}) ${ch}  payload=${payload} (0x${payload.toString(16)})  syn=${synStr}  ${name}`;
     const annKey = `${cell.r},${cell.c}`;
     if (annotations.cells[annKey]) {
       text += `\n\uD83D\uDCDD ${annotations.cells[annKey]}`;
@@ -919,7 +971,7 @@ canvas.addEventListener('mousemove', (e) => {
     tooltip.style.top = (my + 16) + 'px';
     tooltip.style.display = 'block';
     document.getElementById('cellInfo').textContent =
-      `(${cell.r},${cell.c}) ${ch}=${val} ${bits} ${name}`;
+      `(${cell.r},${cell.c}) ${ch}  raw=0x${val.toString(16).padStart(4,'0')}  payload=${payload} (0x${payload.toString(16)})  syn=${synStr}  ${name}`;
   } else {
     tooltip.style.display = 'none';
     document.getElementById('cellInfo').textContent = '';
@@ -1248,7 +1300,7 @@ function buildOpcodePicker() {
     }
     html += '</div></div>';
   }
-  html += '<div class="op-raw"><span style="color:#888;font-size:11px">Raw:</span><input type="number" id="rawValueInput" min="0" max="255" placeholder="0-255"><button id="rawValueSet">Set</button></div>';
+  html += '<div class="op-raw"><span style="color:#888;font-size:11px">Raw:</span><input type="number" id="rawValueInput" min="0" max="65535" placeholder="0-65535"><button id="rawValueSet">Set</button></div>';
   picker.innerHTML = html;
 
   // Toggle compact/verbose
@@ -1258,12 +1310,12 @@ function buildOpcodePicker() {
     const savedCell = pickerCell;
     buildOpcodePicker();
     pickerCell = savedCell;
-    // Re-highlight current value
+    // Re-highlight current value (compare payload)
     if (pickerCell && state) {
       const flat = pickerCell.r * state.cols + pickerCell.c;
-      const currentVal = state.grid[flat];
+      const currentPayload = cellToPayload(state.grid[flat]);
       picker.querySelectorAll('.op-btn').forEach(b => {
-        b.classList.toggle('selected', parseInt(b.dataset.code) === currentVal);
+        b.classList.toggle('selected', parseInt(b.dataset.code) === currentPayload);
       });
     }
   });
@@ -1273,13 +1325,14 @@ function buildOpcodePicker() {
     const btn = e.target.closest('.op-btn');
     if (btn && pickerCell) {
       const code = parseInt(btn.dataset.code);
-      setCell(pickerCell.r, pickerCell.c, code);
+      // Encode the opcode as a valid Hamming codeword
+      setCell(pickerCell.r, pickerCell.c, hammingEncode(code));
       closeOpcodePicker();
       return;
     }
     if (e.target.id === 'rawValueSet') {
       const val = parseInt(document.getElementById('rawValueInput').value);
-      if (pickerCell && !isNaN(val) && val >= 0 && val <= 255) {
+      if (pickerCell && !isNaN(val) && val >= 0 && val <= 65535) {
         setCell(pickerCell.r, pickerCell.c, val);
         closeOpcodePicker();
       }
@@ -1311,11 +1364,11 @@ function showOpcodePicker(r, c, px, py) {
   picker.style.top = top + 'px';
   picker.style.display = 'block';
 
-  // Highlight current value
+  // Highlight current value (compare payload to opcode)
   const flat = r * state.cols + c;
-  const currentVal = state.grid[flat];
+  const currentPayload = cellToPayload(state.grid[flat]);
   picker.querySelectorAll('.op-btn').forEach(b => {
-    b.classList.toggle('selected', parseInt(b.dataset.code) === currentVal);
+    b.classList.toggle('selected', parseInt(b.dataset.code) === currentPayload);
   });
 }
 
