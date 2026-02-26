@@ -102,9 +102,9 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `l` | 41 | [H0] rotate left 1 bit — inverse: `r` |
 | `f` | 42 | if [CL]&1: swap([H0], [H1]) — bit-0 Fredkin |
 | `z` | 43 | swap(bit0 of [H0], bit0 of [GP]) |
-| `R` | 44 | [H0] rotate right by ([CL]&7) bits — inverse: `L` |
-| `L` | 45 | [H0] rotate left by ([CL]&7) bits — inverse: `R` |
-| `Y` | 46 | [H0] ^= ror([H1], [CL]&7) — fused rotate-XOR, self-inverse |
+| `R` | 44 | [H0] rotate right by ([CL]&15) bits — inverse: `L` |
+| `L` | 45 | [H0] rotate left by ([CL]&15) bits — inverse: `R` |
+| `Y` | 46 | [H0] ^= ror([H1], [CL]&15) — fused rotate-XOR, self-inverse |
 | `:` | 47 | [CL]++ — inverse: `;` |
 | `;` | 48 | [CL]-- — inverse: `:` |
 

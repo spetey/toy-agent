@@ -70,8 +70,8 @@ into the grid for data access:
 
 Code and data share the same surface (von Neumann architecture). The
 ISA has 48 opcodes (byte-level arithmetic, bit-level operations, head
-movement, mirrors, and garbage-pointer operations). See `CLAUDE.md` for
-the full ISA reference.
+movement, mirrors, and garbage-pointer operations). See
+[`docs/isa.md`](docs/isa.md) for the full ISA reference.
 
 ### 16-Bit Cells
 
@@ -102,6 +102,38 @@ The barrel-shifter gadget corrects single-bit errors in 336 ops:
 
 See `docs/barrel-shifter-correction.md` for a full walkthrough.
 
+## Browser GUI
+
+A browser-based visual simulator with full stepping, editing, and
+annotation support. Requires Flask (`pip install flask`).
+
+```bash
+python3 fb2d_server.py
+# Open http://localhost:5000
+```
+
+**Features:**
+
+- **Canvas grid display** with color-coded head markers: IP (red),
+  H0 (cyan), H1 (green), CL (purple), GP (gold)
+- **Stepping**: forward/back by 1 or 10 steps, play/pause with adjustable
+  speed, reset to step 0
+- **Navigation**: drag to pan, scroll wheel to zoom, fit-to-grid, follow-IP
+  modes (center, edge, off)
+- **Cell tooltips**: hover any cell to see its payload (decoded from the
+  16-bit SECDED codeword), Hamming syndrome status, and opcode name
+- **Edit mode** (`E`): click a cell to open the opcode picker (grouped by
+  category), drag to select regions, copy/cut/paste/delete, save to file.
+  Raw 16-bit values can also be set directly.
+- **Annotations**: right-click a cell to add a note (shown with an orange
+  dot); shift+drag to label a rectangular region
+- **Keyboard shortcuts**: arrow keys (step), Space (play/pause), `R`
+  (reset), `F` (fit), `+`/`-` (zoom), `E` (edit mode), `?` (help overlay)
+
+The server wraps the same `FB2DSimulator` used by the CLI REPL, so both
+interfaces operate on the same engine. Load any `.fb2d` file from the
+dropdown to explore it visually.
+
 ## ifb (intermediate fuckbrain)
 
 A Janus-like imperative language that compiles to fb2d grid files:
@@ -129,7 +161,7 @@ end
 
 ```
 fb2d.py                          Simulator (interactive REPL, 16-bit cells)
-fb2d_server.py                   WebSocket server for browser GUI
+fb2d_server.py                   Flask server for browser GUI
 fb2d_gui.html                    Browser-based GUI simulator
 ifbc.py                          ifb-to-fb2d compiler
 programs/                        Example programs
@@ -140,6 +172,7 @@ programs/                        Example programs
   *.fb2d                         State files (loadable in simulator)
   *.ifb                          ifb source files
 docs/                            Design documents
+  isa.md                         ISA reference (48 opcodes, v1.8)
   barrel-shifter-correction.md   Barrel-shifter correction algorithm walkthrough
   tc_proof_sketch.md             Turing completeness proof sketch
   nested-loops-notes.md          Nested loop implementation notes
