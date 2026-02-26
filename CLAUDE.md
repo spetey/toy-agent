@@ -23,13 +23,13 @@ based on brainfuck. ("fuckbrain" = reversible brainfuck.)
 fb2d is a 2D reversible esoteric language where:
 - An instruction pointer (IP) moves on a toroidal grid
 - Mirrors (`/`, `\`) and conditional mirrors change IP direction
-- Multiple heads (H0, H1, CL, GP) point into the grid for data access
+- Multiple heads (H0, H1, H2, CL, GP) point into the grid for data access
 - Code and data share the same surface (von Neumann architecture)
 
 ## Notation Convention
 
-- `H0`, `H1`, `CL`, `GP` = head *positions* (addresses)
-- `[H0]`, `[H1]`, `[CL]`, `[GP]` = *values* at those positions
+- `H0`, `H1`, `H2`, `CL`, `GP` = head *positions* (addresses)
+- `[H0]`, `[H1]`, `[H2]`, `[CL]`, `[GP]` = *values* at those positions
 - `H0++` = move head (e.g., East)
 - `[H0]++` = increment cell value
 
@@ -60,7 +60,7 @@ fb2d is a 2D reversible esoteric language where:
 - **`old-files/2d-older/`** — Earlier 2D simulator iterations.
 - **`old-files/ifbc-02.py`** — Previous compiler version.
 
-## ISA Summary (v1.8, 48 opcodes + NOP)
+## ISA Summary (v1.9, 56 opcodes + NOP)
 
 ### Mirrors
 | Op | Code | Meaning |
@@ -79,6 +79,7 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 |----|------|---------|
 | `N/S/E/W` | 7-10 | H0 move North/South/East/West |
 | `n/s/e/w` | 11-14 | H1 move North/South/East/West |
+| `H/h/a/d` | 49-52 | H2 move North/South/East/West |
 | `^/v/>/< ` | 25-26,23-24 | CL move N/S/E/W |
 | `{/}/]/[` | 32,31,29,30 | GP move N/S/E/W |
 
@@ -120,14 +121,30 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `K` | 33 | swap(CL_register, GP_register) |
 | `Z` | 38 | swap([H0], [GP]) — byte-level GP swap |
 
+### H2 (Scan Head) Ops (v1.9)
+| Op | Code | Meaning |
+|----|------|---------|
+| `m` | 53 | [H0] += [H2] — copy-in (Δp parity) |
+| `M` | 54 | [H0] -= [H2] — uncompute copy (Δp parity) |
+| `j` | 55 | [H2] ^= [H0] — write-back (raw 16-bit, self-inverse) |
+| `V` | 56 | swap([CL], [H2]) — test bridge (self-inverse) |
+
+H2 is a programmable scan head for cross-gadget correction.
+In the dual-gadget architecture, each gadget's H2 points at the
+other gadget's code cells. The copy-down pattern: `m` copies a
+remote codeword to a local GP cell, correction runs locally,
+then `j` writes the correction mask back to the remote cell.
+
 ### Reversibility Pairs
 - `+` / `-` are inverses
 - `.` / `,` are inverses
+- `m` / `M` are inverses
 - `r` / `l` are inverses
 - `R` / `L` are inverses
 - `:` / `;` are inverses
+- `H`/`h`, `a`/`d` are inverses (H2 head movement)
 - `N`/`S`, `E`/`W`, etc. are inverses (all head movement pairs)
-- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y` are self-inverse
+- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`, `j`, `V` are self-inverse
 
 ## ifb Language (intermediate fuckbrain)
 
@@ -242,32 +259,52 @@ Upgrade from 8-bit to 16-bit cells with systematic Hamming(16,11) SECDED:
 - Arithmetic ops (+, -, ., ,, :, ;) preserve the Hamming invariant via
   Δp parity fixup. Bijective on all 65536 values, not just valid codewords.
 
+### H2 Scan Head and Copy-Down Architecture (v1.9)
+
+For mutual correction, each gadget needs to read/correct the other's
+code. Problem: H0 shuttles between the GP row and the data row 6 times
+per cycle in the existing gadget — this doesn't scale when the target
+code is on distant rows in a boustrophedon layout.
+
+Solution: **copy-down pattern** using the H2 scan head.
+- H2 is a programmable head that each gadget steers through the other's
+  code cells (eventually with adaptive boundary detection).
+- `m` copies [H2] to a local GP-row cell (since it's zero).
+- All correction logic runs locally on the GP row (H0, H1, CL, GP).
+- `M` uncomputes the local copy (before writing back, so remote is still
+  original and the subtraction cleanly zeroes).
+- `j` writes the correction mask back: [H2] ^= [H0].
+- `V` enables boundary detection: swap [CL] ↔ [H2] to test remote cells
+  with conditional mirrors.
+
+This means only H2 touches remote rows; all other heads stay local.
+
 ### Adaptive Sweep Boundaries (Future)
 
 Instead of hardcoding which rows each gadget sweeps, detect agent
-boundaries adaptively by testing for N consecutive NOPs. Implementation:
-nested conditional mirrors — each level moves H0 east, loads the cell
-value into a testable head (CL via T), and tests with `?` (CL==0). If
-all N tests pass (N consecutive NOPs), take the "reverse" path. If any
-test fails, backtrack head movements and continue sweeping. N=3 or 4
-should suffice.
+boundaries adaptively by testing for N consecutive NOPs. H2 probes ahead,
+`V` swaps the cell value into CL for testing with `?`/`%`, then `V`
+restores. Nest N deep for "N consecutive NOPs = boundary."
 
-Open problem: we currently have no "test for NOP" opcode — only ==0 and
-!=0 tests. For 16-bit cells, NOP is any payload not in {1–48}, not just
-zero. A range test or opcode-validity test may be needed as a new opcode.
-For now, hardcode sweep ranges.
+Open problem: on a non-zero-background grid (where agents earn energy by
+metabolizing compressible non-zero data), NOP detection can't just test
+for zero. Need a range test: "is payload > 56?" (above all valid opcodes).
+A dedicated opcode-validity test may be needed, or a subtraction-based
+range check using existing ops. For now, hardcode sweep ranges.
 
 ### Development Roadmap
 
-1. Upgrade to 16-bit cells with systematic Hamming(16,11) SECDED, so that
-   opcodes are Hamming-protected codewords.
-2. Build new Hamming(16,11) correction gadget.
-3. Add multiple IP support to the simulator.
-4. Start with infinite zero reservoir (special GP row), get two correction
-   gadgets correcting each other under simulated noise.
-5. Add simple compression (XOR-of-identical-pairs) to replace infinite
-   reservoir with finite fuel.
-6. Explore adaptive sweep boundaries and learning/adaptation.
+1. ~~Upgrade to 16-bit cells with systematic Hamming(16,11) SECDED.~~ ✓
+2. ~~Build Hamming(16,11) correction gadget (sliding-window).~~ ✓
+3. ~~Add H2 scan head for cross-gadget correction.~~ ✓
+4. **[CURRENT]** Two gadgets correcting each other with hardcoded layout,
+   using copy-down pattern (m/M/j ops via H2).
+5. Add multiple IP support to the simulator.
+6. Simulated noise: verify mutual correction under random bit flips.
+7. Add simple compression (XOR-of-identical-pairs) to replace infinite
+   zero reservoir with finite fuel.
+8. Adaptive sweep boundaries via H2 + V probe.
+9. Non-zero background: agents metabolize compressible data for energy.
 
 ## Design Decisions Log
 
@@ -280,3 +317,10 @@ For now, hardcode sweep ranges.
   Loops use `( P ... %` pattern. Nested loops use monotonic GP advance.
 - **Zero-terminated LE base-256**: the chosen multi-cell integer encoding.
   The zero terminator doubles as a growth digit on carry overflow.
+- **H2 scan head (v1.9)**: programmable head for cross-gadget correction.
+  Chosen over auto-boustrophedon head because: (a) on large grids, the
+  scanning pattern should be in gadget code, not hardware; (b) agents need
+  to detect boundaries adaptively, not assume a fixed sweep topology;
+  (c) programmable H2 + `V` test bridge enables future boundary detection.
+  Key insight: copy-down pattern (`m`/`M`/`j`) means only H2 touches
+  remote rows, eliminating the H0 shuttle problem entirely.
