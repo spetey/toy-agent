@@ -110,8 +110,8 @@ OPCODES = {
     'h':  50,  # H2 move South (inverse: H)
     'a':  51,  # H2 move East  (inverse: d)
     'd':  52,  # H2 move West  (inverse: a)
-    'm':  53,  # payload(H0) += payload(H2) with Δp  (copy-in, inverse: M)
-    'M':  54,  # payload(H0) -= payload(H2) with Δp  (uncompute, inverse: m)
+    'm':  53,  # [H0] ^= [H2]  (raw 16-bit XOR, self-inverse, copy-in/uncompute)
+    'M':  54,  # payload(H0) -= payload(H2) with Δp  (inverse: see notes)
     'j':  55,  # [H2] ^= [H0]  (raw 16-bit write-back, self-inverse)
     'V':  56,  # swap([CL], [H2])  (test bridge, self-inverse)
 }
@@ -504,11 +504,8 @@ class FB2DSimulator:
             dirs = {49: DIR_N, 50: DIR_S, 51: DIR_E, 52: DIR_W}
             self.h2 = self._move_head(self.h2, dirs[opcode])
 
-        elif opcode == 53:   # m payload(H0) += payload(H2) with Δp (copy-in)
-            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-            _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h2]])) & PAYLOAD_MASK
-            _fl = _op ^ _np
-            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+        elif opcode == 53:   # m [H0] ^= [H2]  (raw 16-bit XOR, self-inverse)
+            self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h2]
 
         elif opcode == 54:   # M payload(H0) -= payload(H2) with Δp (uncompute)
             _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
@@ -696,11 +693,8 @@ class FB2DSimulator:
         elif opcode in (49, 50, 51, 52):    # H2 was moved, undo
             self.h2 = self._move_head(self.h2, HEAD_MOVE_INVERSE[opcode])
 
-        elif opcode == 53:   # m was +=, undo -= (Δp sub)
-            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-            _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h2]])) & PAYLOAD_MASK
-            _fl = _op ^ _np
-            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+        elif opcode == 53:   # m XOR is self-inverse
+            self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h2]
 
         elif opcode == 54:   # M was -=, undo += (Δp add)
             _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
@@ -1411,7 +1405,7 @@ ISA ({opcount} opcodes + NOP):
   Data/GP swap:
     Z (38)  swap([H0], [GP])  (byte-level, zero a variable)
   H2 data (scan head, v1.9):
-    m (53)  [H0] += [H2]  (copy-in, Δp)      M (54)  [H0] -= [H2]  (uncompute, Δp)
+    m (53)  [H0] ^= [H2]  (raw XOR, self-inv) M (54)  [H0] -= [H2]  (Δp payload sub)
     j (55)  [H2] ^= [H0]  (write-back, raw 16-bit, self-inverse)
     V (56)  swap([CL], [H2])  (test bridge, self-inverse)
   Notation: H0 = head position, [H0] = value at that position

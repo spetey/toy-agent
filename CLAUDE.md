@@ -124,8 +124,8 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 ### H2 (Scan Head) Ops (v1.9)
 | Op | Code | Meaning |
 |----|------|---------|
-| `m` | 53 | [H0] += [H2] — copy-in (Δp parity) |
-| `M` | 54 | [H0] -= [H2] — uncompute copy (Δp parity) |
+| `m` | 53 | [H0] ^= [H2] — raw 16-bit XOR (self-inverse, copy-in/uncompute) |
+| `M` | 54 | payload(H0) -= payload(H2) — Δp payload subtract |
 | `j` | 55 | [H2] ^= [H0] — write-back (raw 16-bit, self-inverse) |
 | `V` | 56 | swap([CL], [H2]) — test bridge (self-inverse) |
 
@@ -138,7 +138,7 @@ then `j` writes the correction mask back to the remote cell.
 ### Reversibility Pairs
 - `+` / `-` are inverses
 - `.` / `,` are inverses
-- `m` / `M` are inverses
+- `m` is self-inverse (raw XOR)
 - `r` / `l` are inverses
 - `R` / `L` are inverses
 - `:` / `;` are inverses
