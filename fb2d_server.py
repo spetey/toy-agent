@@ -25,6 +25,7 @@ def serialize_state():
         'cl': sim.cl,
         'h0': sim.h0,
         'h1': sim.h1,
+        'h2': sim.h2,
         'gp': sim.gp,
         'step_count': sim.step_count,
         'current_file': current_file,
@@ -229,6 +230,7 @@ def resize_grid():
     sim.cl = min(sim.cl, sim.grid_size - 1)
     sim.h0 = min(sim.h0, sim.grid_size - 1)
     sim.h1 = min(sim.h1, sim.grid_size - 1)
+    sim.h2 = min(sim.h2, sim.grid_size - 1)
     sim.gp = min(sim.gp, sim.grid_size - 1)
     sim.selection = None
     sim.clipboard = None

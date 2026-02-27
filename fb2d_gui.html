@@ -24,6 +24,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 .head-cl { color: #da70d6; }
 .head-h0 { color: #00ced1; }
 .head-h1 { color: #32cd32; }
+.head-h2 { color: #4da6ff; }
 .head-gp { color: #ffd700; }
 
 #canvasWrap { flex: 1; position: relative; overflow: hidden; cursor: grab; }
@@ -136,6 +137,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
   <span class="head-label head-cl" id="clStatus">CL:0</span>
   <span class="head-label head-h0" id="h0Status">H0:0</span>
   <span class="head-label head-h1" id="h1Status">H1:0</span>
+  <span class="head-label head-h2" id="h2Status">H2:0</span>
   <span class="head-label head-gp" id="gpStatus">GP:0</span>
   <span id="gridSize" style="color:#666; margin-left:auto;"></span>
 </div>
@@ -270,7 +272,9 @@ const OPCODE_CHARS = {
   31:'}', 32:'{', 33:'K', 34:'(', 35:')', 36:'#', 37:'$', 38:'Z',
   39:'x', 40:'r', 41:'l', 42:'f', 43:'z',
   44:'R', 45:'L', 46:'Y',
-  47:':', 48:';'
+  47:':', 48:';',
+  49:'H', 50:'h', 51:'a', 52:'d',
+  53:'m', 54:'M', 55:'j', 56:'V'
 };
 
 const OPCODE_NAMES = {
@@ -286,14 +290,16 @@ const OPCODE_NAMES = {
   36:'/if[GP]==0', 37:'/if[GP]!=0', 38:'swap([H0],[GP])',
   39:'XOR', 40:'rot right', 41:'rot left', 42:'bit Fredkin', 43:'bit GP swap',
   44:'rot right by [CL]', 45:'rot left by [CL]', 46:'XOR rot (fused)',
-  47:'[CL]++', 48:'[CL]--'
+  47:'[CL]++', 48:'[CL]--',
+  49:'H2 North', 50:'H2 South', 51:'H2 East', 52:'H2 West',
+  53:'[H0]^=[H2]', 54:'payload-=[H2]', 55:'[H2]^=[H0]', 56:'swap([CL],[H2])'
 };
 
 const COLORS = {
-  ip: '#ff6b6b', cl: '#da70d6', h0: '#00ced1', h1: '#32cd32', gp: '#ffd700',
+  ip: '#ff6b6b', cl: '#da70d6', h0: '#00ced1', h1: '#32cd32', h2: '#4da6ff', gp: '#ffd700',
   ipBg: 'rgba(255,107,107,0.7)', clBg: 'rgba(218,112,214,0.35)',
   h0Bg: 'rgba(0,206,209,0.35)', h1Bg: 'rgba(50,205,50,0.35)',
-  gpBg: 'rgba(255,215,0,0.3)',
+  h2Bg: 'rgba(77,166,255,0.35)', gpBg: 'rgba(255,215,0,0.3)',
   gridBg: '#1a1a2e', cellBg: '#1e1e3a', zeroBg: '#1a1a2e',
   gridLine: '#2a2a4a', text: '#c0c0c0', dimText: '#555',
   annDot: '#ff9f43', regionFill: 'rgba(68,136,255,0.15)', regionStroke: '#4488ff'
@@ -441,6 +447,7 @@ function updateStatus() {
   document.getElementById('clStatus').textContent = `CL:${rc(state.cl)}`;
   document.getElementById('h0Status').textContent = `H0:${rc(state.h0)}`;
   document.getElementById('h1Status').textContent = `H1:${rc(state.h1)}`;
+  document.getElementById('h2Status').textContent = `H2:${rc(state.h2)}`;
   document.getElementById('gpStatus').textContent = `GP:${rc(state.gp)}`;
   document.getElementById('stepDisplay').textContent = `Step ${state.step_count}`;
   document.getElementById('gridSize').textContent = `${state.rows}\u00d7${state.cols}`;
@@ -554,6 +561,7 @@ function render() {
   const clR = Math.floor(state.cl / cols), clC = state.cl % cols;
   const h0R = Math.floor(state.h0 / cols), h0C = state.h0 % cols;
   const h1R = Math.floor(state.h1 / cols), h1C = state.h1 % cols;
+  const h2R = Math.floor(state.h2 / cols), h2C = state.h2 % cols;
   const gpR = Math.floor(state.gp / cols), gpC = state.gp % cols;
 
   // Draw region annotations (behind cells)
@@ -595,12 +603,14 @@ function render() {
       const isCL = (r === clR && c === clC);
       const isH0 = (r === h0R && c === h0C);
       const isH1 = (r === h1R && c === h1C);
+      const isH2 = (r === h2R && c === h2C);
       const isGP = (r === gpR && c === gpC);
 
       if (isIP) ctx.fillStyle = COLORS.ipBg;
       else if (isCL) ctx.fillStyle = COLORS.clBg;
       else if (isH0) ctx.fillStyle = COLORS.h0Bg;
       else if (isH1) ctx.fillStyle = COLORS.h1Bg;
+      else if (isH2) ctx.fillStyle = COLORS.h2Bg;
       else if (isGP) ctx.fillStyle = COLORS.gpBg;
       else ctx.fillStyle = val === 0 ? COLORS.zeroBg : COLORS.cellBg;
 
@@ -616,6 +626,7 @@ function render() {
         if (isCL) { ctx.strokeStyle = COLORS.cl; ctx.lineWidth = 2; ctx.strokeRect(px+1, py+1, cs-2, cs-2); }
         if (isH0) { ctx.strokeStyle = COLORS.h0; ctx.lineWidth = 2; ctx.strokeRect(px+1, py+1, cs-2, cs-2); }
         if (isH1) { ctx.strokeStyle = COLORS.h1; ctx.lineWidth = 1.5; ctx.strokeRect(px+2, py+2, cs-4, cs-4); }
+        if (isH2) { ctx.strokeStyle = COLORS.h2; ctx.lineWidth = 1.5; ctx.strokeRect(px+2, py+2, cs-4, cs-4); }
         if (isGP) { ctx.strokeStyle = COLORS.gp; ctx.lineWidth = 1; ctx.strokeRect(px+3, py+3, cs-6, cs-6); }
       }
 
@@ -1277,6 +1288,8 @@ const OPCODE_GROUPS = [
   { label: 'Bit Data', ops: [[39,'x'], [40,'r'], [41,'l'], [42,'f'], [43,'z'], [44,'R'], [45,'L'], [46,'Y'], [47,':'], [48,';']] },
   { label: 'GP Data', ops: [[27,'P'], [28,'Q'], [33,'K'], [38,'Z']] },
   { label: 'GP Mirrors', ops: [[34,'('], [35,')'], [36,'#'], [37,'$']] },
+  { label: 'H2 Move', ops: [[49,'H'], [50,'h'], [51,'a'], [52,'d']] },
+  { label: 'H2 Data', ops: [[53,'m'], [54,'M'], [55,'j'], [56,'V']] },
 ];
 
 let pickerCell = null;

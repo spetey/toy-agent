@@ -282,6 +282,159 @@ def build_h2_correction_gadget():
     return gb.ops
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Grid layout builders
+# ═══════════════════════════════════════════════════════════════════
+
+def place_boustrophedon(sim, op_values, left_col, right_col, start_row):
+    """Place Hamming-encoded opcodes in boustrophedon layout.
+
+    The IP enters at (start_row, left_col) going East and snakes through
+    rows using mirrors at the column boundaries.
+
+    Does NOT place the final turn mirror on the last row (leaves the IP
+    free to continue into the return corridor).
+
+    Returns: (rows_used, end_row, last_op_col, end_dir)
+    """
+    total = len(op_values)
+    if total == 0:
+        return 0, start_row, left_col, 1
+
+    placed = 0
+    row = start_row
+    row_count = 0
+
+    while placed < total:
+        row_count += 1
+
+        if row_count == 1:
+            # First row: going East, code from left_col to right_col-1
+            # Mirror \ at right_col to turn E→S
+            slots = right_col - left_col   # e.g. 61-2 = 59
+            n = min(slots, total - placed)
+            for i in range(n):
+                sim.grid[sim._to_flat(row, left_col + i)] = hamming_encode(
+                    op_values[placed])
+                placed += 1
+            if placed >= total:
+                return row_count, row, left_col + n - 1, 1  # DIR_E
+            sim.grid[sim._to_flat(row, right_col)] = hamming_encode(OP['\\'])
+
+        elif row_count % 2 == 0:
+            # Even row_count: going West
+            # / at right_col (entry: S→W), code from right_col-1 to left_col+1
+            sim.grid[sim._to_flat(row, right_col)] = hamming_encode(OP['/'])
+            slots = right_col - left_col - 1   # e.g. 61-2-1 = 58
+            n = min(slots, total - placed)
+            for i in range(n):
+                sim.grid[sim._to_flat(row, right_col - 1 - i)] = hamming_encode(
+                    op_values[placed])
+                placed += 1
+            if placed >= total:
+                return row_count, row, right_col - 1 - (n - 1), 3  # DIR_W
+            sim.grid[sim._to_flat(row, left_col)] = hamming_encode(OP['/'])
+
+        else:
+            # Odd row_count (not first): going East
+            # \ at left_col (entry: S→E), code from left_col+1 to right_col-1
+            sim.grid[sim._to_flat(row, left_col)] = hamming_encode(OP['\\'])
+            slots = right_col - left_col - 1
+            n = min(slots, total - placed)
+            for i in range(n):
+                sim.grid[sim._to_flat(row, left_col + 1 + i)] = hamming_encode(
+                    op_values[placed])
+                placed += 1
+            if placed >= total:
+                return row_count, row, left_col + 1 + (n - 1), 1  # DIR_E
+            sim.grid[sim._to_flat(row, right_col)] = hamming_encode(OP['\\'])
+
+        row += 1
+
+    return row_count, row - 1, left_col, 1  # shouldn't reach here
+
+
+def make_h2_boustrophedon_torus(cases, first_cw_col=2,
+                                 grid_width=64, code_left=2, code_right=61):
+    """Build a boustrophedon torus for H2-based correction.
+
+    Layout:
+      Row 0:       REMOTE — codewords (H2 scans here)
+      Rows 1..R:   CODE   — boustrophedon in cols code_left..code_right
+      Row R+1:     GP     — scratch cells (all zero)
+      Col 1:       return corridor (mirrors on first and last code rows)
+
+    cases: list of (payload_11bit, error_bit_or_None)
+
+    Returns: (sim, expected_results, cycle_length, gp_start_col)
+    """
+    code_ops = build_h2_correction_gadget()
+    op_values = [OP[ch] for ch in code_ops]
+    n_ops = len(op_values)
+    n = len(cases)
+
+    # How many code rows?
+    first_row_slots = code_right - code_left      # 59
+    inner_slots = code_right - code_left - 1       # 58
+    if n_ops <= first_row_slots:
+        code_rows = 1
+    else:
+        remaining = n_ops - first_row_slots
+        code_rows = 1 + -(-remaining // inner_slots)   # ceiling division
+
+    first_code_row = 1
+    last_code_row = first_code_row + code_rows - 1
+    gp_row = last_code_row + 1
+    n_rows = gp_row + 1
+
+    # GP layout
+    gp_start_col = first_cw_col - DSL_CWL   # EV at col 0
+    max_gp_col = gp_start_col + n - 1 + DSL_ROT
+    assert max_gp_col < grid_width, (
+        f"Too many codewords ({n}): GP scratch extends to col {max_gp_col}"
+        f" but grid is only {grid_width} wide")
+
+    sim = FB2DSimulator(rows=n_rows, cols=grid_width)
+
+    # Place code via boustrophedon
+    rows_used, end_row, last_op_col, end_dir = place_boustrophedon(
+        sim, op_values, code_left, code_right, start_row=first_code_row)
+
+    # Return corridor at col 1
+    # \ at (last_code_row, 1): W→N
+    sim.grid[sim._to_flat(last_code_row, 1)] = hamming_encode(OP['\\'])
+    # / at (first_code_row, 1): N→E
+    sim.grid[sim._to_flat(first_code_row, 1)] = hamming_encode(OP['/'])
+
+    # Place test codewords on REMOTE_ROW
+    expected = []
+    for i, (payload, error_bit) in enumerate(cases):
+        cw = encode(payload)
+        if error_bit is not None:
+            bad = inject_error(cw, error_bit)
+        else:
+            bad = cw
+        expected.append(cw)
+        sim.grid[sim._to_flat(REMOTE_ROW, first_cw_col + i)] = bad
+
+    # Initial head positions
+    sim.ip_row = first_code_row
+    sim.ip_col = code_left
+    sim.ip_dir = 1    # East
+
+    sim.h0 = sim._to_flat(gp_row, gp_start_col + DSL_CWL)
+    sim.h1 = sim._to_flat(gp_row, gp_start_col + DSL_CWL)
+    sim.h2 = sim._to_flat(REMOTE_ROW, first_cw_col)
+    sim.cl = sim._to_flat(gp_row, gp_start_col + DSL_ROT)
+    sim.gp = sim._to_flat(gp_row, gp_start_col + DSL_EV)
+
+    # Cycle length: rows_used * (code_width + 1)
+    code_width = code_right - code_left + 1
+    cycle_length = rows_used * (code_width + 1)
+
+    return sim, expected, cycle_length, gp_start_col
+
+
 def make_h2_test_torus(cases, first_cw_col=2):
     """Build a linear torus to test H2-based correction.
 
@@ -339,15 +492,26 @@ def make_h2_test_torus(cases, first_cw_col=2):
     return sim, expected, cycle_length, gp_start_col
 
 
-def run_h2_test(cases, verbose=True, check_reverse=True):
+def run_h2_test(cases, verbose=True, check_reverse=True,
+                make_torus_fn=None):
     """Test H2-based correction on remote codewords.
+
+    Args:
+        make_torus_fn: optional torus builder function(cases, first_cw_col=2)
+            -> (sim, expected, cycle_length, gp_start_col).
+            Defaults to make_h2_test_torus (linear layout).
 
     Returns: bool (all tests passed)
     """
+    if make_torus_fn is None:
+        make_torus_fn = make_h2_test_torus
     n = len(cases)
     first_cw_col = 2
-    sim, expected, cycle_length, gp_start_col = make_h2_test_torus(
+    sim, expected, cycle_length, gp_start_col = make_torus_fn(
         cases, first_cw_col=first_cw_col)
+
+    # GP row is always the last row (works for both linear and boustrophedon)
+    gp_row = sim.rows - 1
 
     # Run N cycles
     total_steps = n * cycle_length
@@ -375,10 +539,10 @@ def run_h2_test(cases, verbose=True, check_reverse=True):
     final_h2 = first_cw_col + n
 
     heads_ok = True
-    h0_exp = sim._to_flat(GP_ROW, final_cw)
-    h1_exp = sim._to_flat(GP_ROW, final_cw)
-    gp_exp = sim._to_flat(GP_ROW, final_gp)
-    cl_exp = sim._to_flat(GP_ROW, final_rot)
+    h0_exp = sim._to_flat(gp_row, final_cw)
+    h1_exp = sim._to_flat(gp_row, final_cw)
+    gp_exp = sim._to_flat(gp_row, final_gp)
+    cl_exp = sim._to_flat(gp_row, final_rot)
     h2_exp = sim._to_flat(REMOTE_ROW, final_h2)
 
     if sim.h0 != h0_exp or sim.h1 != h1_exp or sim.gp != gp_exp \
@@ -400,7 +564,7 @@ def run_h2_test(cases, verbose=True, check_reverse=True):
         dirty = 0
         for i in range(n):
             ev_col = gp_start_col + DSL_EV + i
-            if sim.grid[sim._to_flat(GP_ROW, ev_col)] != 0:
+            if sim.grid[sim._to_flat(gp_row, ev_col)] != 0:
                 dirty += 1
         print(f"    Dirty trail: {dirty}/{n} waste cells nonzero")
 
@@ -429,7 +593,7 @@ def run_h2_test(cases, verbose=True, check_reverse=True):
 
         # Check GP row clean
         for col in range(sim.cols):
-            v = sim.grid[sim._to_flat(GP_ROW, col)]
+            v = sim.grid[sim._to_flat(gp_row, col)]
             if v != 0:
                 reverse_ok = False
                 if verbose:
@@ -519,7 +683,98 @@ def test_h2_random():
     return ok
 
 
+def test_h2_boustrophedon():
+    """Test: H2 correction with boustrophedon code layout."""
+    print("=== H2 boustrophedon layout ===")
+    cases = [
+        (42, 3),     # standard error
+        (100, 7),    # mid-range
+        (0, None),   # no error
+        (2047, 15),  # max payload, high bit
+    ]
+    ok = run_h2_test(cases, make_torus_fn=make_h2_boustrophedon_torus)
+    print(f"  {'PASS' if ok else 'FAIL'}")
+    return ok
+
+
+def test_h2_boustrophedon_all_positions():
+    """Test: all 16 error positions in boustrophedon layout."""
+    print("=== H2 boustrophedon all 16 error positions ===")
+    cases = [(42, bit) for bit in range(16)]
+    ok = run_h2_test(cases, verbose=False,
+                     make_torus_fn=make_h2_boustrophedon_torus)
+    if ok:
+        print(f"  All 16 error positions: PASS")
+    else:
+        run_h2_test(cases, verbose=True,
+                    make_torus_fn=make_h2_boustrophedon_torus)
+        print(f"  FAIL")
+    return ok
+
+
+def save_demo(filename=None, payload=42, error_bit=3):
+    """Save a loadable .fb2d file with one corrupted codeword.
+
+    Uses boustrophedon layout (8×64 grid) for readable display.
+
+    Usage from command line:
+        python3 programs/dual-gadget-demo.py --save
+        python3 programs/dual-gadget-demo.py --save --payload 100 --error 7
+
+    Then in the interactive simulator:
+        python3 fb2d.py
+        > load h2-correction-demo
+        > s 366     (one full cycle — corrects the codeword)
+        > show
+    """
+    cases = [(payload, error_bit)]
+    sim, expected, cycle_length, gp_start_col = make_h2_boustrophedon_torus(
+        cases, first_cw_col=2)
+    gp_row = sim.rows - 1
+
+    if filename is None:
+        filename = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            'h2-correction-demo.fb2d')
+
+    sim.save_state(filename)
+
+    cw = encode(payload)
+    bad = inject_error(cw, error_bit) if error_bit is not None else cw
+    err_desc = f"bit {error_bit}" if error_bit is not None else "none"
+
+    print(f"Saved: {filename}")
+    print(f"  Grid: {sim.rows}×{sim.cols}"
+          f" (row 0=REMOTE, rows 1-{gp_row-1}=CODE, row {gp_row}=GP)")
+    print(f"  Codeword: payload={payload} (0x{cw:04x}), error={err_desc}"
+          f" → 0x{bad:04x}")
+    print(f"  Expected after 1 cycle ({cycle_length} steps): 0x{expected[0]:04x}")
+    print(f"  Gadget: {len(build_h2_correction_gadget())} ops")
+    print()
+    print(f"  H0,H1 at ({gp_row},{gp_start_col + DSL_CWL})"
+          f" on GP row (local CWL slot)")
+    print(f"  H2 at (0,2) on REMOTE row (corrupted codeword)")
+    print(f"  CL at ({gp_row},{gp_start_col + DSL_ROT}) on GP row (ROT slot)")
+    print(f"  GP at ({gp_row},{gp_start_col + DSL_EV}) on GP row (EV slot)")
+    print()
+    print(f"In the simulator:")
+    print(f"  load h2-correction-demo")
+    print(f"  s {cycle_length}    # run one correction cycle")
+    print(f"  show")
+
+
 if __name__ == '__main__':
+    if '--save' in sys.argv:
+        payload = 42
+        error_bit = 3
+        for i, arg in enumerate(sys.argv):
+            if arg == '--payload' and i + 1 < len(sys.argv):
+                payload = int(sys.argv[i + 1])
+            if arg == '--error' and i + 1 < len(sys.argv):
+                error_bit = int(sys.argv[i + 1])
+        save_demo(payload=payload, error_bit=error_bit)
+        sys.exit(0)
+
     print(f"Gadget size: {len(build_h2_correction_gadget())} ops")
     print()
 
@@ -536,11 +791,19 @@ if __name__ == '__main__':
     print()
     all_ok &= test_h2_random()
     print()
+    all_ok &= test_h2_boustrophedon()
+    print()
+    all_ok &= test_h2_boustrophedon_all_positions()
+    print()
 
     if all_ok:
         print("=" * 60)
         print("ALL H2 CORRECTION TESTS PASSED")
         print("=" * 60)
+
+        # Also save a demo file
+        print()
+        save_demo()
     else:
         print("=" * 60)
         print("SOME TESTS FAILED")
