@@ -302,6 +302,11 @@ class FB2DSimulator:
         self.selection = None   # (r1, c1, r2, c2) inclusive corners
         self.clipboard = None   # (width, height, [values]) — row-major
 
+        # Multi-IP support
+        self.n_ips = 1
+        self.active_ip = 0
+        self.ips = [self._capture_ip_state()]
+
     # ── Coordinate helpers ─────────────────────────────────────────
 
     def _to_rc(self, flat):
@@ -321,6 +326,49 @@ class FB2DSimulator:
 
     def _ip_flat(self):
         return self._to_flat(self.ip_row, self.ip_col)
+
+    # ── Multi-IP support ─────────────────────────────────────────
+
+    _IP_FIELDS = ('ip_row', 'ip_col', 'ip_dir', 'h0', 'h1', 'h2', 'cl', 'gp')
+
+    def _capture_ip_state(self):
+        """Snapshot the active IP's state into a dict."""
+        return {f: getattr(self, f) for f in self._IP_FIELDS}
+
+    def _restore_ip_state(self, state_dict):
+        """Restore a dict of IP state fields to self.* ."""
+        for f in self._IP_FIELDS:
+            setattr(self, f, state_dict[f])
+
+    def _save_active(self):
+        """Save the current self.* fields back into self.ips[self.active_ip]."""
+        self.ips[self.active_ip] = self._capture_ip_state()
+
+    def _load_active(self, index):
+        """Load self.ips[index] into self.* fields."""
+        self._restore_ip_state(self.ips[index])
+        self.active_ip = index
+
+    def _activate_ip(self, index):
+        """Switch active IP: save current, load new."""
+        if index == self.active_ip:
+            return
+        self._save_active()
+        self._load_active(index)
+
+    def add_ip(self, ip_row=0, ip_col=0, ip_dir=None,
+               h0=0, h1=0, h2=0, cl=0, gp=0):
+        """Add a new IP with the given state. Returns the IP index."""
+        if ip_dir is None:
+            ip_dir = DIR_E
+        self._save_active()
+        state = {
+            'ip_row': ip_row, 'ip_col': ip_col, 'ip_dir': ip_dir,
+            'h0': h0, 'h1': h1, 'h2': h2, 'cl': cl, 'gp': gp,
+        }
+        self.ips.append(state)
+        self.n_ips = len(self.ips)
+        return self.n_ips - 1
 
     # ── Forward step ───────────────────────────────────────────────
 
@@ -723,6 +771,33 @@ class FB2DSimulator:
         self.step_count -= 1
         return True
 
+    # ── Multi-IP stepping ─────────────────────────────────────────
+
+    def step_all(self):
+        """One interleaved round: step IP0, IP1, ..., IP(n-1)."""
+        if self.n_ips == 1:
+            self.step()
+            return
+        self._save_active()
+        for i in range(self.n_ips):
+            self._load_active(i)
+            self.step()
+            self.ips[i] = self._capture_ip_state()
+        # Leave IP0 as active for display
+        self._load_active(0)
+
+    def step_back_all(self):
+        """Reverse one interleaved round: undo IP(n-1), ..., IP0."""
+        if self.n_ips == 1:
+            self.step_back()
+            return
+        self._save_active()
+        for i in range(self.n_ips - 1, -1, -1):
+            self._load_active(i)
+            self.step_back()
+            self.ips[i] = self._capture_ip_state()
+        self._load_active(0)
+
     # ── Program loading ────────────────────────────────────────────
 
     def load_linear(self, code):
@@ -738,6 +813,9 @@ class FB2DSimulator:
         self.cl = 0
         self.gp = 0
         self.step_count = 0
+        self.n_ips = 1
+        self.active_ip = 0
+        self.ips = [self._capture_ip_state()]
 
         count = 0
         for ch in code:
@@ -888,7 +966,15 @@ class FB2DSimulator:
 
     def display_grid(self):
         """Display the grid with colored pointer markers."""
-        ip_flat = self._ip_flat()
+        self._save_active()
+
+        # Collect all IP positions
+        ip_positions = {}  # flat -> (index, dir)
+        for idx, ips in enumerate(self.ips):
+            flat = self._to_flat(ips['ip_row'], ips['ip_col'])
+            ip_positions[flat] = (idx, ips['ip_dir'])
+
+        # Active IP's heads (for head display)
         dir_arrow = DIR_ARROWS[self.ip_dir]
         cl_r, cl_c = self._to_rc(self.cl)
         h0_r, h0_c = self._to_rc(self.h0)
@@ -898,13 +984,24 @@ class FB2DSimulator:
 
         # Header
         print(f"\n{'═' * 70}")
-        print(f"  Step {self.step_count}   "
-              f"IP=({self.ip_row},{self.ip_col}){dir_arrow}  "
-              f"CL={self.cl}({cl_r},{cl_c})  "
-              f"H0={self.h0}({h0_r},{h0_c})  "
-              f"H1={self.h1}({h1_r},{h1_c})  "
-              f"H2={self.h2}({h2_r},{h2_c})  "
-              f"GP={self.gp}({gp_r},{gp_c})")
+        if self.n_ips == 1:
+            print(f"  Step {self.step_count}   "
+                  f"IP=({self.ip_row},{self.ip_col}){dir_arrow}  "
+                  f"CL={self.cl}({cl_r},{cl_c})  "
+                  f"H0={self.h0}({h0_r},{h0_c})  "
+                  f"H1={self.h1}({h1_r},{h1_c})  "
+                  f"H2={self.h2}({h2_r},{h2_c})  "
+                  f"GP={self.gp}({gp_r},{gp_c})")
+        else:
+            print(f"  Step {self.step_count}   ({self.n_ips} IPs)")
+            for idx, ips in enumerate(self.ips):
+                ir, ic = ips['ip_row'], ips['ip_col']
+                da = DIR_ARROWS[ips['ip_dir']]
+                marker = '*' if idx == self.active_ip else ' '
+                print(f"  {marker}IP{idx}=({ir},{ic}){da}  "
+                      f"CL={ips['cl']}  H0={ips['h0']}  "
+                      f"H1={ips['h1']}  H2={ips['h2']}  "
+                      f"GP={ips['gp']}")
         print(f"{'═' * 70}")
 
         # Column headers
@@ -922,7 +1019,7 @@ class FB2DSimulator:
                 ch = self._cell_char(val)
 
                 # Determine what pointers are here
-                is_ip = (r == self.ip_row and c == self.ip_col)
+                ip_here = ip_positions.get(flat)  # (idx, dir) or None
                 is_cl = (flat == self.cl)
                 is_h0 = (flat == self.h0)
                 is_h1 = (flat == self.h1)
@@ -935,8 +1032,13 @@ class FB2DSimulator:
                 # Build display: direction arrow for IP, char for others
                 # _cell_display ensures exactly 3 chars for alignment
                 pad = self._cell_display(ch)
-                if is_ip:
-                    cell = self._color(f" {dir_arrow} ", 'bold', 'red')
+                if ip_here is not None:
+                    ip_idx, ip_d = ip_here
+                    ip_arrow = DIR_ARROWS[ip_d]
+                    if ip_idx == 0:
+                        cell = self._color(f" {ip_arrow} ", 'bold', 'red')
+                    else:
+                        cell = self._color(f" {ip_arrow} ", 'bold', 'bg_red')
                 elif is_gp and is_cl and is_h0:
                     cell = self._color(f"⟨{ch}⟩" if len(ch) == 1 else f"⟨{ch}", 'bold', 'yellow')
                 elif is_gp and is_cl:
@@ -990,12 +1092,15 @@ class FB2DSimulator:
 
         # Legend
         if self.use_color:
-            print(f"  {self._color('IP', 'bold', 'red')}  "
-                  f"{self._color('CL', 'magenta')}  "
-                  f"{self._color('H0', 'cyan')}  "
-                  f"{self._color('H1', 'green')}  "
-                  f"{self._color('H2', 'blue')}  "
-                  f"{self._color('GP', 'yellow')}")
+            legend = f"  {self._color('IP', 'bold', 'red')}  "
+            if self.n_ips > 1:
+                legend += f"{self._color('IP1+', 'bold', 'bg_red')}  "
+            legend += (f"{self._color('CL', 'magenta')}  "
+                       f"{self._color('H0', 'cyan')}  "
+                       f"{self._color('H1', 'green')}  "
+                       f"{self._color('H2', 'blue')}  "
+                       f"{self._color('GP', 'yellow')}")
+            print(legend)
 
     def display_values(self):
         """Display raw cell values in a grid (16-bit)."""
@@ -1040,49 +1145,82 @@ class FB2DSimulator:
     # ── Save / Load ────────────────────────────────────────────────
 
     def save_state(self, filename):
+        self._save_active()
         with open(filename, 'w') as f:
             f.write(f"# F***brain 2D state\n")
             f.write(f"rows={self.rows}\ncols={self.cols}\n")
-            f.write(f"ip_row={self.ip_row}\nip_col={self.ip_col}\n")
-            f.write(f"ip_dir={self.ip_dir}\n")
-            f.write(f"cl={self.cl}\nh0={self.h0}\nh1={self.h1}\nh2={self.h2}\ngp={self.gp}\n")
+            if self.n_ips > 1:
+                f.write(f"n_ips={self.n_ips}\n")
+                for i, ip in enumerate(self.ips):
+                    p = f"ip{i}_"
+                    f.write(f"{p}ip_row={ip['ip_row']}\n{p}ip_col={ip['ip_col']}\n")
+                    f.write(f"{p}ip_dir={ip['ip_dir']}\n")
+                    f.write(f"{p}cl={ip['cl']}\n{p}h0={ip['h0']}\n")
+                    f.write(f"{p}h1={ip['h1']}\n{p}h2={ip['h2']}\n{p}gp={ip['gp']}\n")
+            else:
+                # Single-IP: unprefixed keys (backward compatible)
+                ip = self.ips[0]
+                f.write(f"ip_row={ip['ip_row']}\nip_col={ip['ip_col']}\n")
+                f.write(f"ip_dir={ip['ip_dir']}\n")
+                f.write(f"cl={ip['cl']}\nh0={ip['h0']}\n")
+                f.write(f"h1={ip['h1']}\nh2={ip['h2']}\ngp={ip['gp']}\n")
             f.write(f"step={self.step_count}\n")
             f.write(f"grid={','.join(str(v) for v in self.grid)}\n")
 
     def load_state(self, filename):
+        data = {}
         with open(filename, 'r') as f:
             for line in f:
                 line = line.strip()
                 if '=' in line and not line.startswith('#'):
                     k, v = line.split('=', 1)
-                    if k == 'rows':
-                        self.rows = int(v)
-                    elif k == 'cols':
-                        self.cols = int(v)
-                    elif k == 'ip_row':
-                        self.ip_row = int(v)
-                    elif k == 'ip_col':
-                        self.ip_col = int(v)
-                    elif k == 'ip_dir':
-                        self.ip_dir = int(v)
-                    elif k == 'cl':
-                        self.cl = int(v)
-                    elif k == 'h0':
-                        self.h0 = int(v)
-                    elif k == 'h1':
-                        self.h1 = int(v)
-                    elif k == 'h2':
-                        self.h2 = int(v)
-                    elif k == 'gp':
-                        self.gp = int(v)
-                    elif k == 'step':
-                        self.step_count = int(v)
-                    elif k == 'grid':
-                        vals = [int(x) for x in v.split(',')]
-                        self.grid_size = self.rows * self.cols
-                        self.grid = vals[:self.grid_size]
-                        if len(self.grid) < self.grid_size:
-                            self.grid.extend([0] * (self.grid_size - len(self.grid)))
+                    data[k] = v
+
+        self.rows = int(data.get('rows', DEFAULT_ROWS))
+        self.cols = int(data.get('cols', DEFAULT_COLS))
+        self.grid_size = self.rows * self.cols
+        self.step_count = int(data.get('step', 0))
+
+        if 'grid' in data:
+            vals = [int(x) for x in data['grid'].split(',')]
+            self.grid = vals[:self.grid_size]
+            if len(self.grid) < self.grid_size:
+                self.grid.extend([0] * (self.grid_size - len(self.grid)))
+        else:
+            self.grid = [0] * self.grid_size
+
+        n_ips = int(data.get('n_ips', 1))
+        self.ips = []
+
+        if n_ips == 1 and 'ip_row' in data:
+            # Legacy single-IP format (unprefixed keys)
+            self.ips.append({
+                'ip_row': int(data.get('ip_row', 0)),
+                'ip_col': int(data.get('ip_col', 0)),
+                'ip_dir': int(data.get('ip_dir', DIR_E)),
+                'h0': int(data.get('h0', 0)),
+                'h1': int(data.get('h1', 0)),
+                'h2': int(data.get('h2', 0)),
+                'cl': int(data.get('cl', 0)),
+                'gp': int(data.get('gp', 0)),
+            })
+        else:
+            for i in range(n_ips):
+                p = f"ip{i}_"
+                self.ips.append({
+                    'ip_row': int(data.get(f'{p}ip_row', 0)),
+                    'ip_col': int(data.get(f'{p}ip_col', 0)),
+                    'ip_dir': int(data.get(f'{p}ip_dir', DIR_E)),
+                    'h0': int(data.get(f'{p}h0', 0)),
+                    'h1': int(data.get(f'{p}h1', 0)),
+                    'h2': int(data.get(f'{p}h2', 0)),
+                    'cl': int(data.get(f'{p}cl', 0)),
+                    'gp': int(data.get(f'{p}gp', 0)),
+                })
+
+        self.n_ips = len(self.ips)
+        self.active_ip = 0
+        self._load_active(0)
 
     # ── Block editing (select / copy / cut / paste) ──────────────────
 
@@ -1419,18 +1557,22 @@ Commands:
   data <r> <c> <v>...  Set raw values at (r,c); v can be number or opcode char
   cell <r> <c> [v]     Get/set one cell
 
-  ip <r> <c>           Set IP position
-  dir <N/E/S/W>        Set IP direction
-  cl [r c | flat]      Set/show CL
-  h0 [r c | flat]      Set/show H0
-  h1 [r c | flat]      Set/show H1
-  h2 [r c | flat]      Set/show H2 (scan head)
-  gp [r c | flat]      Set/show GP (garbage pointer)
+  ip                   Show all IPs with state
+  ip <index>           Select active IP (for head commands)
+  ip <r> <c>           Set active IP position
+  addip [r c dir]      Add new IP (default: 0 0 E)
+  rmip <index>         Remove an IP
+  dir <N/E/S/W>        Set active IP direction
+  cl [r c | flat]      Set/show CL (on active IP)
+  h0 [r c | flat]      Set/show H0 (on active IP)
+  h1 [r c | flat]      Set/show H1 (on active IP)
+  h2 [r c | flat]      Set/show H2 (on active IP)
+  gp [r c | flat]      Set/show GP (on active IP)
 
-  step / s [n]         Forward n steps (default 1)
-  back / b [n]         Reverse n steps (default 1)
-  run [n]              Run n forward (default 100)
-  runback [n]          Run n backward (default 100)
+  step / s [n]         Forward n steps — all IPs interleaved (default 1)
+  back / b [n]         Reverse n steps — all IPs (default 1)
+  run [n]              Run n forward — all IPs (default 100)
+  runback [n]          Run n backward — all IPs (default 100)
   zero / z             Reverse all steps back to step 0
 
   show                 Display grid
@@ -1563,13 +1705,67 @@ def interactive_session():
                 else:
                     print("Usage: cell <r> <c> [value]")
 
-            # ── IP position ──
+            # ── IP position / multi-IP management ──
             elif cmd == 'ip':
-                if len(args) >= 2:
+                if not args:
+                    # Show all IPs
+                    sim._save_active()
+                    for i, ipstate in enumerate(sim.ips):
+                        r, c = ipstate['ip_row'], ipstate['ip_col']
+                        d = DIR_ARROWS[ipstate['ip_dir']]
+                        active = " *" if i == sim.active_ip else ""
+                        print(f"  IP{i}: ({r},{c}) {d}  "
+                              f"CL={ipstate['cl']} H0={ipstate['h0']} "
+                              f"H1={ipstate['h1']} H2={ipstate['h2']} "
+                              f"GP={ipstate['gp']}{active}")
+                elif len(args) == 1 and args[0].isdigit():
+                    # Select active IP: ip 0, ip 1, etc.
+                    idx = int(args[0])
+                    if 0 <= idx < sim.n_ips:
+                        sim._activate_ip(idx)
+                        print(f"Switched to IP{idx}")
+                    else:
+                        print(f"Invalid IP index: {idx} (have {sim.n_ips} IPs)")
+                elif len(args) >= 2:
+                    # Set position: ip <r> <c>
                     sim.ip_row = int(args[0]) % sim.rows
                     sim.ip_col = int(args[1]) % sim.cols
-                print(f"IP = ({sim.ip_row},{sim.ip_col}) "
+                    sim._save_active()
+                print(f"IP{sim.active_ip} = ({sim.ip_row},{sim.ip_col}) "
                       f"{DIR_ARROWS[sim.ip_dir]}")
+                sim.display_grid()
+
+            # ── Add IP ──
+            elif cmd == 'addip':
+                ip_r = int(args[0]) % sim.rows if len(args) >= 1 else 0
+                ip_c = int(args[1]) % sim.cols if len(args) >= 2 else 0
+                ip_d = parse_dir(args[2]) if len(args) >= 3 else DIR_E
+                idx = sim.add_ip(ip_row=ip_r, ip_col=ip_c, ip_dir=ip_d)
+                print(f"Added IP{idx} at ({ip_r},{ip_c}) "
+                      f"{DIR_ARROWS[ip_d]}")
+                sim.display_grid()
+
+            # ── Remove IP ──
+            elif cmd == 'rmip':
+                if args and args[0].isdigit():
+                    idx = int(args[0])
+                    if sim.n_ips <= 1:
+                        print("Cannot remove the last IP")
+                    elif 0 <= idx < sim.n_ips:
+                        sim._save_active()
+                        sim.ips.pop(idx)
+                        sim.n_ips = len(sim.ips)
+                        # Adjust active_ip if needed
+                        if sim.active_ip >= sim.n_ips:
+                            sim.active_ip = sim.n_ips - 1
+                        elif sim.active_ip == idx:
+                            sim.active_ip = min(idx, sim.n_ips - 1)
+                        sim._load_active(sim.active_ip)
+                        print(f"Removed IP{idx} ({sim.n_ips} IPs remain)")
+                    else:
+                        print(f"Invalid IP index: {idx}")
+                else:
+                    print("Usage: rmip <index>")
                 sim.display_grid()
 
             # ── Direction ──
@@ -1578,32 +1774,35 @@ def interactive_session():
                     d = parse_dir(args[0])
                     if d is not None:
                         sim.ip_dir = d
+                        sim._save_active()
                     else:
                         print(f"Unknown direction: {args[0]}")
                 print(f"DIR = {DIR_NAMES[sim.ip_dir]} "
                       f"{DIR_ARROWS[sim.ip_dir]}")
                 sim.display_grid()
 
-            # ── CL / H0 / H1 / GP ──
+            # ── CL / H0 / H1 / H2 / GP ──
             elif cmd in ('cl', 'h0', 'h1', 'h2', 'gp'):
                 if args:
                     pos, _ = parse_pos(sim, args)
                     if pos is not None:
                         setattr(sim, cmd, pos)
+                        sim._save_active()
                     else:
                         print(f"Invalid position: {' '.join(args)}")
                 val = getattr(sim, cmd)
                 r, c = sim._to_rc(val)
                 label = cmd.upper()
                 print(f"{label} = {val} ({r},{c})  "
-                      f"grid[{label}] = {sim.grid[val]}")
+                      f"grid[{label}] = {sim.grid[val]}"
+                      f"  (IP{sim.active_ip})")
                 sim.display_grid()
 
             # ── Step forward ──
             elif cmd in ('step', 's'):
                 n = int(args[0]) if args else 1
                 for _ in range(n):
-                    sim.step()
+                    sim.step_all()
                 if not sim.trace:
                     sim.display_grid()
 
@@ -1611,7 +1810,7 @@ def interactive_session():
             elif cmd in ('back', 'b', 'r'):
                 n = int(args[0]) if args else 1
                 for _ in range(n):
-                    sim.step_back()
+                    sim.step_back_all()
                 if not sim.trace:
                     sim.display_grid()
 
@@ -1619,7 +1818,7 @@ def interactive_session():
             elif cmd == 'run':
                 n = int(args[0]) if args else 100
                 for _ in range(n):
-                    sim.step()
+                    sim.step_all()
                 print(f"Ran {n} steps forward")
                 sim.display_grid()
 
@@ -1629,7 +1828,7 @@ def interactive_session():
                 actual = 0
                 for _ in range(n):
                     if sim.step_count > 0:
-                        sim.step_back()
+                        sim.step_back_all()
                         actual += 1
                     else:
                         break
@@ -1640,7 +1839,7 @@ def interactive_session():
             elif cmd in ('zero', 'z'):
                 n = sim.step_count
                 for _ in range(n):
-                    sim.step_back()
+                    sim.step_back_all()
                 print(f"Reversed {n} steps back to step 0")
                 sim.display_grid()
 
@@ -1670,7 +1869,10 @@ def interactive_session():
             # ── Examples ──
             elif cmd == 'example':
                 if args:
-                    load_example(sim, args[0])
+                    if load_example(sim, args[0]):
+                        sim.n_ips = 1
+                        sim.active_ip = 0
+                        sim.ips = [sim._capture_ip_state()]
                 else:
                     print("Available examples: bounce, loop, mirrors, branch")
                 sim.display_grid()

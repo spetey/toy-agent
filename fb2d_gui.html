@@ -133,12 +133,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 </div>
 
 <div id="status">
-  <span class="head-label head-ip" id="ipStatus">IP:(0,0)&rarr;</span>
-  <span class="head-label head-cl" id="clStatus">CL:0</span>
-  <span class="head-label head-h0" id="h0Status">H0:0</span>
-  <span class="head-label head-h1" id="h1Status">H1:0</span>
-  <span class="head-label head-h2" id="h2Status">H2:0</span>
-  <span class="head-label head-gp" id="gpStatus">GP:0</span>
+  <span id="ipStatusAll"></span>
   <span id="gridSize" style="color:#666; margin-left:auto;"></span>
 </div>
 
@@ -176,6 +171,10 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
   <label><input type="radio" name="follow" value="center" checked> Center</label>
   <label><input type="radio" name="follow" value="edge"> Edge</label>
   <label><input type="radio" name="follow" value="off"> Off</label>
+  <span style="color:#555">|</span>
+  <span style="color:#888;">IPs:</span>
+  <button id="btnAddIP" title="Add a new instruction pointer">+ IP</button>
+  <button id="btnRmIP" title="Remove active IP (must have 2+)" disabled>- IP</button>
   <span style="color:#555">|</span>
   <span style="color:#888;">Annotate:</span>
   <label title="Shift+drag to select region"><input type="checkbox" id="regionMode"> Region select</label>
@@ -304,6 +303,13 @@ const COLORS = {
   gridLine: '#2a2a4a', text: '#c0c0c0', dimText: '#555',
   annDot: '#ff9f43', regionFill: 'rgba(68,136,255,0.15)', regionStroke: '#4488ff'
 };
+// Colors for additional IPs (IP0 uses COLORS.ip/ipBg, IP1+ use these)
+const IP_COLORS = [
+  { fg: '#ff6b6b', bg: 'rgba(255,107,107,0.7)' },    // IP0 red
+  { fg: '#ff9f43', bg: 'rgba(255,159,67,0.65)' },     // IP1 orange
+  { fg: '#a29bfe', bg: 'rgba(162,155,254,0.65)' },    // IP2 purple
+  { fg: '#00cec9', bg: 'rgba(0,206,201,0.65)' },      // IP3 teal
+];
 
 // ── State ──────────────────────────────────────────────────────
 let state = null;
@@ -435,20 +441,37 @@ function afterStep() {
 // ── Status display ─────────────────────────────────────────────
 function updateStatus() {
   if (!state) return;
-  const arrow = DIR_ARROWS[state.ip_dir];
-  document.getElementById('ipStatus').textContent =
-    `IP:(${state.ip_row},${state.ip_col})${arrow}`;
-
   const rc = (flat) => {
     const r = Math.floor(flat / state.cols);
     const c = flat % state.cols;
     return `(${r},${c})`;
   };
-  document.getElementById('clStatus').textContent = `CL:${rc(state.cl)}`;
-  document.getElementById('h0Status').textContent = `H0:${rc(state.h0)}`;
-  document.getElementById('h1Status').textContent = `H1:${rc(state.h1)}`;
-  document.getElementById('h2Status').textContent = `H2:${rc(state.h2)}`;
-  document.getElementById('gpStatus').textContent = `GP:${rc(state.gp)}`;
+
+  // Build status for all IPs
+  const ips = state.ips || [{ ip_row: state.ip_row, ip_col: state.ip_col,
+    ip_dir: state.ip_dir, cl: state.cl, h0: state.h0, h1: state.h1,
+    h2: state.h2, gp: state.gp }];
+  const nIps = ips.length;
+  const activeIdx = state.active_ip || 0;
+
+  let html = '';
+  for (let i = 0; i < nIps; i++) {
+    const ip = ips[i];
+    const arrow = DIR_ARROWS[ip.ip_dir];
+    const col = IP_COLORS[i % IP_COLORS.length];
+    const label = nIps > 1 ? `IP${i}` : 'IP';
+    const isSel = (i === activeIdx && nIps > 1);
+    const style = isSel ? `color:${col.fg};text-decoration:underline;cursor:pointer` : `color:${col.fg};cursor:pointer`;
+    html += `<span class="head-label" style="${style}" onclick="switchToIP(${i})" title="Click to select IP${i}">${label}:(${ip.ip_row},${ip.ip_col})${arrow}</span> `;
+    html += `<span class="head-label head-cl">CL:${rc(ip.cl)}</span> `;
+    html += `<span class="head-label head-h0">H0:${rc(ip.h0)}</span> `;
+    html += `<span class="head-label head-h1">H1:${rc(ip.h1)}</span> `;
+    html += `<span class="head-label head-h2">H2:${rc(ip.h2)}</span> `;
+    html += `<span class="head-label head-gp">GP:${rc(ip.gp)}</span>`;
+    if (i < nIps - 1) html += ' <span style="color:#444">|</span> ';
+  }
+  document.getElementById('ipStatusAll').innerHTML = html;
+  updateIPButtons();
   document.getElementById('stepDisplay').textContent = `Step ${state.step_count}`;
   document.getElementById('gridSize').textContent = `${state.rows}\u00d7${state.cols}`;
 }
@@ -495,8 +518,12 @@ function zoomAt(x, y, factor) {
 // ── Follow IP ──────────────────────────────────────────────────
 function followIP(smooth = true) {
   if (!state || followMode === 'off') return;
-  const ipPixelX = state.ip_col * cellSize + cellSize / 2;
-  const ipPixelY = state.ip_row * cellSize + cellSize / 2;
+  // Follow the active IP (IP0 by default for backward compat)
+  const ips = state.ips || [{ ip_row: state.ip_row, ip_col: state.ip_col }];
+  const activeIdx = state.active_ip || 0;
+  const aip = ips[activeIdx] || ips[0];
+  const ipPixelX = aip.ip_col * cellSize + cellSize / 2;
+  const ipPixelY = aip.ip_row * cellSize + cellSize / 2;
 
   if (followMode === 'center') {
     const targetX = ipPixelX - canvas.width / 2;
@@ -556,13 +583,26 @@ function render() {
   const r0 = Math.max(0, Math.floor(vpY / cs));
   const r1 = Math.min(rows - 1, Math.floor((vpY + h) / cs));
 
-  // Head positions as (row, col)
-  const ipR = state.ip_row, ipC = state.ip_col;
-  const clR = Math.floor(state.cl / cols), clC = state.cl % cols;
-  const h0R = Math.floor(state.h0 / cols), h0C = state.h0 % cols;
-  const h1R = Math.floor(state.h1 / cols), h1C = state.h1 % cols;
-  const h2R = Math.floor(state.h2 / cols), h2C = state.h2 % cols;
-  const gpR = Math.floor(state.gp / cols), gpC = state.gp % cols;
+  // Head positions — multi-IP aware
+  const ips = state.ips || [{ ip_row: state.ip_row, ip_col: state.ip_col,
+    ip_dir: state.ip_dir, cl: state.cl, h0: state.h0, h1: state.h1,
+    h2: state.h2, gp: state.gp }];
+  const activeIdx = state.active_ip || 0;
+
+  // Build lookup: "r,c" -> IP index for IP positions
+  const ipPositions = {};
+  for (let i = 0; i < ips.length; i++) {
+    const key = `${ips[i].ip_row},${ips[i].ip_col}`;
+    if (!(key in ipPositions)) ipPositions[key] = i;  // first IP wins
+  }
+
+  // Active IP's head positions (used for head highlights)
+  const aip = ips[activeIdx];
+  const clR = Math.floor(aip.cl / cols), clC = aip.cl % cols;
+  const h0R = Math.floor(aip.h0 / cols), h0C = aip.h0 % cols;
+  const h1R = Math.floor(aip.h1 / cols), h1C = aip.h1 % cols;
+  const h2R = Math.floor(aip.h2 / cols), h2C = aip.h2 % cols;
+  const gpR = Math.floor(aip.gp / cols), gpC = aip.gp % cols;
 
   // Draw region annotations (behind cells)
   for (const reg of annotations.regions) {
@@ -599,14 +639,16 @@ function render() {
       const val = state.grid[flat];
 
       // Cell background
-      const isIP = (r === ipR && c === ipC);
+      const ipKey = `${r},${c}`;
+      const ipIdx = ipPositions[ipKey];
+      const isIP = ipIdx !== undefined;
       const isCL = (r === clR && c === clC);
       const isH0 = (r === h0R && c === h0C);
       const isH1 = (r === h1R && c === h1C);
       const isH2 = (r === h2R && c === h2C);
       const isGP = (r === gpR && c === gpC);
 
-      if (isIP) ctx.fillStyle = COLORS.ipBg;
+      if (isIP) ctx.fillStyle = IP_COLORS[ipIdx % IP_COLORS.length].bg;
       else if (isCL) ctx.fillStyle = COLORS.clBg;
       else if (isH0) ctx.fillStyle = COLORS.h0Bg;
       else if (isH1) ctx.fillStyle = COLORS.h1Bg;
@@ -643,7 +685,7 @@ function render() {
       if (showText) {
         if (isIP) {
           ctx.fillStyle = '#fff';
-          ctx.fillText(DIR_ARROWS[state.ip_dir], px + cs/2, py + cs/2);
+          ctx.fillText(DIR_ARROWS[ips[ipIdx].ip_dir], px + cs/2, py + cs/2);
         } else {
           const ch = cellChar(val);
           ctx.fillStyle = val === 0 ? COLORS.dimText : COLORS.text;
@@ -652,7 +694,7 @@ function render() {
       } else if (cs >= 6) {
         // Tiny mode: just show pointer dots
         if (isIP) {
-          ctx.fillStyle = COLORS.ip;
+          ctx.fillStyle = IP_COLORS[ipIdx % IP_COLORS.length].fg;
           ctx.beginPath();
           ctx.arc(px + cs/2, py + cs/2, cs * 0.3, 0, Math.PI * 2);
           ctx.fill();
@@ -1431,6 +1473,47 @@ document.getElementById('fileSelect').addEventListener('change', (e) => {
 });
 
 document.getElementById('btnReset').addEventListener('click', resetToStart);
+// ── Multi-IP management ─────────────────────────────────────────
+async function addNewIP() {
+  // Add IP at (0,0) going East — user can reposition via REPL or future UI
+  state = await api('addip', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ ip_row: 0, ip_col: 0, ip_dir: 1 })
+  });
+  updateIPButtons();
+  afterStep();
+}
+
+async function removeActiveIP() {
+  if (!state || (state.n_ips || 1) <= 1) return;
+  const idx = state.active_ip || 0;
+  state = await api('rmip', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ index: idx })
+  });
+  updateIPButtons();
+  afterStep();
+}
+
+async function switchToIP(idx) {
+  state = await api('switchip', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ index: idx })
+  });
+  afterStep();
+}
+
+function updateIPButtons() {
+  const nIps = state ? (state.n_ips || 1) : 1;
+  document.getElementById('btnRmIP').disabled = nIps <= 1;
+}
+
+document.getElementById('btnAddIP').addEventListener('click', addNewIP);
+document.getElementById('btnRmIP').addEventListener('click', removeActiveIP);
+
 document.getElementById('btnForward').addEventListener('click', () => stepForward(1));
 document.getElementById('btnBack').addEventListener('click', () => stepBack(1));
 document.getElementById('btnForwardFast').addEventListener('click', () => stepForward(10));

@@ -21,9 +21,10 @@ in turn based on brainfuck. (fuckbrain = reversible brainfuck.)
   Hamming(16,11) SECDED codeword with 11 data bits and 5 parity bits.
   The IP reads the payload (data bits) as the opcode. Arithmetic ops
   automatically maintain the Hamming invariant.
-- **Self-correcting**: a spatial gadget (336 opcodes) detects and
-  corrects single-bit errors in any cell, consuming only 1 clean zero
-  cell per correction.
+- **Self-correcting**: a Hamming correction gadget (323 opcodes) detects
+  and corrects single-bit errors in any cell via the H2 copy-down pattern.
+  Two gadgets can correct each other's code simultaneously (mutual
+  correction).
 
 ## Quick Start
 
@@ -47,30 +48,33 @@ python3 ifbc.py --test-all
 # Run carry arithmetic demo
 python3 programs/carry-demo.py
 
+# Run mutual correction demo (two gadgets correcting each other)
+python3 programs/mutual-correction-demo.py
+
+# Run H2 copy-down correction gadget tests
+python3 programs/dual-gadget-demo.py
+
 # Run Hamming correction gadget tests (barrel-shifter algorithm)
 python3 programs/hamming-gadget-demo.py
-
-# Generate a Hamming correction .fb2d program to step through:
-python3 programs/make-hamming16.py 42 --error 5 --wrap 60
-# Then: python3 fb2d.py → load hamming16-p42-err5-w60
 ```
 
 ## Architecture
 
-An instruction pointer (IP) moves on a toroidal 2D grid. Mirrors (`/`,
-`\`) and conditional mirrors change the IP's direction. Four heads point
-into the grid for data access:
+Multiple instruction pointers (IPs) move on a toroidal 2D grid,
+interleaved round-robin. Mirrors (`/`, `\`) and conditional mirrors
+change each IP's direction. Each IP has five independent heads:
 
 | Head | Purpose |
 |------|---------|
 | H0 | Primary data head |
 | H1 | Secondary data head |
+| H2 | Scan head (for cross-gadget correction via copy-down pattern) |
 | CL | Condition latch (used by conditional mirrors and rotation amounts) |
 | GP | Garbage pointer (breadcrumb trail for reversibility) |
 
 Code and data share the same surface (von Neumann architecture). The
-ISA has 48 opcodes (byte-level arithmetic, bit-level operations, head
-movement, mirrors, and garbage-pointer operations). See
+ISA has 56 opcodes (byte-level arithmetic, bit-level operations, head
+movement, mirrors, garbage-pointer operations, and H2 scan ops). See
 [`docs/isa.md`](docs/isa.md) for the full ISA reference.
 
 ### 16-Bit Cells
@@ -92,15 +96,19 @@ Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
 
 ### Hamming Correction Gadget
 
-The barrel-shifter gadget corrects single-bit errors in 336 ops:
+The H2 copy-down correction gadget (323 ops) corrects single-bit errors:
 
-1. Compute overall parity and syndrome via Y (fused rotate-XOR)
-2. Build a 1-hot correction mask using a barrel shifter (conditional
-   rotation via paired `f` gates with `l`/`r`)
-3. XOR the mask into the codeword to flip the bad bit back
-4. Clean up to leave at most 1 dirty garbage cell
+1. `m` copies a remote codeword to local GP scratch (via H2 scan head)
+2. Compute overall parity and syndrome via Y (fused rotate-XOR)
+3. Build a 1-hot correction mask using a barrel shifter
+4. `m` uncomputes the local copy, `j` writes the correction mask back
+5. All heads advance — ready for the next codeword
 
-See `docs/barrel-shifter-correction.md` for a full walkthrough.
+Only H2 touches remote data; all other heads stay local. This enables
+**mutual correction**: two gadgets on separate IPs, each correcting the
+other's code via H2.
+
+See `docs/barrel-shifter-correction.md` for algorithm details.
 
 ## Browser GUI
 
@@ -114,8 +122,10 @@ python3 fb2d_server.py
 
 **Features:**
 
-- **Canvas grid display** with color-coded head markers: IP (red),
-  H0 (cyan), H1 (green), CL (purple), GP (gold)
+- **Canvas grid display** with color-coded head markers: IP (red/orange),
+  H0 (cyan), H1 (green), H2 (blue), CL (purple), GP (gold)
+- **Multi-IP support**: add/remove IPs, click IP labels in the status bar
+  to switch which IP's heads are highlighted
 - **Stepping**: forward/back by 1 or 10 steps, play/pause with adjustable
   speed, reset to step 0
 - **Navigation**: drag to pan, scroll wheel to zoom, fit-to-grid, follow-IP
@@ -165,14 +175,16 @@ fb2d_server.py                   Flask server for browser GUI
 fb2d_gui.html                    Browser-based GUI simulator
 ifbc.py                          ifb-to-fb2d compiler
 programs/                        Example programs
-  hamming-gadget-demo.py         Hamming(16,11) correction gadget + tests
+  mutual-correction-demo.py      Two gadgets correcting each other (★)
+  dual-gadget-demo.py            H2 copy-down correction gadget + tests (★)
+  hamming-gadget-demo.py         Hamming(16,11) barrel-shifter gadget + tests
   make-hamming16.py              Generate .fb2d files for Hamming demos
   hamming.py                     Hamming(16,11) encode/decode/inject library
   carry-demo.py                  Multi-cell carry arithmetic demo
   *.fb2d                         State files (loadable in simulator)
   *.ifb                          ifb source files
 docs/                            Design documents
-  isa.md                         ISA reference (48 opcodes, v1.8)
+  isa.md                         ISA reference (56 opcodes, v1.9)
   barrel-shifter-correction.md   Barrel-shifter correction algorithm walkthrough
   tc_proof_sketch.md             Turing completeness proof sketch
   nested-loops-notes.md          Nested loop implementation notes
@@ -181,17 +193,29 @@ CLAUDE.md                        Detailed project context for AI assistants
 
 ## Status
 
-This is active research software. The language design is stabilizing
-around v1.8 (48 opcodes). Recent milestones:
+This is active research software. The language design is at v1.9
+(56 opcodes). Recent milestones:
 
+- **Mutual correction**: two identical Hamming gadgets on separate IPs,
+  each correcting the other's code via H2 copy-down — the first proof
+  of self-maintaining code
+- **Multi-IP support**: interleaved round-robin execution with independent
+  heads per IP, full reversibility
+- **H2 scan head** (v1.9): 8 new opcodes for cross-gadget correction
+  using the copy-down pattern (`m`/`j` for XOR copy-in / write-back)
 - **16-bit Hamming-protected cells** with automatic parity maintenance
-- **Barrel-shifter correction gadget** (336 ops, 1 dirty cell per
-  correction) — the core primitive for a self-correcting agent
 - **Standard-form Hamming(16,11)** where syndrome = bit position
-- **Boustrophedon (serpentine) code layout** for compact grid programs
 
-Next steps: multiple IPs for mutual correction, fuel/compression for
-sustainable zero production, and adaptive sweep boundaries.
+### Key Programs to Explore
+
+| Program | Load in GUI | Description |
+|---------|-------------|-------------|
+| `mutual-correction-demo` | 2 IPs, 4×325 | Two gadgets correcting each other's parity errors |
+| `h2-correction-demo` | 1 IP, 8×64 | Single gadget correcting a corrupted codeword (boustrophedon) |
+| `factorial-03` | 1 IP, 8×64 | Factorial computation (compiled from ifb) |
+
+Next steps: noise injection experiments, data-bit error convergence,
+fuel/compression for sustainable zero production.
 
 ## License
 

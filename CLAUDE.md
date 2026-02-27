@@ -21,9 +21,11 @@ based on brainfuck. ("fuckbrain" = reversible brainfuck.)
 ## Architecture
 
 fb2d is a 2D reversible esoteric language where:
-- An instruction pointer (IP) moves on a toroidal grid
+- Multiple instruction pointers (IPs) move on a toroidal grid, interleaved
+  round-robin (IP0 steps, IP1 steps, IP0, ...). Each IP has independent
+  heads (H0, H1, H2, CL, GP); the grid is shared.
 - Mirrors (`/`, `\`) and conditional mirrors change IP direction
-- Multiple heads (H0, H1, H2, CL, GP) point into the grid for data access
+- Multiple heads (H0, H1, H2, CL, GP) per IP point into the grid for data access
 - Code and data share the same surface (von Neumann architecture)
 
 ## Notation Convention
@@ -299,7 +301,10 @@ range check using existing ops. For now, hardcode sweep ranges.
 3. ~~Add H2 scan head for cross-gadget correction.~~ ✓
 4. **[CURRENT]** Two gadgets correcting each other with hardcoded layout,
    using copy-down pattern (m/M/j ops via H2).
-5. Add multiple IP support to the simulator.
+5. ~~Add multiple IP support to the simulator.~~ ✓
+   Interleaved round-robin: `step_all()` steps each IP in order.
+   Per-IP state: ip_row, ip_col, ip_dir, h0, h1, h2, cl, gp.
+   Grid is shared. REPL: `ip`, `addip`, `rmip` commands.
 6. Simulated noise: verify mutual correction under random bit flips.
 7. Add simple compression (XOR-of-identical-pairs) to replace infinite
    zero reservoir with finite fuel.

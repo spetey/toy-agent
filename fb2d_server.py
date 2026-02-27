@@ -15,10 +15,13 @@ current_file = ''  # Track which file is currently loaded
 
 def serialize_state():
     """Return current simulator state as a dict."""
-    return {
+    # Ensure ips array is up to date
+    sim._save_active()
+    result = {
         'rows': sim.rows,
         'cols': sim.cols,
         'grid': sim.grid,
+        # Legacy flat fields (for backward compat with old GUI code)
         'ip_row': sim.ip_row,
         'ip_col': sim.ip_col,
         'ip_dir': sim.ip_dir,
@@ -29,7 +32,12 @@ def serialize_state():
         'gp': sim.gp,
         'step_count': sim.step_count,
         'current_file': current_file,
+        # Multi-IP fields
+        'n_ips': sim.n_ips,
+        'active_ip': sim.active_ip,
+        'ips': sim.ips,
     }
+    return result
 
 
 @app.route('/')
@@ -78,7 +86,7 @@ def reset_state():
 def step_forward():
     n = min(int(request.args.get('n', 1)), 10000)
     for _ in range(n):
-        sim.step()
+        sim.step_all()
     return jsonify(serialize_state())
 
 
@@ -86,7 +94,7 @@ def step_forward():
 def step_backward():
     n = min(int(request.args.get('n', 1)), 10000)
     for _ in range(n):
-        sim.step_back()
+        sim.step_back_all()
     return jsonify(serialize_state())
 
 
@@ -224,16 +232,67 @@ def resize_grid():
     for r in range(min(old_rows, new_rows)):
         for c in range(min(old_cols, new_cols)):
             sim.grid[r * new_cols + c] = old_grid[r * old_cols + c]
-    # Clamp head positions
-    sim.ip_row = min(sim.ip_row, new_rows - 1)
-    sim.ip_col = min(sim.ip_col, new_cols - 1)
-    sim.cl = min(sim.cl, sim.grid_size - 1)
-    sim.h0 = min(sim.h0, sim.grid_size - 1)
-    sim.h1 = min(sim.h1, sim.grid_size - 1)
-    sim.h2 = min(sim.h2, sim.grid_size - 1)
-    sim.gp = min(sim.gp, sim.grid_size - 1)
+    # Clamp head positions for all IPs
+    sim._save_active()
+    for i, ipstate in enumerate(sim.ips):
+        ipstate['ip_row'] = min(ipstate['ip_row'], new_rows - 1)
+        ipstate['ip_col'] = min(ipstate['ip_col'], new_cols - 1)
+        for head in ('cl', 'h0', 'h1', 'h2', 'gp'):
+            ipstate[head] = min(ipstate[head], sim.grid_size - 1)
+    sim._load_active(sim.active_ip)
     sim.selection = None
     sim.clipboard = None
+    return jsonify(serialize_state())
+
+
+# ── Multi-IP routes ────────────────────────────────────────────
+
+
+@app.route('/api/addip', methods=['POST'])
+def add_ip():
+    data = request.get_json(force=True) if request.data else {}
+    ip_row = int(data.get('ip_row', 0))
+    ip_col = int(data.get('ip_col', 0))
+    ip_dir = int(data.get('ip_dir', 1))  # DIR_E = 1
+    h0 = int(data.get('h0', 0))
+    h1 = int(data.get('h1', 0))
+    h2 = int(data.get('h2', 0))
+    cl = int(data.get('cl', 0))
+    gp = int(data.get('gp', 0))
+    idx = sim.add_ip(ip_row=ip_row, ip_col=ip_col, ip_dir=ip_dir,
+                     h0=h0, h1=h1, h2=h2, cl=cl, gp=gp)
+    result = serialize_state()
+    result['added_ip'] = idx
+    return jsonify(result)
+
+
+@app.route('/api/rmip', methods=['POST'])
+def remove_ip():
+    data = request.get_json(force=True)
+    idx = int(data.get('index', -1))
+    if sim.n_ips <= 1:
+        abort(400, 'Cannot remove the last IP')
+    if not (0 <= idx < sim.n_ips):
+        abort(400, f'Invalid IP index: {idx}')
+    sim._save_active()
+    sim.ips.pop(idx)
+    sim.n_ips = len(sim.ips)
+    if sim.active_ip >= sim.n_ips:
+        sim.active_ip = sim.n_ips - 1
+    elif sim.active_ip == idx:
+        sim.active_ip = min(idx, sim.n_ips - 1)
+    sim._load_active(sim.active_ip)
+    return jsonify(serialize_state())
+
+
+@app.route('/api/switchip', methods=['POST'])
+def switch_ip():
+    data = request.get_json(force=True)
+    idx = int(data.get('index', 0))
+    if 0 <= idx < sim.n_ips:
+        sim._activate_ip(idx)
+    else:
+        abort(400, f'Invalid IP index: {idx}')
     return jsonify(serialize_state())
 
 
