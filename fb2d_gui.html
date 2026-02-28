@@ -14,6 +14,8 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 #toolbar button:hover { background: #7b2cbf; }
 #toolbar button:active { background: #9d4edd; }
 #toolbar button.active { background: #e94560; }
+#btnNoise.active { background: #e17055; }
+#btnGpCleanup.active { background: #00b894; }
 #stepDisplay { font-size: 13px; min-width: 90px; text-align: center; color: #aaa; }
 #speedSlider { width: 80px; accent-color: #533483; }
 #speedLabel { font-size: 11px; color: #888; min-width: 50px; }
@@ -108,15 +110,21 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
   <select id="fileSelect"><option value="">-- load file --</option></select>
   <span style="color:#555">|</span>
   <button id="btnReset" title="Reset to step 0 (R)">&#x21BA;</button>
-  <button id="btnBackFast" title="Step back 10 (Shift+Left)">&#x25C0;&#x25C0;</button>
+  <button id="btnBackFast" title="Step back batch (Shift+Left)">&#x25C0;&#x25C0;</button>
   <button id="btnBack" title="Step back (Left)">&#x25C0;</button>
   <span id="stepDisplay">Step 0</span>
   <button id="btnForward" title="Step forward (Right)">&#x25B6;</button>
-  <button id="btnForwardFast" title="Step forward 10 (Shift+Right)">&#x25B6;&#x25B6;</button>
+  <button id="btnForwardFast" title="Step forward batch (Shift+Right)">&#x25B6;&#x25B6;</button>
   <span style="color:#555">|</span>
   <button id="btnPlay" title="Play/Pause (Space)">&#x25B6; Play</button>
-  <input type="range" id="speedSlider" min="1" max="100" value="50" title="Playback speed">
-  <span id="speedLabel">200ms</span>
+  <label style="color:#aaa; font-size:11px;">Batch:</label>
+  <input type="number" id="batchSize" value="1" min="1" max="10000" step="1"
+         style="width:52px; background:#0f3460; color:#e0e0e0; border:1px solid #533483;
+                border-radius:3px; padding:1px 4px; font-size:12px; text-align:right;"
+         title="Steps per tick / per Shift+Arrow">
+  <label style="color:#aaa; font-size:11px;">Delay:</label>
+  <input type="range" id="speedSlider" min="1" max="100" value="50" title="Delay between ticks (ms)">
+  <span id="speedLabel" style="font-size:11px; color:#888; min-width:40px;">200ms</span>
   <span style="color:#555">|</span>
   <button id="btnModeToggle" title="Toggle edit mode (E)">&#x270E; Edit</button>
   <div id="editControls">
@@ -128,6 +136,24 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
     <button id="btnSave" title="Save to file">Save</button>
     <span id="selInfo"></span>
   </div>
+  <span style="color:#555">|</span>
+  <button id="btnNoise" title="Toggle noise injection (N)">&#x26A1; Noise</button>
+  <div id="noiseControls" style="display:none;">
+    <label style="color:#aaa; font-size:11px;">Rate:</label>
+    <input type="number" id="noiseRate" value="1.00" min="0" max="100" step="0.1"
+           style="width:52px; background:#0f3460; color:#e0e0e0; border:1px solid #533483;
+                  border-radius:3px; padding:1px 4px; font-size:12px; text-align:right;">
+    <span style="color:#888; font-size:11px;">/sweep</span>
+    <select id="noiseType" style="background:#0f3460; color:#e0e0e0; border:1px solid #533483;
+                                   border-radius:3px; padding:1px 4px; font-size:12px;">
+      <option value="any">any</option>
+      <option value="parity">parity</option>
+      <option value="data">data</option>
+    </select>
+    <span id="noiseStats" style="color:#ff9f43; font-size:11px; margin-left:4px;">0 injected</span>
+  </div>
+  <button id="btnGpCleanup" title="Auto-zero GP rows on wrap (cheat)">&#x267B; GP</button>
+  <span id="gpCleanupStats" style="color:#55efc4; font-size:11px; display:none;"></span>
   <span style="color:#555">|</span>
   <button id="btnHelp" title="Keyboard shortcuts (?)">?</button>
 </div>
@@ -186,9 +212,11 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
     <h2>Keyboard Shortcuts</h2>
     <div class="section">
       <kbd>&rarr;</kbd> Step forward &nbsp; <kbd>&larr;</kbd> Step back<br>
-      <kbd>Shift+&rarr;</kbd> Step 10x &nbsp; <kbd>Shift+&larr;</kbd> Back 10x<br>
+      <kbd>Shift+&rarr;</kbd> Step batch &nbsp; <kbd>Shift+&larr;</kbd> Back batch<br>
       <kbd>Space</kbd> Play / Pause<br>
-      <kbd>R</kbd> Reset to step 0
+      <kbd>R</kbd> Reset to step 0<br>
+      <kbd>N</kbd> Toggle noise injection<br>
+      <kbd>G</kbd> Toggle GP cleanup (cheat)
     </div>
     <div class="section">
       <kbd>F</kbd> Fit to grid &nbsp; <kbd>+</kbd> Zoom in &nbsp; <kbd>-</kbd> Zoom out
@@ -276,6 +304,28 @@ const OPCODE_CHARS = {
   53:'m', 54:'M', 55:'j', 56:'V'
 };
 
+// d_min=4 opcode encoding: opcode number → 11-bit payload value
+const OPCODE_PAYLOADS = {
+   0:    0,  1:  449,  2:  706,  3:  771,  4:  836,  5:  645,
+   6:  390,  7:   71,  8:  904,  9:  585, 10:  330, 11:  139,
+  12:  204, 13:  269, 14:  526, 15:  975, 16: 1232, 17: 1297,
+  18: 1554, 19: 2003, 20: 1940, 21: 1621, 22: 1366, 23: 1175,
+  24: 1880, 25: 1689, 26: 1434, 27: 1115, 28: 1052, 29: 1501,
+  30: 1758, 31: 1823, 32: 1376, 33: 1185, 34: 1954, 35: 1635,
+  36: 1572, 37: 2021, 38: 1254, 39: 1319, 40: 1768, 41: 1833,
+  42: 1066, 43: 1515, 44: 1452, 45: 1133, 46: 1902, 47: 1711,
+  48:  432, 49:  113, 50:  882, 51:  691, 52:  756, 53:  821,
+  54:   54, 55:  503, 56:  568,
+};
+
+// Reverse lookup: payload → opcode number (0=NOP for unrecognized)
+const PAYLOAD_TO_OPCODE = new Array(2048).fill(0);
+for (const [op, pl] of Object.entries(OPCODE_PAYLOADS)) {
+  PAYLOAD_TO_OPCODE[pl] = parseInt(op);
+}
+
+function payloadToOpcode(payload) { return PAYLOAD_TO_OPCODE[payload & 0x7FF]; }
+
 const OPCODE_NAMES = {
   0:'NOP', 1:'/ reflect', 2:'\\ reflect', 3:'% /if[CL]!=0', 4:'? /if[CL]==0',
   5:'& \\if[CL]!=0', 6:'! \\if[CL]==0',
@@ -315,6 +365,7 @@ const IP_COLORS = [
 let state = null;
 let currentFile = '';
 let annotations = { cells: {}, regions: [] };
+let ipVisible = [true, true, true, true]; // per-IP head visibility toggles
 
 // Viewport
 let vpX = 0, vpY = 0; // top-left offset in grid-pixel coords
@@ -331,6 +382,7 @@ let regionSelecting = false, regionStart = null, regionEnd = null;
 let playing = false;
 let playTimer = null;
 let playDelay = 200;
+let playStepsPerTick = 1;
 
 // Follow mode
 let followMode = 'center'; // center | edge | off
@@ -398,13 +450,25 @@ async function saveAnnotations() {
 }
 
 async function stepForward(n = 1) {
-  state = await api('step?n=' + n, {method: 'POST'});
-  afterStep();
+  try {
+    state = await api('step?n=' + n, {method: 'POST'});
+    afterStep();
+  } catch (err) {
+    console.error('stepForward failed:', err);
+    if (playing) togglePlay();
+    document.getElementById('stepDisplay').textContent = 'ERROR — reset (R)';
+  }
 }
 
 async function stepBack(n = 1) {
-  state = await api('back?n=' + n, {method: 'POST'});
-  afterStep();
+  try {
+    state = await api('back?n=' + n, {method: 'POST'});
+    afterStep();
+  } catch (err) {
+    console.error('stepBack failed:', err);
+    if (playing) togglePlay();
+    document.getElementById('stepDisplay').textContent = 'ERROR — reset (R)';
+  }
 }
 
 async function resetToStart() {
@@ -429,11 +493,15 @@ async function refreshState() {
     document.getElementById('fileSelect').value = currentFile;
   }
   updateStatus();
+  updateNoiseStats(state);
+  updateGpCleanupStats(state);
   render();
 }
 
 function afterStep() {
   updateStatus();
+  updateNoiseStats(state);
+  updateGpCleanupStats(state);
   followIP();
   render();
 }
@@ -452,22 +520,26 @@ function updateStatus() {
     ip_dir: state.ip_dir, cl: state.cl, h0: state.h0, h1: state.h1,
     h2: state.h2, gp: state.gp }];
   const nIps = ips.length;
-  const activeIdx = state.active_ip || 0;
 
   let html = '';
   for (let i = 0; i < nIps; i++) {
     const ip = ips[i];
     const arrow = DIR_ARROWS[ip.ip_dir];
     const col = IP_COLORS[i % IP_COLORS.length];
+    const vis = ipVisible[i] !== false;
     const label = nIps > 1 ? `IP${i}` : 'IP';
-    const isSel = (i === activeIdx && nIps > 1);
-    const style = isSel ? `color:${col.fg};text-decoration:underline;cursor:pointer` : `color:${col.fg};cursor:pointer`;
-    html += `<span class="head-label" style="${style}" onclick="switchToIP(${i})" title="Click to select IP${i}">${label}:(${ip.ip_row},${ip.ip_col})${arrow}</span> `;
-    html += `<span class="head-label head-cl">CL:${rc(ip.cl)}</span> `;
-    html += `<span class="head-label head-h0">H0:${rc(ip.h0)}</span> `;
-    html += `<span class="head-label head-h1">H1:${rc(ip.h1)}</span> `;
-    html += `<span class="head-label head-h2">H2:${rc(ip.h2)}</span> `;
-    html += `<span class="head-label head-gp">GP:${rc(ip.gp)}</span>`;
+    // Toggle button: checkbox-style with IP color
+    const btnStyle = vis
+      ? `color:#fff;background:${col.fg};border:1px solid ${col.fg};border-radius:3px;padding:0 4px;cursor:pointer;font-size:11px;font-weight:bold;margin-right:2px`
+      : `color:#666;background:transparent;border:1px solid #444;border-radius:3px;padding:0 4px;cursor:pointer;font-size:11px;margin-right:2px`;
+    html += `<span style="${btnStyle}" onclick="toggleIPVisible(${i})" title="Toggle ${label} heads">${label}</span>`;
+    const dim = vis ? '' : 'opacity:0.35;';
+    html += `<span class="head-label" style="color:${col.fg};${dim}">(${ip.ip_row},${ip.ip_col})${arrow}</span> `;
+    html += `<span class="head-label head-cl" style="${dim}">CL:${rc(ip.cl)}</span> `;
+    html += `<span class="head-label head-h0" style="${dim}">H0:${rc(ip.h0)}</span> `;
+    html += `<span class="head-label head-h1" style="${dim}">H1:${rc(ip.h1)}</span> `;
+    html += `<span class="head-label head-h2" style="${dim}">H2:${rc(ip.h2)}</span> `;
+    html += `<span class="head-label head-gp" style="${dim}">GP:${rc(ip.gp)}</span>`;
     if (i < nIps - 1) html += ' <span style="color:#444">|</span> ';
   }
   document.getElementById('ipStatusAll').innerHTML = html;
@@ -587,22 +659,35 @@ function render() {
   const ips = state.ips || [{ ip_row: state.ip_row, ip_col: state.ip_col,
     ip_dir: state.ip_dir, cl: state.cl, h0: state.h0, h1: state.h1,
     h2: state.h2, gp: state.gp }];
-  const activeIdx = state.active_ip || 0;
-
-  // Build lookup: "r,c" -> IP index for IP positions
+  // Build lookup: "r,c" -> IP index for IP positions (only visible IPs)
   const ipPositions = {};
   for (let i = 0; i < ips.length; i++) {
+    if (ipVisible[i] === false) continue;
     const key = `${ips[i].ip_row},${ips[i].ip_col}`;
     if (!(key in ipPositions)) ipPositions[key] = i;  // first IP wins
   }
 
-  // Active IP's head positions (used for head highlights)
-  const aip = ips[activeIdx];
-  const clR = Math.floor(aip.cl / cols), clC = aip.cl % cols;
-  const h0R = Math.floor(aip.h0 / cols), h0C = aip.h0 % cols;
-  const h1R = Math.floor(aip.h1 / cols), h1C = aip.h1 % cols;
-  const h2R = Math.floor(aip.h2 / cols), h2C = aip.h2 % cols;
-  const gpR = Math.floor(aip.gp / cols), gpC = aip.gp % cols;
+  // Build lookup: "r,c" -> [{ipIdx, headType}] for visible IPs' heads
+  const HEAD_TYPES = ['cl', 'h0', 'h1', 'h2', 'gp'];
+  const HEAD_COLORS = {
+    cl: { fg: COLORS.cl, bg: COLORS.clBg },
+    h0: { fg: COLORS.h0, bg: COLORS.h0Bg },
+    h1: { fg: COLORS.h1, bg: COLORS.h1Bg },
+    h2: { fg: COLORS.h2, bg: COLORS.h2Bg },
+    gp: { fg: COLORS.gp, bg: COLORS.gpBg },
+  };
+  const allHeads = {};  // "r,c" -> [{ipIdx, headType}]
+  for (let i = 0; i < ips.length; i++) {
+    if (ipVisible[i] === false) continue;
+    const ip = ips[i];
+    for (const ht of HEAD_TYPES) {
+      const flat = ip[ht];
+      const hr = Math.floor(flat / cols), hc = flat % cols;
+      const key = `${hr},${hc}`;
+      if (!allHeads[key]) allHeads[key] = [];
+      allHeads[key].push({ ipIdx: i, headType: ht });
+    }
+  }
 
   // Draw region annotations (behind cells)
   for (const reg of annotations.regions) {
@@ -622,6 +707,12 @@ function render() {
     }
   }
 
+  // Build set of GP rows (from all IPs, visible or not — it's a structural property)
+  const gpRows = new Set();
+  for (let i = 0; i < ips.length; i++) {
+    gpRows.add(Math.floor(ips[i].gp / cols));
+  }
+
   // Draw cells
   const showText = cs >= 14;
   const fontSize = Math.max(8, Math.min(16, cs * 0.55));
@@ -638,23 +729,34 @@ function render() {
       const flat = r * cols + c;
       const val = state.grid[flat];
 
-      // Cell background
+      // Cell background — syndrome coloring first, then head/IP overlay
       const ipKey = `${r},${c}`;
       const ipIdx = ipPositions[ipKey];
       const isIP = ipIdx !== undefined;
-      const isCL = (r === clR && c === clC);
-      const isH0 = (r === h0R && c === h0C);
-      const isH1 = (r === h1R && c === h1C);
-      const isH2 = (r === h2R && c === h2C);
-      const isGP = (r === gpR && c === gpC);
+      const headEntries = allHeads[ipKey] || [];
+      const isGpRow = gpRows.has(r);
 
-      if (isIP) ctx.fillStyle = IP_COLORS[ipIdx % IP_COLORS.length].bg;
-      else if (isCL) ctx.fillStyle = COLORS.clBg;
-      else if (isH0) ctx.fillStyle = COLORS.h0Bg;
-      else if (isH1) ctx.fillStyle = COLORS.h1Bg;
-      else if (isH2) ctx.fillStyle = COLORS.h2Bg;
-      else if (isGP) ctx.fillStyle = COLORS.gpBg;
-      else ctx.fillStyle = val === 0 ? COLORS.zeroBg : COLORS.cellBg;
+      // Syndrome-based background
+      const { syn, pAll } = hammingSyndrome(val);
+      const hasError = (syn !== 0 || pAll !== 0);
+      const isSingleBit = hasError && (pAll !== 0);  // odd parity → single-bit (SECDED correctable)
+      const isDoubleBit = hasError && (pAll === 0);   // even parity + syn≠0 → double-bit
+
+      if (isIP) {
+        ctx.fillStyle = IP_COLORS[ipIdx % IP_COLORS.length].bg;
+      } else if (isGpRow && val !== 0) {
+        // GP row non-zero: green (correction breadcrumbs / scratch data)
+        ctx.fillStyle = hasError ? 'rgba(0,200,83,0.35)' : 'rgba(0,180,70,0.25)';
+      } else if (isSingleBit) {
+        ctx.fillStyle = 'rgba(255,255,0,0.35)';   // yellow warning
+      } else if (isDoubleBit) {
+        ctx.fillStyle = 'rgba(255,50,50,0.40)';   // red danger
+      } else if (headEntries.length > 0) {
+        // First visible head's background color
+        ctx.fillStyle = HEAD_COLORS[headEntries[0].headType].bg;
+      } else {
+        ctx.fillStyle = val === 0 ? COLORS.zeroBg : COLORS.cellBg;
+      }
 
       ctx.fillRect(px, py, cs, cs);
 
@@ -663,13 +765,33 @@ function render() {
       ctx.lineWidth = 0.5;
       ctx.strokeRect(px + 0.5, py + 0.5, cs - 1, cs - 1);
 
-      // Secondary pointer borders
-      if (!isIP) {
-        if (isCL) { ctx.strokeStyle = COLORS.cl; ctx.lineWidth = 2; ctx.strokeRect(px+1, py+1, cs-2, cs-2); }
-        if (isH0) { ctx.strokeStyle = COLORS.h0; ctx.lineWidth = 2; ctx.strokeRect(px+1, py+1, cs-2, cs-2); }
-        if (isH1) { ctx.strokeStyle = COLORS.h1; ctx.lineWidth = 1.5; ctx.strokeRect(px+2, py+2, cs-4, cs-4); }
-        if (isH2) { ctx.strokeStyle = COLORS.h2; ctx.lineWidth = 1.5; ctx.strokeRect(px+2, py+2, cs-4, cs-4); }
-        if (isGP) { ctx.strokeStyle = COLORS.gp; ctx.lineWidth = 1; ctx.strokeRect(px+3, py+3, cs-6, cs-6); }
+      // Head pointer borders — solid borders for all visible IPs
+      if (!isIP && headEntries.length > 0) {
+        for (const entry of headEntries) {
+          const headCol = HEAD_COLORS[entry.headType];
+          // Each IP's heads get a different inset level so they nest visually
+          const ipInset = entry.ipIdx * 2;
+          const baseInset = entry.headType === 'h1' || entry.headType === 'h2' ? 2 :
+                            entry.headType === 'gp' ? 3 : 1;
+          const inset = baseInset + ipInset;
+          const lw = entry.headType === 'cl' || entry.headType === 'h0' ? 2 : 1.5;
+          ctx.strokeStyle = headCol.fg;
+          ctx.lineWidth = lw;
+          ctx.strokeRect(px+inset, py+inset, cs-2*inset, cs-2*inset);
+          // Small IP label in corner if cell is big enough and multiple IPs visible
+          if (cs >= 16 && ips.length > 1) {
+            const ipCol = IP_COLORS[entry.ipIdx % IP_COLORS.length];
+            ctx.fillStyle = ipCol.fg;
+            ctx.font = `${Math.max(6, cs * 0.22)}px monospace`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText(`${entry.ipIdx}`, px + inset + 1, py + inset);
+            // Restore font for main cell text
+            ctx.font = `${fontSize}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+          }
+        }
       }
 
       // Annotation dot
@@ -771,7 +893,8 @@ function drawRulers(r0, r1, c0, c1) {
 
 function cellChar(val) {
   const payload = cellToPayload(val);
-  if (payload in OPCODE_CHARS) return OPCODE_CHARS[payload];
+  const opcode = PAYLOAD_TO_OPCODE[payload];
+  if (opcode in OPCODE_CHARS) return OPCODE_CHARS[opcode];
   return val.toString(16).padStart(4, '0');
 }
 
@@ -1011,10 +1134,13 @@ canvas.addEventListener('mousemove', (e) => {
     const val = state.grid[flat];
     const ch = cellChar(val);
     const payload = cellToPayload(val);
-    const name = OPCODE_NAMES[payload] || (payload === 0 ? 'NOP' : `NOP (payload=${payload})`);
+    const opcode = PAYLOAD_TO_OPCODE[payload];
+    const name = OPCODE_NAMES[opcode] || (opcode === 0 ? 'NOP' : `op${opcode}`);
     const { syn, pAll } = hammingSyndrome(val);
-    const synStr = syn === 0 && pAll === 0 ? 'ok' : `${syn}${pAll ? '!' : ''}`;
-    let text = `(${cell.r},${cell.c}) ${ch}  payload=${payload} (0x${payload.toString(16)})  syn=${synStr}  ${name}`;
+    const synStr = syn === 0 && pAll === 0 ? 'ok' : `syn=${syn}${pAll ? '!' : ''}`;
+    const bits = val.toString(2).padStart(16, '0');
+    const bitsFormatted = bits.slice(0,4) + ' ' + bits.slice(4,8) + ' ' + bits.slice(8,12) + ' ' + bits.slice(12,16);
+    let text = `(${cell.r},${cell.c}) '${ch}' op=${opcode} ${name}\npayload=${payload} raw=0x${val.toString(16).padStart(4,'0')} ${synStr}\n${bitsFormatted}`;
     const annKey = `${cell.r},${cell.c}`;
     if (annotations.cells[annKey]) {
       text += `\n\uD83D\uDCDD ${annotations.cells[annKey]}`;
@@ -1024,7 +1150,7 @@ canvas.addEventListener('mousemove', (e) => {
     tooltip.style.top = (my + 16) + 'px';
     tooltip.style.display = 'block';
     document.getElementById('cellInfo').textContent =
-      `(${cell.r},${cell.c}) ${ch}  raw=0x${val.toString(16).padStart(4,'0')}  payload=${payload} (0x${payload.toString(16)})  syn=${synStr}  ${name}`;
+      `(${cell.r},${cell.c}) '${ch}' op=${opcode} ${name}  payload=${payload}  raw=0x${val.toString(16).padStart(4,'0')}  ${synStr}  ${bitsFormatted}`;
   } else {
     tooltip.style.display = 'none';
     document.getElementById('cellInfo').textContent = '';
@@ -1381,7 +1507,7 @@ function buildOpcodePicker() {
     if (btn && pickerCell) {
       const code = parseInt(btn.dataset.code);
       // Encode the opcode as a valid Hamming codeword
-      setCell(pickerCell.r, pickerCell.c, hammingEncode(code));
+      setCell(pickerCell.r, pickerCell.c, hammingEncode(OPCODE_PAYLOADS[code]));
       closeOpcodePicker();
       return;
     }
@@ -1419,11 +1545,11 @@ function showOpcodePicker(r, c, px, py) {
   picker.style.top = top + 'px';
   picker.style.display = 'block';
 
-  // Highlight current value (compare payload to opcode)
+  // Highlight current value (compare opcode via d_min=4 lookup)
   const flat = r * state.cols + c;
-  const currentPayload = cellToPayload(state.grid[flat]);
+  const currentOpcode = PAYLOAD_TO_OPCODE[cellToPayload(state.grid[flat])];
   picker.querySelectorAll('.op-btn').forEach(b => {
-    b.classList.toggle('selected', parseInt(b.dataset.code) === currentPayload);
+    b.classList.toggle('selected', parseInt(b.dataset.code) === currentOpcode);
   });
 }
 
@@ -1452,7 +1578,7 @@ function togglePlay() {
 
 async function playTick() {
   if (!playing) return;
-  await stepForward(1);
+  await stepForward(playStepsPerTick);
   if (playing) playTimer = setTimeout(playTick, playDelay);
 }
 
@@ -1461,7 +1587,118 @@ function updateSpeed() {
   // Map 1..100 to 500ms..10ms (exponential)
   const v = parseInt(slider.value);
   playDelay = Math.round(500 * Math.pow(10 / 500, v / 100));
-  document.getElementById('speedLabel').textContent = playDelay + 'ms';
+  document.getElementById('speedLabel').textContent = `${playDelay}ms`;
+}
+
+function updateBatch() {
+  const input = document.getElementById('batchSize');
+  playStepsPerTick = Math.max(1, Math.min(10000, parseInt(input.value) || 1));
+  input.value = playStepsPerTick;
+  // Update fast-step button tooltips to reflect batch size
+  document.getElementById('btnForwardFast').title = `Step forward ${playStepsPerTick} (Shift+Right)`;
+  document.getElementById('btnBackFast').title = `Step back ${playStepsPerTick} (Shift+Left)`;
+}
+
+// ── Noise injection ─────────────────────────────────────────────
+let noiseEnabled = false;
+
+async function toggleNoise() {
+  noiseEnabled = !noiseEnabled;
+  const btn = document.getElementById('btnNoise');
+  const controls = document.getElementById('noiseControls');
+  if (noiseEnabled) {
+    btn.classList.add('active');
+    controls.style.display = '';
+    await sendNoiseConfig();
+  } else {
+    btn.classList.remove('active');
+    controls.style.display = 'none';
+    await api('noise', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ enabled: false })
+    });
+  }
+}
+
+async function sendNoiseConfig() {
+  const rate = parseFloat(document.getElementById('noiseRate').value) || 0;
+  const type = document.getElementById('noiseType').value;
+  await api('noise', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ enabled: noiseEnabled, rate, type })
+  });
+}
+
+function updateNoiseStats(st) {
+  if (!st) return;
+  const el = document.getElementById('noiseStats');
+  if (el) {
+    if (st.noise_enabled) {
+      const nIps = st.n_ips || 1;
+      const cycles = st.cols ? Math.floor(st.step_count / (st.cols * nIps)) : 0;
+      const sweepPct = st.cols ? Math.round(100 * cycles / st.cols) : 0;
+      const sweeps = st.cols ? (cycles / st.cols).toFixed(1) : '?';
+      el.textContent = `${st.noise_total_injected} injected (${sweeps} sweeps)`;
+    } else if (st.noise_total_injected !== undefined) {
+      el.textContent = st.noise_total_injected + ' injected';
+    }
+  }
+  // Sync toggle state from server (e.g. on page load)
+  if (st.noise_enabled !== undefined && st.noise_enabled !== noiseEnabled) {
+    noiseEnabled = st.noise_enabled;
+    const btn = document.getElementById('btnNoise');
+    const controls = document.getElementById('noiseControls');
+    if (noiseEnabled) {
+      btn.classList.add('active');
+      controls.style.display = '';
+    } else {
+      btn.classList.remove('active');
+      controls.style.display = 'none';
+    }
+  }
+}
+
+// ── GP cleanup cheat ──────────────────────────────────────────
+let gpCleanupEnabled = false;
+
+async function toggleGpCleanup() {
+  gpCleanupEnabled = !gpCleanupEnabled;
+  const btn = document.getElementById('btnGpCleanup');
+  const stats = document.getElementById('gpCleanupStats');
+  if (gpCleanupEnabled) {
+    btn.classList.add('active');
+    stats.style.display = '';
+  } else {
+    btn.classList.remove('active');
+    stats.style.display = 'none';
+  }
+  await api('gp_cleanup', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ enabled: gpCleanupEnabled })
+  });
+}
+
+function updateGpCleanupStats(st) {
+  if (!st) return;
+  const el = document.getElementById('gpCleanupStats');
+  if (el && st.gp_cleanup_count !== undefined && st.gp_cleanup_enabled) {
+    el.textContent = `${st.gp_cleanup_count} cleanups`;
+  }
+  if (st.gp_cleanup_enabled !== undefined && st.gp_cleanup_enabled !== gpCleanupEnabled) {
+    gpCleanupEnabled = st.gp_cleanup_enabled;
+    const btn = document.getElementById('btnGpCleanup');
+    const stats = document.getElementById('gpCleanupStats');
+    if (gpCleanupEnabled) {
+      btn.classList.add('active');
+      stats.style.display = '';
+    } else {
+      btn.classList.remove('active');
+      stats.style.display = 'none';
+    }
+  }
 }
 
 // ── Button handlers ────────────────────────────────────────────
@@ -1506,6 +1743,12 @@ async function switchToIP(idx) {
   afterStep();
 }
 
+function toggleIPVisible(idx) {
+  ipVisible[idx] = !ipVisible[idx];
+  updateStatus();
+  render();
+}
+
 function updateIPButtons() {
   const nIps = state ? (state.n_ips || 1) : 1;
   document.getElementById('btnRmIP').disabled = nIps <= 1;
@@ -1516,10 +1759,11 @@ document.getElementById('btnRmIP').addEventListener('click', removeActiveIP);
 
 document.getElementById('btnForward').addEventListener('click', () => stepForward(1));
 document.getElementById('btnBack').addEventListener('click', () => stepBack(1));
-document.getElementById('btnForwardFast').addEventListener('click', () => stepForward(10));
-document.getElementById('btnBackFast').addEventListener('click', () => stepBack(10));
+document.getElementById('btnForwardFast').addEventListener('click', () => stepForward(playStepsPerTick));
+document.getElementById('btnBackFast').addEventListener('click', () => stepBack(playStepsPerTick));
 document.getElementById('btnPlay').addEventListener('click', togglePlay);
 document.getElementById('speedSlider').addEventListener('input', updateSpeed);
+document.getElementById('batchSize').addEventListener('change', updateBatch);
 
 document.getElementById('btnZoomIn').addEventListener('click', () => zoomAt(canvas.width/2, canvas.height/2, 1.3));
 document.getElementById('btnZoomOut').addEventListener('click', () => zoomAt(canvas.width/2, canvas.height/2, 1/1.3));
@@ -1531,6 +1775,12 @@ document.getElementById('btnCut').addEventListener('click', doCut);
 document.getElementById('btnPaste').addEventListener('click', enterPasteMode);
 document.getElementById('btnDelSel').addEventListener('click', doDeleteSelection);
 document.getElementById('btnSave').addEventListener('click', doSave);
+
+document.getElementById('btnNoise').addEventListener('click', toggleNoise);
+document.getElementById('noiseRate').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
+document.getElementById('noiseType').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
+
+document.getElementById('btnGpCleanup').addEventListener('click', toggleGpCleanup);
 
 document.getElementById('btnHelp').addEventListener('click', () => {
   document.getElementById('helpOverlay').classList.toggle('visible');
@@ -1560,10 +1810,12 @@ document.addEventListener('keydown', (e) => {
   if (editMode && mod && e.key === 'v') { enterPasteMode(); e.preventDefault(); return; }
   if (editMode && (e.key === 'Delete' || e.key === 'Backspace')) { doDeleteSelection(); e.preventDefault(); return; }
 
-  if (e.key === 'e' && !mod) { toggleEditMode(); e.preventDefault(); }
+  if (e.key === 'n' && !mod && !editMode) { toggleNoise(); e.preventDefault(); }
+  else if (e.key === 'g' && !mod && !editMode) { toggleGpCleanup(); e.preventDefault(); }
+  else if (e.key === 'e' && !mod) { toggleEditMode(); e.preventDefault(); }
   else if (e.key === 'r' && !mod && !editMode) { resetToStart(); e.preventDefault(); }
-  else if (e.key === 'ArrowRight' && e.shiftKey) { stepForward(10); e.preventDefault(); }
-  else if (e.key === 'ArrowLeft' && e.shiftKey) { stepBack(10); e.preventDefault(); }
+  else if (e.key === 'ArrowRight' && e.shiftKey) { stepForward(playStepsPerTick); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft' && e.shiftKey) { stepBack(playStepsPerTick); e.preventDefault(); }
   else if (e.key === 'ArrowRight') { stepForward(1); e.preventDefault(); }
   else if (e.key === 'ArrowLeft') { stepBack(1); e.preventDefault(); }
   else if (e.key === ' ') { togglePlay(); e.preventDefault(); }

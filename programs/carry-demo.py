@@ -119,7 +119,7 @@ import os
 
 # Import the simulator
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + '/..')
-from fb2d import FB2DSimulator, OPCODES, hamming_encode, cell_to_payload
+from fb2d import FB2DSimulator, OPCODES, hamming_encode, cell_to_payload, encode_opcode
 
 def make_carry_demo(initial_value, num_digits=8, num_increments=1):
     """Build a carry corridor that increments a multi-cell number.
@@ -175,10 +175,10 @@ def make_carry_demo(initial_value, num_digits=8, num_increments=1):
     # Place carry gadgets on row 2
     for i in range(num_digits):
         base_col = corridor_start_col + i * gadget_width
-        sim.grid[sim._to_flat(2, base_col)] = hamming_encode(OPCODES['+'])     # [H0]++
-        sim.grid[sim._to_flat(2, base_col + 1)] = hamming_encode(OPCODES['%']) # / if [CL]!=0
+        sim.grid[sim._to_flat(2, base_col)] = encode_opcode(OPCODES['+'])     # [H0]++
+        sim.grid[sim._to_flat(2, base_col + 1)] = encode_opcode(OPCODES['%']) # / if [CL]!=0
         if i < num_digits - 1:
-            sim.grid[sim._to_flat(2, base_col + 2)] = hamming_encode(OPCODES['E'])  # H0 East
+            sim.grid[sim._to_flat(2, base_col + 2)] = encode_opcode(OPCODES['E'])  # H0 East
             # CL also needs to move East. But we have H0 and CL at the same
             # position. CL movement is >.
             # Actually we need BOTH H0 and CL to advance.
@@ -200,14 +200,14 @@ def make_carry_demo(initial_value, num_digits=8, num_increments=1):
     # Place carry gadgets on row 2 (Hamming-encoded opcodes)
     for i in range(num_digits):
         base_col = i * gadget_width
-        sim.grid[sim._to_flat(2, base_col)] = hamming_encode(OPCODES['+'])     # [H0]++
-        sim.grid[sim._to_flat(2, base_col + 1)] = hamming_encode(OPCODES['%']) # / if [CL]!=0
+        sim.grid[sim._to_flat(2, base_col)] = encode_opcode(OPCODES['+'])     # [H0]++
+        sim.grid[sim._to_flat(2, base_col + 1)] = encode_opcode(OPCODES['%']) # / if [CL]!=0
         if i < num_digits - 1:
-            sim.grid[sim._to_flat(2, base_col + 2)] = hamming_encode(OPCODES['E'])  # H0 East
-            sim.grid[sim._to_flat(2, base_col + 3)] = hamming_encode(OPCODES['>'])  # CL East
+            sim.grid[sim._to_flat(2, base_col + 2)] = encode_opcode(OPCODES['E'])  # H0 East
+            sim.grid[sim._to_flat(2, base_col + 3)] = encode_opcode(OPCODES['>'])  # CL East
 
         # Place / on row 1 at the % column to catch the upward reflection
-        sim.grid[sim._to_flat(1, base_col + 1)] = hamming_encode(OPCODES['/'])  # N→E redirect
+        sim.grid[sim._to_flat(1, base_col + 1)] = encode_opcode(OPCODES['/'])  # N→E redirect
 
     # IP starts at row 2, col 0, going East
     sim.ip_row = 2

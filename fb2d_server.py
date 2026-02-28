@@ -3,14 +3,125 @@
 
 import os
 import json
+import math
+import random
 from flask import Flask, jsonify, request, send_file, abort
-from fb2d import FB2DSimulator, OPCODE_TO_CHAR, OPCODES, hamming_encode, cell_to_payload
+from fb2d import (FB2DSimulator, OPCODE_TO_CHAR, OPCODES, hamming_encode,
+                  cell_to_payload, encode_opcode, OPCODE_PAYLOADS,
+                  _PAYLOAD_TO_OPCODE)
 
 PROGRAMS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'programs')
 
 app = Flask(__name__)
 sim = FB2DSimulator()
 current_file = ''  # Track which file is currently loaded
+
+# ── Noise injection state ──────────────────────────────────────
+PARITY_BITS = [0, 1, 2, 4, 8]
+DATA_BITS = [3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]
+
+noise_enabled = False
+noise_rate = 1.0         # errors per H2 sweep (Poisson lambda)
+noise_type = 'any'      # 'any', 'parity', 'data'
+noise_step_counter = 0  # steps since last injection
+noise_rng = random.Random(42)
+noise_total_injected = 0
+
+# ── GP cleanup cheat ─────────────────────────────────────────
+gp_cleanup_enabled = False  # auto-zero GP rows when GP wraps
+gp_cleanup_count = 0        # how many times cleanup has fired
+
+
+def _poisson_sample(lam):
+    """Poisson variate via Knuth's algorithm. Fine for small lambda."""
+    if lam <= 0:
+        return 0
+    L = math.exp(-lam)
+    k, p = 0, 1.0
+    while True:
+        k += 1
+        p *= noise_rng.random()
+        if p < L:
+            return k - 1
+
+
+noise_cycle_count = 0  # total cycles completed with noise enabled
+
+
+def _inject_noise_now():
+    """Inject noise: Poisson(noise_rate/cols) bit flips per IP cycle.
+
+    noise_rate is errors per H2 sweep (= sim.cols IP cycles).
+    Each call is one IP cycle, so lambda_per_cycle = noise_rate / sim.cols.
+    """
+    global noise_total_injected, noise_cycle_count
+    noise_cycle_count += 1
+    lam_per_cycle = noise_rate / sim.cols
+    n_errors = _poisson_sample(lam_per_cycle)
+    sweeps = noise_cycle_count / sim.cols
+    if n_errors == 0:
+        if noise_cycle_count % (sim.cols // 2) == 0:
+            print(f'[noise] sweep {sweeps:.1f}: 0 errors '
+                  f'(total: {noise_total_injected}, rate={noise_rate}/sweep)')
+        return
+    # Auto-detect code rows from IP positions
+    sim._save_active()
+    code_rows = list(set(ip['ip_row'] for ip in sim.ips))
+    for _ in range(n_errors):
+        row = noise_rng.choice(code_rows)
+        col = noise_rng.randint(0, sim.cols - 1)
+        if noise_type == 'parity':
+            bit = noise_rng.choice(PARITY_BITS)
+        elif noise_type == 'data':
+            bit = noise_rng.choice(DATA_BITS)
+        else:  # 'any'
+            bit = noise_rng.randint(0, 15)
+        sim.grid[sim._to_flat(row, col)] ^= (1 << bit)
+    noise_total_injected += n_errors
+    print(f'[noise] sweep {sweeps:.1f}: injected {n_errors} '
+          f'(total: {noise_total_injected})')
+
+
+def _noise_after_step():
+    """Called after each step_all(). Injects noise at cycle boundaries."""
+    global noise_step_counter
+    if not noise_enabled:
+        return
+    noise_step_counter += 1
+    if noise_step_counter >= sim.cols:
+        noise_step_counter = 0
+        _inject_noise_now()
+
+
+# ── GP cleanup step tracking ────────────────────────────────────
+_gp_step_counter = 0
+_gp_prev_cols = {}  # ip_index -> previous gp column
+
+
+def _gp_cleanup_after_step():
+    """Called after each step_all(). Zeros GP rows when GP wraps."""
+    global _gp_step_counter, gp_cleanup_count
+    if not gp_cleanup_enabled:
+        return
+    _gp_step_counter += 1
+    if _gp_step_counter < sim.cols:
+        return
+    _gp_step_counter = 0
+    # Check at every cycle boundary whether any IP's GP has wrapped
+    sim._save_active()
+    for i, ip in enumerate(sim.ips):
+        gp_flat = ip['gp']
+        gp_col = gp_flat % sim.cols
+        gp_row = gp_flat // sim.cols
+        prev = _gp_prev_cols.get(i)
+        _gp_prev_cols[i] = gp_col
+        if prev is not None and gp_col < prev:
+            # GP wrapped — zero the entire GP row
+            for c in range(sim.cols):
+                sim.grid[gp_row * sim.cols + c] = 0
+            gp_cleanup_count += 1
+            print(f'[gp-cleanup] IP{i}: zeroed row {gp_row}'
+                  f' (cleanup #{gp_cleanup_count})')
 
 
 def serialize_state():
@@ -36,6 +147,14 @@ def serialize_state():
         'n_ips': sim.n_ips,
         'active_ip': sim.active_ip,
         'ips': sim.ips,
+        # Noise injection state
+        'noise_enabled': noise_enabled,
+        'noise_rate': noise_rate,
+        'noise_type': noise_type,
+        'noise_total_injected': noise_total_injected,
+        # GP cleanup state
+        'gp_cleanup_enabled': gp_cleanup_enabled,
+        'gp_cleanup_count': gp_cleanup_count,
     }
     return result
 
@@ -52,7 +171,8 @@ def get_state():
 
 @app.route('/api/load', methods=['POST'])
 def load_file():
-    global current_file
+    global current_file, noise_step_counter, noise_total_injected, noise_cycle_count
+    global _gp_step_counter, _gp_prev_cols, gp_cleanup_count
     data = request.get_json(force=True)
     filename = data.get('filename', '')
     # Sanitize: only allow filenames, no path traversal
@@ -63,12 +183,22 @@ def load_file():
         abort(404, f'File not found: {filename}')
     sim.load_state(path)
     current_file = filename
+    # Reset noise counters (keep enabled/rate/type settings)
+    noise_step_counter = 0
+    noise_total_injected = 0
+    noise_cycle_count = 0
+    # Reset GP cleanup counters
+    _gp_step_counter = 0
+    _gp_prev_cols = {}
+    gp_cleanup_count = 0
     return jsonify(serialize_state())
 
 
 @app.route('/api/reset', methods=['POST'])
 def reset_state():
     """Reload the current file to reset back to step 0."""
+    global noise_step_counter, noise_total_injected, noise_cycle_count
+    global _gp_step_counter, _gp_prev_cols, gp_cleanup_count
     data = request.get_json(force=True) if request.data else {}
     filename = data.get('filename', '') or current_file
     if not filename:
@@ -79,22 +209,39 @@ def reset_state():
     if not os.path.isfile(path):
         abort(404, f'File not found: {filename}')
     sim.load_state(path)
+    # Reset noise counters (keep enabled/rate/type settings)
+    noise_step_counter = 0
+    noise_total_injected = 0
+    noise_cycle_count = 0
+    # Reset GP cleanup counters
+    _gp_step_counter = 0
+    _gp_prev_cols = {}
+    gp_cleanup_count = 0
     return jsonify(serialize_state())
 
 
 @app.route('/api/step', methods=['POST'])
 def step_forward():
     n = min(int(request.args.get('n', 1)), 10000)
-    for _ in range(n):
-        sim.step_all()
+    try:
+        for _ in range(n):
+            sim.step_all()
+            _noise_after_step()
+            _gp_cleanup_after_step()
+    except Exception as e:
+        print(f'[step] error after {n} steps: {e}')
+        # Return current state even on error so GUI can display it
     return jsonify(serialize_state())
 
 
 @app.route('/api/back', methods=['POST'])
 def step_backward():
     n = min(int(request.args.get('n', 1)), 10000)
-    for _ in range(n):
-        sim.step_back_all()
+    try:
+        for _ in range(n):
+            sim.step_back_all()
+    except Exception as e:
+        print(f'[back] error after {n} steps: {e}')
     return jsonify(serialize_state())
 
 
@@ -296,7 +443,69 @@ def switch_ip():
     return jsonify(serialize_state())
 
 
+# ── Noise injection routes ─────────────────────────────────────
+
+
+@app.route('/api/noise', methods=['GET'])
+def get_noise():
+    return jsonify({
+        'enabled': noise_enabled,
+        'rate': noise_rate,
+        'type': noise_type,
+        'total_injected': noise_total_injected,
+    })
+
+
+@app.route('/api/noise', methods=['POST'])
+def set_noise():
+    global noise_enabled, noise_rate, noise_type
+    global noise_step_counter, noise_total_injected, noise_cycle_count
+    data = request.get_json(force=True)
+    if 'enabled' in data:
+        new_enabled = bool(data['enabled'])
+        if new_enabled and not noise_enabled:
+            # Turning on: reset counters and re-seed RNG
+            noise_step_counter = 0
+            noise_total_injected = 0
+            noise_cycle_count = 0
+            noise_rng.seed()  # re-seed from system entropy
+        noise_enabled = new_enabled
+    if 'rate' in data:
+        noise_rate = max(0.0, float(data['rate']))
+    if 'type' in data:
+        t = data['type']
+        if t in ('any', 'parity', 'data'):
+            noise_type = t
+    print(f'[noise] config: enabled={noise_enabled} rate={noise_rate}/sweep '
+          f'type={noise_type} sweep={sim.cols} cycles')
+    return jsonify({
+        'enabled': noise_enabled,
+        'rate': noise_rate,
+        'type': noise_type,
+        'total_injected': noise_total_injected,
+    })
+
+
+@app.route('/api/gp_cleanup', methods=['POST'])
+def set_gp_cleanup():
+    global gp_cleanup_enabled, gp_cleanup_count, _gp_step_counter, _gp_prev_cols
+    data = request.get_json(force=True)
+    if 'enabled' in data:
+        new_enabled = bool(data['enabled'])
+        if new_enabled and not gp_cleanup_enabled:
+            _gp_step_counter = 0
+            _gp_prev_cols = {}
+            gp_cleanup_count = 0
+        gp_cleanup_enabled = new_enabled
+    print(f'[gp-cleanup] config: enabled={gp_cleanup_enabled}'
+          f' cleanups={gp_cleanup_count}')
+    return jsonify({
+        'enabled': gp_cleanup_enabled,
+        'count': gp_cleanup_count,
+    })
+
+
 if __name__ == '__main__':
     print(f'fb2d GUI server — programs dir: {PROGRAMS_DIR}')
     print(f'Open http://localhost:5000')
-    app.run(debug=True, port=5000)
+    app.run(debug=True, use_reloader=False, port=5000)

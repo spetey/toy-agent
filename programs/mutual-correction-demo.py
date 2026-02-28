@@ -37,7 +37,7 @@ import importlib.util
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + '/..')
 from fb2d import (FB2DSimulator, OPCODES, hamming_encode, cell_to_payload,
-                  DIR_E)
+                  DIR_E, encode_opcode, OPCODE_PAYLOADS)
 
 # Import from dual-gadget-demo.py (hyphenated filename needs importlib)
 _dgd_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -93,10 +93,10 @@ def make_mutual_torus(errors_a=None, errors_b=None):
     # Build correct encoded cells for the full code row
     correct_cells = []
     for opval in op_values:
-        correct_cells.append(hamming_encode(opval))
+        correct_cells.append(encode_opcode(opval))
     # Padding columns (NOP = 0 → encode(0))
     for _ in range(grid_width - n_ops):
-        correct_cells.append(hamming_encode(0))
+        correct_cells.append(encode_opcode(0))
 
     # Place identical code on both rows
     for c in range(grid_width):

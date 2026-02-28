@@ -42,7 +42,8 @@ import os
 import random
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + '/..')
-from fb2d import FB2DSimulator, OPCODES, hamming_encode, cell_to_payload
+from fb2d import (FB2DSimulator, OPCODES, hamming_encode, cell_to_payload,
+                  encode_opcode, OPCODE_PAYLOADS)
 
 OP = OPCODES
 OPCHAR = {v: k for k, v in OP.items()}
@@ -314,40 +315,40 @@ def place_boustrophedon(sim, op_values, left_col, right_col, start_row):
             slots = right_col - left_col   # e.g. 61-2 = 59
             n = min(slots, total - placed)
             for i in range(n):
-                sim.grid[sim._to_flat(row, left_col + i)] = hamming_encode(
+                sim.grid[sim._to_flat(row, left_col + i)] = encode_opcode(
                     op_values[placed])
                 placed += 1
             if placed >= total:
                 return row_count, row, left_col + n - 1, 1  # DIR_E
-            sim.grid[sim._to_flat(row, right_col)] = hamming_encode(OP['\\'])
+            sim.grid[sim._to_flat(row, right_col)] = encode_opcode(OP['\\'])
 
         elif row_count % 2 == 0:
             # Even row_count: going West
             # / at right_col (entry: S→W), code from right_col-1 to left_col+1
-            sim.grid[sim._to_flat(row, right_col)] = hamming_encode(OP['/'])
+            sim.grid[sim._to_flat(row, right_col)] = encode_opcode(OP['/'])
             slots = right_col - left_col - 1   # e.g. 61-2-1 = 58
             n = min(slots, total - placed)
             for i in range(n):
-                sim.grid[sim._to_flat(row, right_col - 1 - i)] = hamming_encode(
+                sim.grid[sim._to_flat(row, right_col - 1 - i)] = encode_opcode(
                     op_values[placed])
                 placed += 1
             if placed >= total:
                 return row_count, row, right_col - 1 - (n - 1), 3  # DIR_W
-            sim.grid[sim._to_flat(row, left_col)] = hamming_encode(OP['/'])
+            sim.grid[sim._to_flat(row, left_col)] = encode_opcode(OP['/'])
 
         else:
             # Odd row_count (not first): going East
             # \ at left_col (entry: S→E), code from left_col+1 to right_col-1
-            sim.grid[sim._to_flat(row, left_col)] = hamming_encode(OP['\\'])
+            sim.grid[sim._to_flat(row, left_col)] = encode_opcode(OP['\\'])
             slots = right_col - left_col - 1
             n = min(slots, total - placed)
             for i in range(n):
-                sim.grid[sim._to_flat(row, left_col + 1 + i)] = hamming_encode(
+                sim.grid[sim._to_flat(row, left_col + 1 + i)] = encode_opcode(
                     op_values[placed])
                 placed += 1
             if placed >= total:
                 return row_count, row, left_col + 1 + (n - 1), 1  # DIR_E
-            sim.grid[sim._to_flat(row, right_col)] = hamming_encode(OP['\\'])
+            sim.grid[sim._to_flat(row, right_col)] = encode_opcode(OP['\\'])
 
         row += 1
 
@@ -402,9 +403,9 @@ def make_h2_boustrophedon_torus(cases, first_cw_col=2,
 
     # Return corridor at col 1
     # \ at (last_code_row, 1): W→N
-    sim.grid[sim._to_flat(last_code_row, 1)] = hamming_encode(OP['\\'])
+    sim.grid[sim._to_flat(last_code_row, 1)] = encode_opcode(OP['\\'])
     # / at (first_code_row, 1): N→E
-    sim.grid[sim._to_flat(first_code_row, 1)] = hamming_encode(OP['/'])
+    sim.grid[sim._to_flat(first_code_row, 1)] = encode_opcode(OP['/'])
 
     # Place test codewords on REMOTE_ROW
     expected = []
@@ -462,7 +463,7 @@ def make_h2_test_torus(cases, first_cw_col=2):
 
     # Place gadget code on CODE_ROW (linear, Hamming-encoded)
     for i, opval in enumerate(op_values):
-        sim.grid[sim._to_flat(CODE_ROW, i)] = hamming_encode(opval)
+        sim.grid[sim._to_flat(CODE_ROW, i)] = encode_opcode(opval)
 
     # Place test codewords on REMOTE_ROW
     expected = []

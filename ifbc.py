@@ -33,7 +33,7 @@ Nested loop strategy:
 
 import sys
 import re
-from fb2d import hamming_encode, PAYLOAD_MASK, cell_to_payload
+from fb2d import hamming_encode, encode_opcode, PAYLOAD_MASK, cell_to_payload
 
 # ── fb2d opcode values (must match fb2d.py) ────────────────────────
 OP = {
@@ -384,7 +384,7 @@ class Compiler:
 
     def _emit(self, row, col, opcode_char):
         """Place an opcode on the grid (Hamming-encoded)."""
-        self.grid[(row, col)] = hamming_encode(OP[opcode_char])
+        self.grid[(row, col)] = encode_opcode(OP[opcode_char])
         self.max_col = max(self.max_col, col)
 
     def _emit_at_cursor(self, opcode_char, level):
@@ -1033,7 +1033,7 @@ class CompilerV2:
         return d
 
     def _emit(self, row, col, opcode_char):
-        self.grid[(row, col)] = hamming_encode(OP[opcode_char])
+        self.grid[(row, col)] = encode_opcode(OP[opcode_char])
         self.max_col = max(self.max_col, col)
 
     def _var_col(self, name):

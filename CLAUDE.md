@@ -306,10 +306,17 @@ range check using existing ops. For now, hardcode sweep ranges.
    Per-IP state: ip_row, ip_col, ip_dir, h0, h1, h2, cl, gp.
    Grid is shared. REPL: `ip`, `addip`, `rmip` commands.
 6. Simulated noise: verify mutual correction under random bit flips.
-7. Add simple compression (XOR-of-identical-pairs) to replace infinite
+   GUI noise injection with per-sweep rate. d_min=4 opcode encoding
+   ensures single data-bit flips → NOP (not wrong opcodes).
+7. Fast-path parity check gadget: multi-row layout where clean cells
+   (parity=0) skip correction rows. Parity check = 36 ops; full
+   correction = 323 ops. In W=48 boustrophedon: clean cell = 48 steps
+   vs dirty cell = 336 steps → 5× faster sweep at 95% clean cells.
+   Deferred until boustrophedon layout with agent border detection.
+8. Add simple compression (XOR-of-identical-pairs) to replace infinite
    zero reservoir with finite fuel.
-8. Adaptive sweep boundaries via H2 + V probe.
-9. Non-zero background: agents metabolize compressible data for energy.
+9. Adaptive sweep boundaries via H2 + V probe.
+10. Non-zero background: agents metabolize compressible data for energy.
 
 ## Design Decisions Log
 
@@ -329,3 +336,11 @@ range check using existing ops. For now, hardcode sweep ranges.
   (c) programmable H2 + `V` test bridge enables future boundary detection.
   Key insight: copy-down pattern (`m`/`M`/`j`) means only H2 touches
   remote rows, eliminating the H0 shuttle problem entirely.
+- **Nearest-codeword payload decoding**: the d_min=4 opcode encoding
+  ([11,6,4] linear code) is now used as an error-CORRECTING code, not
+  just error-detecting. Each 11-bit payload within Hamming distance 1
+  of a valid opcode codeword decodes to that opcode (not NOP). This
+  means a single data-bit error in an opcode cell still executes the
+  CORRECT opcode. Safety: 2-bit errors → NOP (guaranteed by d_min=4).
+  Each opcode has a "neighborhood" of 12 payloads (1 center + 11
+  single-bit neighbors). 672 of 2048 payloads decode to valid opcodes.

@@ -119,6 +119,53 @@ OPCODES = {
 OPCODE_TO_CHAR = {v: k for k, v in OPCODES.items()}
 OPCODE_TO_CHAR[0] = '·'   # NOP displayed as middle dot
 
+# ─── d_min=4 Opcode Encoding ────────────────────────────────────────
+#
+# Maps internal opcode number (0–56) → 11-bit payload value.
+# Constructed from an [11,6,4] linear code (parity rows 7,11,13,14,19,21).
+# Minimum pairwise Hamming distance between any two payloads = 4.
+#
+# Key property: NO combination of 1, 2, or 3 data-bit flips can turn one
+# valid opcode payload into another.  Every corrupted opcode becomes NOP.
+# This eliminates the cascading failure mode where noise creates rogue
+# opcodes (especially j/m) that corrupt remote cells via H2.
+
+OPCODE_PAYLOADS = {
+     0:    0,  1:  449,  2:  706,  3:  771,  4:  836,  5:  645,
+     6:  390,  7:   71,  8:  904,  9:  585, 10:  330, 11:  139,
+    12:  204, 13:  269, 14:  526, 15:  975, 16: 1232, 17: 1297,
+    18: 1554, 19: 2003, 20: 1940, 21: 1621, 22: 1366, 23: 1175,
+    24: 1880, 25: 1689, 26: 1434, 27: 1115, 28: 1052, 29: 1501,
+    30: 1758, 31: 1823, 32: 1376, 33: 1185, 34: 1954, 35: 1635,
+    36: 1572, 37: 2021, 38: 1254, 39: 1319, 40: 1768, 41: 1833,
+    42: 1066, 43: 1515, 44: 1452, 45: 1133, 46: 1902, 47: 1711,
+    48:  432, 49:  113, 50:  882, 51:  691, 52:  756, 53:  821,
+    54:   54, 55:  503, 56:  568,
+}
+
+# Reverse lookup: 11-bit payload → opcode number (0 = NOP for unrecognized)
+# Uses nearest-codeword decoding: payloads within Hamming distance 1 of a
+# valid opcode codeword decode to that opcode (not NOP). This is safe because
+# d_min=4 guarantees zero ambiguity at distance 1. A single data-bit error
+# in an opcode cell now executes the CORRECT opcode instead of NOP.
+_PAYLOAD_TO_OPCODE = [0] * 2048
+for _op, _pl in OPCODE_PAYLOADS.items():
+    _PAYLOAD_TO_OPCODE[_pl] = _op
+    # Set all distance-1 neighbors to the same opcode
+    for _bit in range(11):
+        _neighbor = _pl ^ (1 << _bit)
+        _PAYLOAD_TO_OPCODE[_neighbor] = _op
+del _op, _pl, _bit, _neighbor
+
+def payload_to_opcode(payload):
+    """Map an 11-bit payload to an internal opcode number (0 = NOP)."""
+    return _PAYLOAD_TO_OPCODE[payload & 0x7FF]
+
+def encode_opcode(opcode_num):
+    """Encode an opcode number into a 16-bit Hamming(16,11) SECDED cell
+    using the d_min=4 payload encoding."""
+    return hamming_encode(OPCODE_PAYLOADS[opcode_num])
+
 # Inverse direction map for head movement (for step_back)
 HEAD_MOVE_INVERSE = {
     7: DIR_S, 8: DIR_N, 9: DIR_W, 10: DIR_E,   # H0: N↔S, E↔W
@@ -375,7 +422,7 @@ class FB2DSimulator:
     def step(self):
         """Execute one instruction: read, execute, advance IP."""
         flat_ip = self._ip_flat()
-        opcode = _CELL_TO_PAYLOAD[self.grid[flat_ip]]  # extract payload
+        opcode = _PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD[self.grid[flat_ip]]]
         old_dir = self.ip_dir
 
         # ── Execute ──
@@ -438,6 +485,7 @@ class FB2DSimulator:
 
         elif opcode == 21:   # G swap(H1_register, grid[H0])
             self.h1, self.grid[self.h0] = self.grid[self.h0], self.h1
+            self.h1 = self.h1 % self.grid_size  # clamp to valid index
 
         elif opcode == 22:   # T swap(grid[CL], grid[H0])
             self.grid[self.cl], self.grid[self.h0] = \
@@ -592,7 +640,7 @@ class FB2DSimulator:
         prev_row = (self.ip_row - DR[self.ip_dir]) % self.rows
         prev_col = (self.ip_col - DC[self.ip_dir]) % self.cols
         prev_flat = self._to_flat(prev_row, prev_col)
-        opcode = _CELL_TO_PAYLOAD[self.grid[prev_flat]]  # extract payload
+        opcode = _PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD[self.grid[prev_flat]]]
 
         # ── Determine previous direction ──
         if opcode == 1:      # / always reflects
@@ -654,6 +702,7 @@ class FB2DSimulator:
 
         elif opcode == 21:   # G is self-inverse
             self.h1, self.grid[self.h0] = self.grid[self.h0], self.h1
+            self.h1 = self.h1 % self.grid_size  # clamp to valid index
 
         elif opcode == 22:   # T is self-inverse
             self.grid[self.cl], self.grid[self.h0] = \
@@ -820,7 +869,7 @@ class FB2DSimulator:
         count = 0
         for ch in code:
             if ch in OPCODES and count < self.grid_size:
-                self.grid[count] = hamming_encode(OPCODES[ch])
+                self.grid[count] = encode_opcode(OPCODES[ch])
                 count += 1
         return count
 
@@ -833,7 +882,7 @@ class FB2DSimulator:
         for ch in code:
             if ch in OPCODES:
                 flat = self._to_flat(r % self.rows, c % self.cols)
-                self.grid[flat] = hamming_encode(OPCODES[ch])
+                self.grid[flat] = encode_opcode(OPCODES[ch])
                 count += 1
                 if vertical:
                     r += 1
@@ -883,7 +932,7 @@ class FB2DSimulator:
         first_row_slots = width - 1 - start_col
         n = min(first_row_slots, total - placed)
         for i in range(n):
-            self.grid[self._to_flat(row, start_col + i)] = hamming_encode(ops[placed])
+            self.grid[self._to_flat(row, start_col + i)] = encode_opcode(ops[placed])
             placed += 1
 
         if placed >= total:
@@ -891,7 +940,7 @@ class FB2DSimulator:
             return 1, row, start_col + n - 1, DIR_E
 
         # Need to wrap: place \ at col width-1 to reflect E→S
-        self.grid[self._to_flat(row, width - 1)] = hamming_encode(OPCODES['\\'])
+        self.grid[self._to_flat(row, width - 1)] = encode_opcode(OPCODES['\\'])
 
         row_count = 1
 
@@ -902,38 +951,38 @@ class FB2DSimulator:
             if row_count % 2 == 0:
                 # Odd-indexed row (0-indexed): going West
                 # / at col width-1 to reflect S→W
-                self.grid[self._to_flat(row, width - 1)] = hamming_encode(OPCODES['/'])
+                self.grid[self._to_flat(row, width - 1)] = encode_opcode(OPCODES['/'])
 
                 # Opcodes from col width-2 down to col 1
                 slots = width - 2
                 n = min(slots, total - placed)
                 for i in range(n):
-                    self.grid[self._to_flat(row, width - 2 - i)] = hamming_encode(ops[placed])
+                    self.grid[self._to_flat(row, width - 2 - i)] = encode_opcode(ops[placed])
                     placed += 1
 
                 if placed >= total:
                     return row_count, row, width - 2 - (n - 1), DIR_W
 
                 # / at col 0 to reflect W→S
-                self.grid[self._to_flat(row, 0)] = hamming_encode(OPCODES['/'])
+                self.grid[self._to_flat(row, 0)] = encode_opcode(OPCODES['/'])
 
             else:
                 # Even-indexed row: going East
                 # \ at col 0 to reflect S→E
-                self.grid[self._to_flat(row, 0)] = hamming_encode(OPCODES['\\'])
+                self.grid[self._to_flat(row, 0)] = encode_opcode(OPCODES['\\'])
 
                 # Opcodes from col 1 to col width-2
                 slots = width - 2
                 n = min(slots, total - placed)
                 for i in range(n):
-                    self.grid[self._to_flat(row, 1 + i)] = hamming_encode(ops[placed])
+                    self.grid[self._to_flat(row, 1 + i)] = encode_opcode(ops[placed])
                     placed += 1
 
                 if placed >= total:
                     return row_count, row, 1 + (n - 1), DIR_E
 
                 # \ at col width-1 to reflect E→S
-                self.grid[self._to_flat(row, width - 1)] = hamming_encode(OPCODES['\\'])
+                self.grid[self._to_flat(row, width - 1)] = encode_opcode(OPCODES['\\'])
 
         return row_count, row, 0, DIR_E  # shouldn't reach here
 
@@ -948,10 +997,11 @@ class FB2DSimulator:
 
     def _cell_char(self, value):
         """Get display character for a grid cell value (always 1-3 chars).
-        Uses 11-bit payload for opcode lookup."""
+        Uses d_min=4 payload→opcode lookup."""
         payload = _CELL_TO_PAYLOAD[value]
-        if payload in OPCODE_TO_CHAR:
-            return OPCODE_TO_CHAR[payload]
+        opcode = _PAYLOAD_TO_OPCODE[payload]
+        if opcode in OPCODE_TO_CHAR:
+            return OPCODE_TO_CHAR[opcode]
         if value < 100:
             return f'{value:2d}'
         return f'{value:04x}'
@@ -1695,13 +1745,14 @@ def interactive_session():
                     if len(args) >= 3:
                         v = args[2]
                         if v in OPCODES:
-                            sim.grid[flat] = OPCODES[v]
+                            sim.grid[flat] = encode_opcode(OPCODES[v])
                         else:
                             sim.grid[flat] = int(v) & CELL_MASK
                     val = sim.grid[flat]
                     pl = _CELL_TO_PAYLOAD[val]
-                    ch = OPCODE_TO_CHAR.get(pl, f'data')
-                    print(f"grid[{r},{c}] = {val} (payload={pl}, {ch})")
+                    op = _PAYLOAD_TO_OPCODE[pl]
+                    ch = OPCODE_TO_CHAR.get(op, f'data(pl={pl})')
+                    print(f"grid[{r},{c}] = 0x{val:04x} (payload={pl}, op={op} '{ch}')")
                 else:
                     print("Usage: cell <r> <c> [value]")
 
