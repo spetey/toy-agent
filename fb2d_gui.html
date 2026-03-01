@@ -319,9 +319,20 @@ const OPCODE_PAYLOADS = {
 };
 
 // Reverse lookup: payload → opcode number (0=NOP for unrecognized)
+// Exact-match only — used for pristine codeword detection.
 const PAYLOAD_TO_OPCODE = new Array(2048).fill(0);
 for (const [op, pl] of Object.entries(OPCODE_PAYLOADS)) {
   PAYLOAD_TO_OPCODE[pl] = parseInt(op);
+}
+// Nearest-codeword lookup: includes distance-1 neighbors (matches fb2d.py
+// execution). d_min=4 guarantees no ambiguity. Used for display so the
+// tooltip/character shows what the simulator *actually executes*.
+const PAYLOAD_TO_OPCODE_NEAREST = new Array(2048).fill(0);
+for (const [op, pl] of Object.entries(OPCODE_PAYLOADS)) {
+  PAYLOAD_TO_OPCODE_NEAREST[pl] = parseInt(op);
+  for (let bit = 0; bit < 11; bit++) {
+    PAYLOAD_TO_OPCODE_NEAREST[pl ^ (1 << bit)] = parseInt(op);
+  }
 }
 
 function payloadToOpcode(payload) { return PAYLOAD_TO_OPCODE[payload & 0x7FF]; }
@@ -893,7 +904,7 @@ function drawRulers(r0, r1, c0, c1) {
 
 function cellChar(val) {
   const payload = cellToPayload(val);
-  const opcode = PAYLOAD_TO_OPCODE[payload];
+  const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
   if (opcode in OPCODE_CHARS) return OPCODE_CHARS[opcode];
   return val.toString(16).padStart(4, '0');
 }
@@ -1134,7 +1145,7 @@ canvas.addEventListener('mousemove', (e) => {
     const val = state.grid[flat];
     const ch = cellChar(val);
     const payload = cellToPayload(val);
-    const opcode = PAYLOAD_TO_OPCODE[payload];
+    const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
     const name = OPCODE_NAMES[opcode] || (opcode === 0 ? 'NOP' : `op${opcode}`);
     const { syn, pAll } = hammingSyndrome(val);
     const synStr = syn === 0 && pAll === 0 ? 'ok' : `syn=${syn}${pAll ? '!' : ''}`;
@@ -1545,9 +1556,9 @@ function showOpcodePicker(r, c, px, py) {
   picker.style.top = top + 'px';
   picker.style.display = 'block';
 
-  // Highlight current value (compare opcode via d_min=4 lookup)
+  // Highlight current value (compare opcode via nearest-codeword lookup)
   const flat = r * state.cols + c;
-  const currentOpcode = PAYLOAD_TO_OPCODE[cellToPayload(state.grid[flat])];
+  const currentOpcode = PAYLOAD_TO_OPCODE_NEAREST[cellToPayload(state.grid[flat])];
   picker.querySelectorAll('.op-btn').forEach(b => {
     b.classList.toggle('selected', parseInt(b.dataset.code) === currentOpcode);
   });

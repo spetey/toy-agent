@@ -317,6 +317,15 @@ range check using existing ops. For now, hardcode sweep ranges.
    zero reservoir with finite fuel.
 9. Adaptive sweep boundaries via H2 + V probe.
 10. Non-zero background: agents metabolize compressible data for energy.
+11. Cross-gadget consultation for double-bit errors: when a gadget
+    encounters a cell with a 2-bit error (detected but uncorrectable by
+    SECDED), it consults the corresponding cell in the other gadget as a
+    reference copy. If the other copy is clean (syndrome=0), use it to
+    reconstruct the correct value. This adds a second layer of redundancy
+    beyond single-gadget Hamming correction. Natural extension toward
+    replication: if gadgets already read each other for consultation,
+    the machinery for copying an entire gadget (spawning a replica) is
+    similar — consult becomes "copy all cells" instead of "copy one cell."
 
 ## Design Decisions Log
 

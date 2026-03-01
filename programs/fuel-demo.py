@@ -203,10 +203,19 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + '/..')
-from fb2d import FB2DSimulator, OPCODES
+from fb2d import (FB2DSimulator, OPCODES, encode_opcode, hamming_encode,
+                  cell_to_payload, _PAYLOAD_TO_OPCODE)
 
 OP = OPCODES
 OPCHAR = {v: k for k, v in OP.items()}
+
+
+def cell_char(v):
+    """Decode a 16-bit grid cell to its opcode character."""
+    if v == 0:
+        return '·'
+    op = _PAYLOAD_TO_OPCODE[cell_to_payload(v)]
+    return OPCHAR.get(op, '·')
 
 
 def make_torus_agent(fuel_pairs):
@@ -241,20 +250,20 @@ def make_torus_agent(fuel_pairs):
 
     sim = FB2DSimulator(rows=rows, cols=cols)
 
-    # Place fuel
+    # Place fuel (Hamming-encoded data values)
     for i, v in enumerate(fuel):
-        sim.grid[sim._to_flat(FUEL_ROW, i)] = v
+        sim.grid[sim._to_flat(FUEL_ROW, i)] = hamming_encode(v)
 
-    # Place gadget on CODE_ROW
+    # Place gadget on CODE_ROW (Hamming-encoded opcodes)
     for i, op in enumerate(gadget):
-        sim.grid[sim._to_flat(CODE_ROW, gadget_start + i)] = OP[op]
+        sim.grid[sim._to_flat(CODE_ROW, gadget_start + i)] = encode_opcode(OP[op])
 
     # Re-entry mirror: \ at (CODE_ROW, 0) redirects S→E
-    sim.grid[sim._to_flat(CODE_ROW, 0)] = OP['\\']
+    sim.grid[sim._to_flat(CODE_ROW, 0)] = encode_opcode(OP['\\'])
 
     # Corridor mirrors
-    sim.grid[sim._to_flat(CORR_ROW, percent_col)] = OP['\\']  # N→W
-    sim.grid[sim._to_flat(CORR_ROW, 0)] = OP['/']             # W→S
+    sim.grid[sim._to_flat(CORR_ROW, percent_col)] = encode_opcode(OP['\\'])  # N→W
+    sim.grid[sim._to_flat(CORR_ROW, 0)] = encode_opcode(OP['/'])             # W→S
 
     # Initial state
     sim.ip_row = CODE_ROW
@@ -278,9 +287,11 @@ def run_test(fuel_pairs, label="", verbose=False):
     print(f"Torus agent + GP shuttle: {fuel_pairs}  {label}")
     print(f"{'='*60}")
 
-    # Show layout
-    fuel_before = [sim.grid[sim._to_flat(0, c)] for c in range(len(orig_fuel))]
-    gp_before = [sim.grid[sim._to_flat(3, c)] for c in range(n_pairs + 2)]
+    # Show layout (display payloads for readability)
+    fuel_before = [cell_to_payload(sim.grid[sim._to_flat(0, c)])
+                   for c in range(len(orig_fuel))]
+    gp_before = [cell_to_payload(sim.grid[sim._to_flat(3, c)])
+                 for c in range(n_pairs + 2)]
     print(f"  Before:")
     print(f"    Fuel (row 0): {fuel_before}")
     print(f"    GP   (row 3): {gp_before}")
@@ -288,7 +299,7 @@ def run_test(fuel_pairs, label="", verbose=False):
     code_str = ""
     for c in range(percent_col + 2):
         v = sim.grid[sim._to_flat(2, c)]
-        ch = OPCHAR.get(v, '·')
+        ch = cell_char(v)
         code_str += f" {ch}"
     print(f"    Code (row 2):{code_str}")
 
@@ -302,7 +313,7 @@ def run_test(fuel_pairs, label="", verbose=False):
         if verbose and sim.step_count <= 50:
             r, c = sim.ip_row, sim.ip_col
             opval = sim.grid[sim._to_flat(r, c)]
-            opch = OPCHAR.get(opval, '·')
+            opch = cell_char(opval)
             h0_r, h0_c = divmod(sim.h0, cols)
             h1_r, h1_c = divmod(sim.h1, cols)
             gp_r, gp_c = divmod(sim.gp, cols)
@@ -311,51 +322,46 @@ def run_test(fuel_pairs, label="", verbose=False):
 
     forward_steps = sim.step_count
 
-    # Results
-    fuel_after = [sim.grid[sim._to_flat(0, c)] for c in range(len(orig_fuel))]
-    gp_after = [sim.grid[sim._to_flat(3, c)] for c in range(n_pairs + 2)]
+    # Results (display payloads for readability)
+    fuel_after_p = [cell_to_payload(sim.grid[sim._to_flat(0, c)])
+                    for c in range(len(orig_fuel))]
+    gp_after_p = [cell_to_payload(sim.grid[sim._to_flat(3, c)])
+                  for c in range(n_pairs + 2)]
 
     print(f"  After ({forward_steps} steps):")
-    print(f"    Fuel (row 0): {fuel_after}")
-    print(f"    GP   (row 3): {gp_after}")
+    print(f"    Fuel (row 0): {fuel_after_p}")
+    print(f"    GP   (row 3): {gp_after_p}")
 
-    # Analysis
+    # Analysis (compare payloads)
     # Fuel should have: breadcrumb values in even positions, original values
     # in odd positions, zero terminator at the end.
     # GP trail should be all zeros (each P is cleaned by Z).
-    gp_used = gp_after[:n_pairs + 1]
+    gp_used = gp_after_p[:n_pairs + 1]
     gp_clean = all(v == 0 for v in gp_used)
-
-    # The last P writes a breadcrumb that doesn't get cleaned (because the
-    # agent exits). So the last GP cell may have a breadcrumb.
-    # Actually: the last iteration does e x P Z ] ... % and % passes through.
-    # So P writes, Z cleans, ] advances. Then E E e > > advance heads.
-    # CL hits the zero terminator. % passes through. Exit.
-    # After exit: GP is one past the last P/Z cell.
-    # The P/Z pair means every cell that got P'd also got Z'd (cleaned).
-    # So GP trail should be all zeros.
 
     print(f"    GP trail clean: {'YES' if gp_clean else 'NO'} {gp_used}")
 
     # Count breadcrumbs absorbed into fuel
-    fuel_data = fuel_after[:2 * n_pairs]
-    breadcrumbs_in_fuel = sum(1 for i in range(0, len(fuel_data), 2) if fuel_data[i] != 0)
-    waste_in_fuel = [fuel_data[i] for i in range(1, len(fuel_data), 2)]
+    fuel_data_p = fuel_after_p[:2 * n_pairs]
+    breadcrumbs_in_fuel = sum(1 for i in range(0, len(fuel_data_p), 2)
+                              if fuel_data_p[i] != 0)
+    waste_in_fuel = [fuel_data_p[i] for i in range(1, len(fuel_data_p), 2)]
 
     print(f"    Fuel even cells (should have breadcrumbs): "
-          f"{[fuel_data[i] for i in range(0, len(fuel_data), 2)]}")
+          f"{[fuel_data_p[i] for i in range(0, len(fuel_data_p), 2)]}")
     print(f"    Fuel odd cells (waste = original values): {waste_in_fuel}")
     print(f"    Expected waste: {list(fuel_pairs)}")
 
     waste_ok = (waste_in_fuel == list(fuel_pairs))
 
-    # Reversibility
+    # Reversibility (compare raw cell values for exact match)
     for _ in range(forward_steps):
         sim.step_back()
 
     fuel_reversed = [sim.grid[sim._to_flat(0, c)] for c in range(len(orig_fuel))]
     gp_reversed = [sim.grid[sim._to_flat(3, c)] for c in range(n_pairs + 2)]
-    reverse_ok = (fuel_reversed == orig_fuel and
+    fuel_orig_encoded = [hamming_encode(v) for v in orig_fuel]
+    reverse_ok = (fuel_reversed == fuel_orig_encoded and
                   all(v == 0 for v in gp_reversed))
 
     print(f"    Reversible: {'PASS' if reverse_ok else 'FAIL'}")

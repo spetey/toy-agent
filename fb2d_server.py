@@ -507,5 +507,5 @@ def set_gp_cleanup():
 
 if __name__ == '__main__':
     print(f'fb2d GUI server — programs dir: {PROGRAMS_DIR}')
-    print(f'Open http://localhost:5000')
-    app.run(debug=True, use_reloader=False, port=5000)
+    print(f'Open http://localhost:5001')
+    app.run(debug=True, use_reloader=False, port=5001)
