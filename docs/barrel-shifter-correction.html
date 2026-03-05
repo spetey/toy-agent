@@ -1,0 +1,363 @@
+<h1 id="barrel-shifter-hamming1611-correction">Barrel-Shifter
+Hamming(16,11) Correction</h1>
+<p>How the fb2d gadget corrects single-bit errors using only 1 dirty
+garbage cell, explained from first principles.</p>
+<h2 id="background-what-hamming-correction-needs-to-do">Background: what
+Hamming correction needs to do</h2>
+<p>A 16-bit Hamming(16,11) SECDED codeword has 11 data bits and 5 parity
+bits. When a single bit gets flipped, we need to figure out
+<em>which</em> bit and flip it back.</p>
+<p>Standard-form Hamming gives us two pieces of information:</p>
+<ul>
+<li><strong>syndrome</strong> (4 bits): tells us the <em>position
+number</em> (0-15) of the flipped bit. Syndrome 0 means “no error at
+positions 1-15”.</li>
+<li><strong>p_all</strong> (1 bit): the overall parity of all 16 bits.
+Tells us whether an odd number of bits were flipped.</li>
+</ul>
+<p>Together these give four cases:</p>
+<table>
+<thead>
+<tr>
+<th>p_all</th>
+<th>syndrome</th>
+<th>meaning</th>
+<th>action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>0</td>
+<td>no error</td>
+<td>do nothing</td>
+</tr>
+<tr>
+<td>1</td>
+<td>0</td>
+<td>bit 0 (overall parity) bad</td>
+<td>flip bit 0</td>
+</tr>
+<tr>
+<td>1</td>
+<td>k (1-15)</td>
+<td>bit k is bad</td>
+<td>flip bit k</td>
+</tr>
+<tr>
+<td>0</td>
+<td>k (1-15)</td>
+<td>double error (detected)</td>
+<td>don’t correct</td>
+</tr>
+</tbody>
+</table>
+<p>So the core task is: <strong>flip exactly one bit of the codeword, at
+a position determined at runtime by the syndrome.</strong></p>
+<h2 id="the-problem-runtime-variable-bit-position">The problem:
+runtime-variable bit position</h2>
+<p>In fb2d, we can XOR two cells (<code>x</code>:
+<code>[H0] ^= [H1]</code>), but this flips <em>all</em> differing bits
+between two 16-bit values. To flip exactly one bit, we need [H1] to
+contain a value with exactly one bit set — a <strong>1-hot mask</strong>
+like <code>0000000000000100</code> (for bit 2).</p>
+<p>The challenge: the syndrome is computed at runtime, so we can’t
+hardcode which mask to use. We need to <em>build</em> the mask
+<code>1 &lt;&lt; syndrome</code> dynamically using only reversible
+operations.</p>
+<h2 id="what-1-syndrome-means">What “1 &lt;&lt; syndrome” means</h2>
+<p><code>&lt;&lt;</code> is the <strong>left shift</strong> operator.
+<code>1 &lt;&lt; k</code> means “start with the number 1 (binary
+<code>0000000000000001</code>) and shift it left by k positions”:</p>
+<pre><code>1 &lt;&lt; 0  =  0000000000000001  =  1       (bit 0 set)
+1 &lt;&lt; 1  =  0000000000000010  =  2       (bit 1 set)
+1 &lt;&lt; 2  =  0000000000000100  =  4       (bit 2 set)
+1 &lt;&lt; 3  =  0000000000001000  =  8       (bit 3 set)
+1 &lt;&lt; 5  =  0000000000100000  =  32      (bit 5 set)
+1 &lt;&lt; 15 =  1000000000000000  =  32768   (bit 15 set)</code></pre>
+<p>Each result has exactly one bit set — a “1-hot” value. If we XOR this
+with the codeword, it flips exactly that one bit. That’s the
+correction.</p>
+<p>But we also need to account for p_all. If p_all = 0 (no error or
+double error), we want the mask to be all zeros (flip nothing). So the
+full mask we want is:</p>
+<pre><code>EVIDENCE = p_all &lt;&lt; syndrome</code></pre>
+<ul>
+<li>If p_all = 0: EVIDENCE = 0 regardless of syndrome. No
+correction.</li>
+<li>If p_all = 1: EVIDENCE = 1 &lt;&lt; syndrome. Corrects the bad
+bit.</li>
+</ul>
+<p>We call this value <strong>EVIDENCE</strong> because it represents
+the evidence of where the error is — a single-bit “pointer” to the
+corrupted position. When EVIDENCE is 0, there’s no evidence of a
+correctable error.</p>
+<h2
+id="the-barrel-shifter-building-1-syndrome-from-its-binary-digits">The
+barrel shifter: building 1 &lt;&lt; syndrome from its binary digits</h2>
+<p>The syndrome is 4 bits: s3 s2 s1 s0. As a number:</p>
+<pre><code>syndrome = s0 + 2*s1 + 4*s2 + 8*s3</code></pre>
+<p>So <code>1 &lt;&lt; syndrome</code> =
+<code>1 &lt;&lt; (s0 + 2*s1 + 4*s2 + 8*s3)</code>.</p>
+<p>Left-shifting decomposes over addition:</p>
+<pre><code>1 &lt;&lt; (a + b) = (1 &lt;&lt; a) &lt;&lt; b</code></pre>
+<p>So we can build the shift in stages:</p>
+<pre><code>Start with: 1
+Shift left by s0 * 1  →  1 &lt;&lt; s0          (shift by 0 or 1)
+Shift left by s1 * 2  →  above &lt;&lt; (s1*2)  (shift by 0 or 2)
+Shift left by s2 * 4  →  above &lt;&lt; (s2*4)  (shift by 0 or 4)
+Shift left by s3 * 8  →  above &lt;&lt; (s3*8)  (shift by 0 or 8)</code></pre>
+<p>Each stage is a <strong>conditional shift</strong>: shift by 2^i if
+s_i = 1, else don’t shift. This is exactly what a barrel shifter does in
+hardware.</p>
+<p>Actually we start with p_all (0 or 1) instead of 1, so the full
+construction is:</p>
+<pre><code>EVIDENCE = p_all                    (0 or 1)
+if s0: EVIDENCE &lt;&lt;= 1              (conditional shift by 1)
+if s1: EVIDENCE &lt;&lt;= 2              (conditional shift by 2)
+if s2: EVIDENCE &lt;&lt;= 4              (conditional shift by 4)
+if s3: EVIDENCE &lt;&lt;= 8              (conditional shift by 8)</code></pre>
+<p>If p_all = 0, every shift operates on 0, so EVIDENCE stays 0
+throughout. If p_all = 1, the shifts build up
+<code>1 &lt;&lt; syndrome</code>.</p>
+<h2 id="how-fb2d-implements-conditional-rotation">How fb2d implements
+conditional rotation</h2>
+<p>fb2d has these relevant opcodes:</p>
+<ul>
+<li><code>l</code>: rotate [H0] left by 1 bit (circular, so bit 15 wraps
+to bit 0)</li>
+<li><code>r</code>: rotate [H0] right by 1 bit</li>
+<li><code>f</code>: if bit 0 of [CL] is 1, swap [H0] and [H1] (Fredkin
+gate)</li>
+</ul>
+<p>We use two cells: <strong>EV</strong> (EVIDENCE, in [H0]) and
+<strong>SCR</strong> (SCRATCH, in [H1], starts at 0).</p>
+<p>The pattern for one barrel stage (conditional rotate left by 2^i,
+gated on syndrome bit s_i):</p>
+<pre><code>CL points to S_i cell (whose bit 0 = s_i)
+
+l × (2^i)      rotate EV left by 2^i
+f               if s_i=1: swap EV ↔ SCR
+r × (2^i)      rotate [H0] right by 2^i
+f               if s_i=1: swap EV ↔ SCR</code></pre>
+<p><strong>If s_i = 0</strong> (don’t shift): - <code>l</code> rotates
+EV left. <code>f</code> does nothing (bit 0 is 0). <code>r</code>
+rotates EV right by the same amount. <code>f</code> does nothing. Net
+effect: EV unchanged, SCR unchanged.</p>
+<p><strong>If s_i = 1</strong> (do shift): - <code>l</code> rotates EV
+left by 2^i. Call the result EV’. - First <code>f</code>: swaps EV’ into
+SCR, puts 0 (old SCR) into EV cell. - <code>r</code> rotates [H0] = 0
+right. Still 0. - Second <code>f</code>: swaps back. EV gets EV’ (the
+rotated value), SCR gets 0. - Net effect: EV rotated left by 2^i. SCR
+back to 0.</p>
+<p>The key insight: <strong>SCR is always 0 after each stage</strong>,
+regardless of whether the shift happened. This is what makes it
+reversible and clean.</p>
+<p>(Note: fb2d uses circular rotation, not shift, because cells are
+16-bit. But for values with only one bit set, rotation and shift are
+equivalent for shift amounts 0-15.)</p>
+<h2 id="the-full-algorithm-phase-by-phase">The full algorithm, phase by
+phase</h2>
+<h3 id="setup">Setup</h3>
+<p>Three-row torus:</p>
+<pre><code>Row 0 (DATA):  CW (the codeword to correct)
+Row 1 (CODE):  [336 opcodes...]
+Row 2 (GP):    PA  S0  S1  S2  S3  EV  SCR  ROT
+               0   1   2   3   4   5   6    7</code></pre>
+<p>GP row cells all start at 0. Heads: H0 and H1 on CW, CL on ROT
+(payload 0), GP on PA.</p>
+<h3 id="phase-a-compute-overall-parity-32-ops">Phase A: Compute overall
+parity (~32 ops)</h3>
+<p>Move H0 to PA. Use Y (fused rotate-XOR) at 16 different rotation
+amounts to XOR all 16 bits of CW into PA.bit0.</p>
+<p>After: PA.bit0 = p_all. (Other bits of PA contain Y-accumulated
+junk.)</p>
+<h3 id="phase-b-extract-p_all-into-evidence-6-ops">Phase B: Extract
+p_all into EVIDENCE (~6 ops)</h3>
+<p>Move H0 to EV. Use <code>z</code> to swap bit 0 of EV with bit 0 of
+[GP] (= PA).</p>
+<p>After: EV = p_all (raw 0 or 1). PA.bit0 = 0.</p>
+<h3 id="phase-a-uncompute-pa-36-ops">Phase A’: Uncompute PA (~36
+ops)</h3>
+<p>Re-run the same Y operations in reverse to cancel the junk in PA.
+Since bit 0 was changed by z, the uncompute leaves PA = p_all (the junk
+cancels but the z modification remains). CL returns to payload 0.</p>
+<p>After: PA = raw p_all (0 or 1). All other PA bits clean.</p>
+<h3 id="phase-c-compute-syndrome-84-ops">Phase C: Compute syndrome (~84
+ops)</h3>
+<p>Standard Hamming syndrome computation. For each syndrome bit s_i, use
+Y to XOR the relevant bit positions of CW into accumulator S_i.</p>
+<p>After: S_i.bit0 = s_i. (Other bits contain Y junk, but we only need
+bit 0.)</p>
+<h3 id="phase-d-barrel-shifter-55-ops">Phase D: Barrel shifter (~55
+ops)</h3>
+<p>H0 on EV (currently p_all), H1 on SCR (= 0). For each i =
+0,1,2,3:</p>
+<pre><code>Move CL to S_i
+l × (2^i),  f,  r × (2^i),  f</code></pre>
+<p>After all 4 stages: EV = p_all &lt;&lt; syndrome.</p>
+<h3 id="phase-c-uncompute-syndrome-accumulators-94-ops">Phase C’:
+Uncompute syndrome accumulators (~94 ops)</h3>
+<p>Re-run the same Y operations in reverse to clean S0-S3 back to 0. CL
+returns to payload 0.</p>
+<p>After: S0 = S1 = S2 = S3 = 0 (clean). SCR = 0 (never got dirty). ROT
+= 0 (CL restored it).</p>
+<h3 id="phase-e-correction-9-ops">Phase E: Correction (~9 ops)</h3>
+<p>Move H0 to CW, H1 to EV. Execute <code>x</code> (XOR): CW ^=
+EVIDENCE.</p>
+<p>This flips the single bit identified by the syndrome, or does nothing
+if EVIDENCE = 0.</p>
+<h3 id="phase-f-cleanup-13-ops">Phase F: Cleanup (~13 ops)</h3>
+<p>We now have two potentially dirty cells: PA and EV. We merge them
+into at most one dirty cell using <code>z</code> + <code>x</code>:</p>
+<pre><code>z:  swap bit 0 of EV with bit 0 of PA (via GP)
+x:  EV ^= PA</code></pre>
+<p>See the worked example below for why this works.</p>
+<h3 id="phase-g-epilogue-7-ops">Phase G: Epilogue (~7 ops)</h3>
+<p>Move H0 and H1 back to CW. All heads restored.</p>
+<p><strong>Total: 336 ops.</strong></p>
+<h2 id="worked-example-payload-42-error-on-bit-5">Worked example:
+payload 42, error on bit 5</h2>
+<h3 id="encoding">Encoding</h3>
+<p>Payload 42 = <code>0b00000101010</code>. Hamming encodes to codeword
+0x05A0 = <code>0000 0101 1010 0000</code>.</p>
+<p>Bit positions (standard form, bit 15 at left):</p>
+<pre><code>Position: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
+Bit:       0  0  0  0  0  1  0  1  1  0  1  0  0  0  0  0
+                                          ^
+                                       bit 5 (data bit)</code></pre>
+<h3 id="error-injection">Error injection</h3>
+<p>Flip bit 5: codeword becomes 0x0580 =
+<code>0000 0101 1000 0000</code>.</p>
+<pre><code>Position: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
+Original:  0  0  0  0  0  1  0  1  1  0  1  0  0  0  0  0
+Corrupted: 0  0  0  0  0  1  0  1  1  0  0  0  0  0  0  0
+                                          ^
+                                       flipped!</code></pre>
+<h3 id="phase-a-result">Phase A result</h3>
+<p>p_all = XOR of all 16 bits of corrupted codeword = XOR of
+{0,0,0,0,0,1,0,1,1,0,0,0,0,0,0,0} = 1.</p>
+<p>(An odd number of bits are set, meaning an odd number were flipped
+from the valid codeword which always has even weight.)</p>
+<h3 id="phase-b-result">Phase B result</h3>
+<p>EV = 1 (raw). PA.bit0 = 0.</p>
+<h3 id="phase-a-result-1">Phase A’ result</h3>
+<p>PA = 1 (raw p_all).</p>
+<h3 id="phase-c-result">Phase C result</h3>
+<p>Syndrome computation — each s_i is the XOR of specific bit
+positions:</p>
+<ul>
+<li>s0 = XOR of positions {1,3,5,7,9,11,13,15} = 0⊕0⊕0⊕1⊕0⊕0⊕0⊕0 =
+1</li>
+<li>s1 = XOR of positions {2,3,6,7,10,11,14,15} = 0⊕0⊕0⊕1⊕1⊕0⊕0⊕0 =
+0</li>
+<li>s2 = XOR of positions {4,5,6,7,12,13,14,15} = 0⊕0⊕0⊕1⊕0⊕0⊕0⊕0 =
+1</li>
+<li>s3 = XOR of positions {8,9,10,11,12,13,14,15} = 1⊕0⊕1⊕0⊕0⊕0⊕0⊕0 =
+0</li>
+</ul>
+<p>Syndrome = 0b0101 = 5. Correct! The error is at position 5.</p>
+<h3 id="phase-d-barrel-shifter">Phase D: barrel shifter</h3>
+<p>EV starts as 1 (= p_all). Syndrome bits: s0=1, s1=0, s2=1, s3=0.</p>
+<pre><code>Stage 0 (s0=1, shift by 1):
+  EV = 1 = ...0001
+  l×1:      ...0010   (rotated left 1)
+  f: swap EV↔SCR (s0=1)
+  r×1: SCR=0, rotate 0, still 0
+  f: swap back
+  Result: EV = ...0010 = 2
+
+Stage 1 (s1=0, shift by 2):
+  EV = 2 = ...0010
+  l×2:      ...1000   (rotated left 2)
+  f: no swap (s1=0)
+  r×2:      ...0010   (rotated right 2, back to original)
+  f: no swap
+  Result: EV = ...0010 = 2   (unchanged)
+
+Stage 2 (s2=1, shift by 4):
+  EV = 2 = ...0000 0010
+  l×4:      ...0010 0000   (rotated left 4)
+  f: swap EV↔SCR (s2=1)
+  r×4: SCR=0, still 0
+  f: swap back
+  Result: EV = ...0010 0000 = 32
+
+Stage 3 (s3=0, shift by 8):
+  (same as stage 1 — s3=0, so l and r cancel)
+  Result: EV = 32  (unchanged)</code></pre>
+<p>Final: EV = 32 = <code>0000 0000 0010 0000</code> = bit 5 set. This
+is <code>1 &lt;&lt; 5</code>. Exactly the mask we need!</p>
+<h3 id="phase-e-correction">Phase E: correction</h3>
+<p>CW ^= EV: flips bit 5 of the corrupted codeword, restoring it to the
+original 0x05A0. Correction complete!</p>
+<h3 id="phase-f-cleanup">Phase F: cleanup</h3>
+<p>Before cleanup: PA = 1, EV = 32 = <code>...0010 0000</code>.</p>
+<pre><code>z: swap bit 0 of EV with bit 0 of PA (via GP).
+   EV.bit0 was 0, PA.bit0 was 1.
+   After: EV = 33 = ...0010 0001, PA = 0.
+
+x: EV ^= PA = 33 ^ 0 = 33.
+   (PA is 0, so XOR changes nothing.)</code></pre>
+<p>Result: PA = 0 (clean!), EV = 33 (dirty). <strong>One dirty
+cell.</strong></p>
+<h3 id="why-the-cleanup-works-in-all-cases">Why the cleanup works in all
+cases</h3>
+<p>The z+x trick handles every case:</p>
+<p><strong>No error</strong> (PA=0, EV=0): z swaps two 0 bits. x XORs
+with 0. Both stay 0. <strong>0 dirty cells.</strong></p>
+<p><strong>Double error</strong> (PA=0, EV=0): Same as no error —
+p_all=0 means EVIDENCE was never nonzero. <strong>0 dirty
+cells.</strong></p>
+<p><strong>Bit-0 error</strong> (PA=1, EV=1): z: swap bit 0 of EV(=1)
+with bit 0 of PA(=1). Both are 1, so no change. EV=1, PA=1. x: EV ^= PA
+= 1 ^= 1 = 0. PA still 1. Result: EV=0 (clean), PA=1 (dirty). <strong>1
+dirty cell.</strong></p>
+<p><strong>Bit-k error, k≠0</strong> (PA=1, EV=1&lt;&lt;k): z: swap bit
+0 of EV(=0, since k≠0) with bit 0 of PA(=1). EV gains a 1 in bit 0: EV =
+(1&lt;&lt;k)|1. PA loses its bit 0: PA=0. x: EV ^= PA = EV ^ 0, no
+change. Result: PA=0 (clean), EV=(1&lt;&lt;k)|1 (dirty). <strong>1 dirty
+cell.</strong></p>
+<p>In every case, at most one cell is nonzero. The dirty value in EV is
+not a valid Hamming codeword — it has nonzero syndrome, which is how you
+can tell it’s garbage rather than data.</p>
+<h2 id="reversibility">Reversibility</h2>
+<p>Everything is reversible. Running <code>step_back()</code> through
+all 336 steps restores the grid to its exact original state: corrupted
+codeword back in CW, all GP cells back to 0. The dirty cell from Phase F
+gets cleaned by the reverse of z+x, the Y-uncompute phases re-dirty and
+then un-dirty the accumulators, and so on.</p>
+<h2 id="cost-summary">Cost summary</h2>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Code ops</td>
+<td>336</td>
+</tr>
+<tr>
+<td>Dirty cells (single-bit error)</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Dirty cells (no error / double error)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>GP slot width</td>
+<td>8 cells</td>
+</tr>
+<tr>
+<td>Grid (wrapped 60-wide)</td>
+<td>8 × 60</td>
+</tr>
+</tbody>
+</table>
+<p>Each correction consumes 1 clean zero cell from the GP row (for
+errors) or 0 (for clean codewords). Clean zeros are the agent’s
+fundamental resource — this is about as cheap as correction can get.</p>

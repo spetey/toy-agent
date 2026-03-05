@@ -1,0 +1,142 @@
+<h1 id="the-journey-to-fb2d-v1.9">The Journey to fb2d v1.9</h1>
+<p>A brief history of building a self-correcting reversible agent.</p>
+<h2 id="origins-lattice-gas">Origins: Lattice Gas</h2>
+<p>The project started as an FHP-III lattice gas simulation — a
+hexagonal lattice model of fluid dynamics. We added particle
+injection/absorption for density gradients, von Karman vortex street
+experiments, and Numba JIT acceleration (~400x speedup). The goal was
+exploring emergent structure in simple physics, but it became clear that
+the more interesting question was: can a digital agent resist its own
+degradation by noise?</p>
+<h2 id="fuckbrain-2d-v1.6">fuckbrain 2D (v1.6)</h2>
+<p>We pivoted to a reversible esoteric language based on Google’s BFF
+from the Computational Life paper. The key properties were set from the
+start:</p>
+<ul>
+<li><strong>Reversible</strong>: every state has a unique predecessor,
+deducible without history</li>
+<li><strong>Valid everywhere</strong>: any byte is a valid opcode or NOP
+— no crashes</li>
+<li><strong>2D toroidal grid</strong>: code and data share the same
+surface</li>
+</ul>
+<p>v1.6 added bit-level ops (<code>x</code>, <code>r</code>,
+<code>l</code>, <code>f</code>, <code>z</code>) and the carry arithmetic
+demo, which showed unbounded increment using spatial carry corridors —
+the path to Turing completeness with 8-bit cells.</p>
+<p>An investigation into prefix-free binary encodings confirmed that
+reversible TC universally requires a quiescent (zeroed) background. This
+isn’t a limitation of fb2d — it’s true of Bennett, Morita, Fredkin,
+Janus, and every known reversible system.</p>
+<h2 id="fuel-demos">Fuel Demos</h2>
+<p>Three progressively more capable torus agents demonstrated the
+resource model:</p>
+<ol type="1">
+<li><strong>fuel-demo</strong>: XOR-compress identical fuel pairs to
+extract clean zeros, shuttle them to the GP trail</li>
+<li><strong>fuel-demo-v2</strong>: inner bounded loop powered by
+fuel-derived zeros (the “digestive system”)</li>
+<li><strong>fuel-demo-v3</strong>: error-checking agent that rotates
+data bytes using fuel — the first step toward self-maintenance</li>
+</ol>
+<p>Key insight: clean zeros are the fundamental resource. Fuel is
+compressible data; compression produces zeros; zeros power GP-based
+reversible computation.</p>
+<h2 id="hamming84-error-correction">Hamming(8,4) Error Correction</h2>
+<p>The first error correction gadget operated on 8-bit cells. 592 test
+cases covering no-error, single-bit correction, and double-bit
+detection, all with full <code>step_back()</code> reversibility. This
+proved error correction was feasible in fb2d’s reversible instruction
+set.</p>
+<h2 id="v1.8-rotate-by-cl-and-re-entrant-gadget">v1.8: Rotate-by-CL and
+Re-Entrant Gadget</h2>
+<p>Added variable-amount rotation ops (<code>R</code>, <code>L</code>,
+<code>Y</code>) and CL arithmetic (<code>:</code>, <code>;</code>).
+These eliminated the need for constant cells on the data row — the
+gadget could manipulate its own CL register inline. The Hamming gadget
+became fully re-entrant: after correcting one codeword, all scratch
+cells were clean and heads were positioned for the next.</p>
+<h2 id="bit-cells-the-big-upgrade">16-Bit Cells (The Big Upgrade)</h2>
+<p>Every cell became a 16-bit Hamming(16,11) SECDED codeword: 11 data
+bits (payload) + 5 parity bits. This was the single largest change to
+the system.</p>
+<ul>
+<li>The IP reads <code>payload(cell)</code> as the opcode</li>
+<li>Arithmetic ops (<code>+</code>, <code>-</code>, <code>.</code>,
+<code>,</code>, <code>:</code>, <code>;</code>, <code>P</code>,
+<code>Q</code>) automatically maintain the Hamming parity invariant via
+XOR delta tables</li>
+<li>Bit-level ops (<code>r</code>, <code>l</code>, <code>x</code>,
+<code>f</code>, <code>z</code>, <code>R</code>, <code>L</code>,
+<code>Y</code>) act on all 16 raw bits — needed by the correction gadget
+to access parity positions</li>
+<li>The barrel-shifter correction gadget (336 ops) uses paired
+<code>f</code> gates with rotations to build a 1-hot evidence mask for
+XOR correction</li>
+</ul>
+<p>Standard-form Hamming was chosen (parity bits at positions 0, 1, 2,
+4, 8) so that the syndrome value directly equals the bit position of a
+single-bit error.</p>
+<h2 id="sliding-slot-gadget-and-boustrophedon-layout">Sliding-Slot
+Gadget and Boustrophedon Layout</h2>
+<p>The correction gadget was redesigned for a self-contained
+boustrophedon (serpentine) code layout: code rows zigzag left-to-right
+then right-to-left, connected by mirror columns. This eliminated
+dependence on torus wrapping for the IP loop and enabled the gadget to
+process adjacent codewords with a sliding GP scratch window that
+advances by 1 per cycle (322 ops/cycle).</p>
+<h2 id="v1.9-h2-scan-head-and-copy-down-architecture">v1.9: H2 Scan Head
+and Copy-Down Architecture</h2>
+<p>The central problem of mutual correction: if gadget A needs to
+correct gadget B’s code, H0 would have to shuttle between A’s GP row and
+B’s code rows — 6 round trips per correction cycle. This doesn’t scale
+when the target code is on distant rows.</p>
+<p>Solution: the H2 scan head with 4 new opcodes:</p>
+<ul>
+<li><code>m</code> (<code>[H0] ^= [H2]</code>): raw XOR copies a remote
+codeword to a local zero cell</li>
+<li><code>M</code> (<code>payload(H0) -= payload(H2)</code>): uncomputes
+the local copy after correction</li>
+<li><code>j</code> (<code>[H2] ^= [H0]</code>): writes the correction
+mask back to the remote cell</li>
+<li><code>V</code> (<code>swap([CL], [H2])</code>): test bridge for
+future boundary detection</li>
+</ul>
+<p>Critical design insight: <code>m</code> must be raw 16-bit XOR (not
+payload arithmetic with parity re-encoding), because the correction
+gadget needs to see the corrupted raw bits to compute the syndrome.
+Payload arithmetic would re-encode with fresh parity, hiding the
+error.</p>
+<p>With copy-down, only H2 touches remote rows. All other heads stay
+local on the GP row.</p>
+<h2 id="multi-ip-and-mutual-correction">Multi-IP and Mutual
+Correction</h2>
+<p>The simulator gained interleaved round-robin multi-IP execution: each
+IP has independent heads (H0, H1, H2, CL, GP) but shares the grid. Two
+identical Hamming gadgets on separate IPs correct each other’s code via
+H2 copy-down.</p>
+<p>Key finding: parity-bit errors (bits 0, 1, 2, 4, 8) are safe — they
+change the Hamming codeword but not the opcode, so both IPs execute
+correctly while fixing each other’s parity. Data-bit errors that change
+the opcode require the correction rate to outpace error
+accumulation.</p>
+<h2 id="d_min4-encoding-and-noise-resilience">d_min=4 Encoding and Noise
+Resilience</h2>
+<p>The final layer of defense: opcode payloads were re-encoded using an
+[11,6,4] linear code with minimum Hamming distance 4 between any two
+valid payloads.</p>
+<ul>
+<li>1-bit data error in an opcode cell: still executes the
+<strong>correct</strong> opcode (nearest-codeword decoding)</li>
+<li>2-bit data error: becomes NOP (safe, guaranteed by d_min=4)</li>
+<li>3-bit error: possibly wrong opcode (extremely rare)</li>
+</ul>
+<p>Combined with Hamming SECDED correction, the system sustains ~1 error
+per sweep indefinitely. Tested stable for 28+ sweeps under continuous
+noise injection.</p>
+<h2 id="where-it-stands">Where It Stands</h2>
+<p>The mutual correction demo represents the core proof of concept: two
+agents on a shared grid, each correcting the other’s code, resilient to
+continuous noise. What remains is closing the resource loop — replacing
+the infinite zero reservoir with fuel compression, so the system truly
+sustains itself.</p>

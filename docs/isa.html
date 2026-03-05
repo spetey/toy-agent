@@ -1,0 +1,664 @@
+<h1 id="fb2d-instruction-set-architecture-v1.9">fb2d Instruction Set
+Architecture (v1.9)</h1>
+<p>56 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
+<code>payload(cell)</code> (the 11 data bits of the Hamming(16,11)
+codeword) as the opcode. Payloads corresponding to opcodes 1-56 (or
+within Hamming distance 1 of such a payload) execute that opcode;
+everything else is NOP.</p>
+<h2 id="cell-format">Cell Format</h2>
+<p>Each cell is a 16-bit Hamming(16,11) SECDED codeword:</p>
+<pre><code>Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
+     d10 d9 d8 d7 d6 d5 d4 p3 d3 d2 d1 p2 d0 p1 p0 p_all</code></pre>
+<ul>
+<li><strong>Payload</strong>: 11 data bits → opcode or value
+(0-2047)</li>
+<li><strong>Parity</strong>: 5 check bits at positions 0, 1, 2, 4,
+8</li>
+<li>Arithmetic ops (+, -, ., ,, :, ;, P, Q, M) maintain the Hamming
+invariant</li>
+<li>Bit-level ops (r, l, R, L, Y, x, z, f, m, j) operate on all 16 raw
+bits</li>
+</ul>
+<h2 id="opcode-encoding">Opcode Encoding</h2>
+<p>Opcode payloads are drawn from an [11,6,4] linear code with minimum
+Hamming distance d_min = 4. This means no combination of 1, 2, or 3
+data-bit flips can turn one valid opcode payload into another.</p>
+<p><strong>Nearest-codeword decoding</strong>: each 11-bit payload
+within Hamming distance 1 of a valid opcode codeword decodes to that
+opcode (not NOP). A single data-bit error in an opcode cell still
+executes the <em>correct</em> opcode. Two-bit errors → NOP (guaranteed
+by d_min = 4). Each opcode has a “neighborhood” of 12 payloads (1 center
++ 11 single-bit neighbors). 672 of 2048 payloads decode to valid
+opcodes.</p>
+<h2 id="heads">Heads</h2>
+<table>
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 60%" />
+</colgroup>
+<thead>
+<tr>
+<th>Head</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>H0</td>
+<td>Primary data head</td>
+</tr>
+<tr>
+<td>H1</td>
+<td>Secondary data head</td>
+</tr>
+<tr>
+<td>H2</td>
+<td>Scan head — programmable head for cross-gadget correction</td>
+</tr>
+<tr>
+<td>CL</td>
+<td>Condition latch — tested by conditional mirrors; also provides
+rotation amounts</td>
+</tr>
+<tr>
+<td>GP</td>
+<td>Garbage pointer — breadcrumb trail for reversibility</td>
+</tr>
+</tbody>
+</table>
+<p>All heads point to cells on the same toroidal grid as the IP.</p>
+<h2 id="notation">Notation</h2>
+<ul>
+<li><code>[H0]</code> = full 16-bit cell value at head H0’s
+position</li>
+<li><code>payload(X)</code> = the 11 data bits extracted from cell
+X</li>
+<li>Movement is on a torus: edges wrap</li>
+</ul>
+<h2 id="mirrors-6-opcodes">Mirrors (6 opcodes)</h2>
+<table>
+<thead>
+<tr>
+<th>Op</th>
+<th>Payload</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/</code></td>
+<td>1</td>
+<td>Unconditional / reflect</td>
+</tr>
+<tr>
+<td><code>\</code></td>
+<td>2</td>
+<td>Unconditional  reflect</td>
+</tr>
+<tr>
+<td><code>%</code></td>
+<td>3</td>
+<td>/ reflect if payload([CL]) != 0</td>
+</tr>
+<tr>
+<td><code>?</code></td>
+<td>4</td>
+<td>/ reflect if payload([CL]) == 0</td>
+</tr>
+<tr>
+<td><code>&amp;</code></td>
+<td>5</td>
+<td> reflect if payload([CL]) != 0</td>
+</tr>
+<tr>
+<td><code>!</code></td>
+<td>6</td>
+<td> reflect if payload([CL]) == 0</td>
+</tr>
+</tbody>
+</table>
+<p>Mirror geometry:</p>
+<ul>
+<li><code>/</code> maps E↔︎N, S↔︎W</li>
+<li><code>\</code> maps E↔︎S, N↔︎W</li>
+</ul>
+<p>Conditional mirrors test whether any data bit in [CL] is set
+(<code>[CL] &amp; DATA_MASK</code>). Parity bits are ignored.</p>
+<h2 id="head-movement-20-opcodes">Head Movement (20 opcodes)</h2>
+<table>
+<thead>
+<tr>
+<th>Op</th>
+<th>Payload</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>N</code></td>
+<td>7</td>
+<td>Move H0 north</td>
+</tr>
+<tr>
+<td><code>S</code></td>
+<td>8</td>
+<td>Move H0 south</td>
+</tr>
+<tr>
+<td><code>E</code></td>
+<td>9</td>
+<td>Move H0 east</td>
+</tr>
+<tr>
+<td><code>W</code></td>
+<td>10</td>
+<td>Move H0 west</td>
+</tr>
+<tr>
+<td><code>n</code></td>
+<td>11</td>
+<td>Move H1 north</td>
+</tr>
+<tr>
+<td><code>s</code></td>
+<td>12</td>
+<td>Move H1 south</td>
+</tr>
+<tr>
+<td><code>e</code></td>
+<td>13</td>
+<td>Move H1 east</td>
+</tr>
+<tr>
+<td><code>w</code></td>
+<td>14</td>
+<td>Move H1 west</td>
+</tr>
+<tr>
+<td><code>&gt;</code></td>
+<td>23</td>
+<td>Move CL east</td>
+</tr>
+<tr>
+<td><code>&lt;</code></td>
+<td>24</td>
+<td>Move CL west</td>
+</tr>
+<tr>
+<td><code>^</code></td>
+<td>25</td>
+<td>Move CL north</td>
+</tr>
+<tr>
+<td><code>v</code></td>
+<td>26</td>
+<td>Move CL south</td>
+</tr>
+<tr>
+<td><code>]</code></td>
+<td>29</td>
+<td>Move GP east</td>
+</tr>
+<tr>
+<td><code>[</code></td>
+<td>30</td>
+<td>Move GP west</td>
+</tr>
+<tr>
+<td><code>}</code></td>
+<td>31</td>
+<td>Move GP south</td>
+</tr>
+<tr>
+<td><code>{</code></td>
+<td>32</td>
+<td>Move GP north</td>
+</tr>
+<tr>
+<td><code>H</code></td>
+<td>49</td>
+<td>Move H2 north</td>
+</tr>
+<tr>
+<td><code>h</code></td>
+<td>50</td>
+<td>Move H2 south</td>
+</tr>
+<tr>
+<td><code>a</code></td>
+<td>51</td>
+<td>Move H2 east</td>
+</tr>
+<tr>
+<td><code>d</code></td>
+<td>52</td>
+<td>Move H2 west</td>
+</tr>
+</tbody>
+</table>
+<p>All movement wraps on the torus.</p>
+<h2 id="byte-level-data-8-opcodes">Byte-Level Data (8 opcodes)</h2>
+<p>These operate on Hamming-encoded cells, maintaining the parity
+invariant.</p>
+<table>
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 25%" />
+<col style="width: 37%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>Op</th>
+<th>Payload</th>
+<th>Description</th>
+<th>Inverse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>+</code></td>
+<td>15</td>
+<td>payload([H0])++ (mod 2048, with parity fixup)</td>
+<td><code>-</code></td>
+</tr>
+<tr>
+<td><code>-</code></td>
+<td>16</td>
+<td>payload([H0])– (mod 2048, with parity fixup)</td>
+<td><code>+</code></td>
+</tr>
+<tr>
+<td><code>.</code></td>
+<td>17</td>
+<td>payload([H0]) += payload([H1]) (mod 2048, with parity fixup)</td>
+<td><code>,</code></td>
+</tr>
+<tr>
+<td><code>,</code></td>
+<td>18</td>
+<td>payload([H0]) -= payload([H1]) (mod 2048, with parity fixup)</td>
+<td><code>.</code></td>
+</tr>
+<tr>
+<td><code>X</code></td>
+<td>19</td>
+<td>swap([H0], [H1]) — full 16-bit swap</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>F</code></td>
+<td>20</td>
+<td>if payload([CL]) != 0: swap([H0], [H1]) — Fredkin gate</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>G</code></td>
+<td>21</td>
+<td>swap(H1 register, [H0]) — indirect H1</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>T</code></td>
+<td>22</td>
+<td>swap([CL], [H0]) — bridge (full 16-bit)</td>
+<td>self</td>
+</tr>
+</tbody>
+</table>
+<p>Arithmetic ops (<code>+</code>, <code>-</code>, <code>.</code>,
+<code>,</code>) XOR a precomputed delta into the cell so that both the
+payload and parity bits update together. The operation is bijective on
+all 65536 cell values, not just valid codewords.</p>
+<p><code>F</code> (Fredkin gate) tests <code>payload([CL]) != 0</code> —
+any nonzero data bit.</p>
+<h2 id="bit-level-data-10-opcodes">Bit-Level Data (10 opcodes)</h2>
+<p>These operate on the full 16-bit raw cell value (including parity
+bits). They do <strong>not</strong> maintain the Hamming invariant — by
+design, the correction gadget uses them to manipulate raw bits.</p>
+<table>
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 25%" />
+<col style="width: 37%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>Op</th>
+<th>Payload</th>
+<th>Description</th>
+<th>Inverse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>x</code></td>
+<td>39</td>
+<td>[H0] ^= [H1] — XOR</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>r</code></td>
+<td>40</td>
+<td>[H0] rotate right 1 bit</td>
+<td><code>l</code></td>
+</tr>
+<tr>
+<td><code>l</code></td>
+<td>41</td>
+<td>[H0] rotate left 1 bit</td>
+<td><code>r</code></td>
+</tr>
+<tr>
+<td><code>f</code></td>
+<td>42</td>
+<td>if [CL] &amp; 1: swap([H0], [H1]) — bit-0 Fredkin</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>z</code></td>
+<td>43</td>
+<td>swap(bit 0 of [H0], bit 0 of [GP])</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>R</code></td>
+<td>44</td>
+<td>[H0] rotate right by (payload([CL]) &amp; 15) bits</td>
+<td><code>L</code></td>
+</tr>
+<tr>
+<td><code>L</code></td>
+<td>45</td>
+<td>[H0] rotate left by (payload([CL]) &amp; 15) bits</td>
+<td><code>R</code></td>
+</tr>
+<tr>
+<td><code>Y</code></td>
+<td>46</td>
+<td>[H0] ^= ror([H1], payload([CL]) &amp; 15) — fused rotate-XOR</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>:</code></td>
+<td>47</td>
+<td>payload([CL])++ (mod 2048, with parity fixup)</td>
+<td><code>;</code></td>
+</tr>
+<tr>
+<td><code>;</code></td>
+<td>48</td>
+<td>payload([CL])– (mod 2048, with parity fixup)</td>
+<td><code>:</code></td>
+</tr>
+</tbody>
+</table>
+<p>Key distinctions:</p>
+<ul>
+<li><strong><code>f</code></strong> (lowercase) gates on raw <strong>bit
+0</strong> of [CL] — used by the barrel-shifter correction gadget</li>
+<li><strong><code>F</code></strong> (uppercase) gates on
+<strong>payload([CL]) != 0</strong> — used for general conditional
+logic</li>
+<li><strong><code>R</code>/<code>L</code>/<code>Y</code></strong> read
+the rotation amount from <code>payload([CL]) &amp; 15</code> (0-15
+positions, suitable for 16-bit cells)</li>
+<li><strong><code>z</code></strong> swaps raw bit 0 of [H0] with raw bit
+0 of [GP] — used to extract single syndrome/parity bits</li>
+</ul>
+<h2 id="gp-garbage-pointer-ops-8-opcodes">GP (Garbage Pointer) Ops (8
+opcodes)</h2>
+<table>
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 25%" />
+<col style="width: 37%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>Op</th>
+<th>Payload</th>
+<th>Description</th>
+<th>Inverse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>P</code></td>
+<td>27</td>
+<td>payload([GP])++ — leave breadcrumb</td>
+<td><code>Q</code></td>
+</tr>
+<tr>
+<td><code>Q</code></td>
+<td>28</td>
+<td>payload([GP])– — erase breadcrumb</td>
+<td><code>P</code></td>
+</tr>
+<tr>
+<td><code>K</code></td>
+<td>33</td>
+<td>swap(CL register, GP register) — exchange head positions</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>(</code></td>
+<td>34</td>
+<td> reflect if payload([GP]) != 0</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>)</code></td>
+<td>35</td>
+<td> reflect if payload([GP]) == 0</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>#</code></td>
+<td>36</td>
+<td>/ reflect if payload([GP]) == 0</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>$</code></td>
+<td>37</td>
+<td>/ reflect if payload([GP]) != 0</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>Z</code></td>
+<td>38</td>
+<td>swap([H0], [GP]) — full 16-bit GP swap</td>
+<td>self</td>
+</tr>
+</tbody>
+</table>
+<p>GP mirrors test <code>payload([GP])</code> (data bits only, ignoring
+parity).</p>
+<p>The standard loop pattern is <code>( P ... %</code>:</p>
+<ol type="1">
+<li><code>(</code> tests [GP]: if payload != 0, reflect (skip loop
+body). On first entry [GP] is 0, so IP continues into the body.</li>
+<li><code>P</code> increments [GP], leaving a breadcrumb (makes [GP]
+nonzero).</li>
+<li>Loop body executes.</li>
+<li><code>%</code> tests [CL]: if payload([CL]) != 0, reflect back
+toward <code>(</code>.</li>
+</ol>
+<p>On re-entry, <code>(</code> sees nonzero [GP] and reflects (exits).
+The reverse path uses <code>Q</code> to erase the breadcrumb, restoring
+[GP] to 0.</p>
+<h2 id="h2-scan-head-ops-4-opcodes">H2 Scan Head Ops (4 opcodes)</h2>
+<p>H2 is a programmable scan head for cross-gadget correction. In the
+dual-gadget architecture, each gadget’s H2 points at the other gadget’s
+code cells. The copy-down pattern: <code>m</code> copies a remote
+codeword to a local GP cell, correction runs locally, then
+<code>j</code> writes the correction mask back to the remote cell.</p>
+<table>
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 25%" />
+<col style="width: 37%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>Op</th>
+<th>Payload</th>
+<th>Description</th>
+<th>Inverse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>m</code></td>
+<td>53</td>
+<td>[H0] ^= [H2] — raw 16-bit XOR (copy-in / uncompute)</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>M</code></td>
+<td>54</td>
+<td>payload([H0]) -= payload([H2]) (mod 2048, with parity fixup)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>j</code></td>
+<td>55</td>
+<td>[H2] ^= [H0] — raw 16-bit write-back</td>
+<td>self</td>
+</tr>
+<tr>
+<td><code>V</code></td>
+<td>56</td>
+<td>swap([CL], [H2]) — test bridge (full 16-bit)</td>
+<td>self</td>
+</tr>
+</tbody>
+</table>
+<p><code>m</code> and <code>j</code> operate on raw 16-bit cell values
+(like bit-level ops). <code>M</code> operates on payloads and maintains
+the Hamming invariant (like byte-level arithmetic). <code>V</code> is a
+full 16-bit swap.</p>
+<p>The copy-down pattern for correcting a remote cell:</p>
+<ol type="1">
+<li><code>m</code> — copy remote codeword [H2] into local zero cell via
+XOR</li>
+<li>Run correction logic locally (H0, H1, CL, GP on the GP row)</li>
+<li><code>M</code> — uncompute local copy (payload subtract zeroes the
+payload, since the remote cell is still the original value)</li>
+<li><code>j</code> — write correction mask back: [H2] ^= [H0]</li>
+</ol>
+<p>Only H2 touches remote rows; all other heads stay local.</p>
+<p><code>V</code> (test bridge) enables boundary detection: swap [CL]
+with [H2] to test a remote cell’s value with conditional mirrors
+(<code>?</code>/<code>%</code>), then <code>V</code> again to
+restore.</p>
+<h2 id="reversibility-pairs">Reversibility Pairs</h2>
+<p>Every opcode has a unique inverse (itself or another opcode):</p>
+<table>
+<thead>
+<tr>
+<th>Forward</th>
+<th>Inverse</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>+</code></td>
+<td><code>-</code></td>
+<td>Increment / decrement</td>
+</tr>
+<tr>
+<td><code>.</code></td>
+<td><code>,</code></td>
+<td>Add / subtract</td>
+</tr>
+<tr>
+<td><code>r</code></td>
+<td><code>l</code></td>
+<td>Rotate right / left by 1</td>
+</tr>
+<tr>
+<td><code>R</code></td>
+<td><code>L</code></td>
+<td>Rotate right / left by CL</td>
+</tr>
+<tr>
+<td><code>:</code></td>
+<td><code>;</code></td>
+<td>CL increment / decrement</td>
+</tr>
+<tr>
+<td><code>P</code></td>
+<td><code>Q</code></td>
+<td>GP breadcrumb / erase</td>
+</tr>
+<tr>
+<td><code>N</code>/<code>S</code></td>
+<td><code>S</code>/<code>N</code></td>
+<td>H0 movement pairs</td>
+</tr>
+<tr>
+<td><code>E</code>/<code>W</code></td>
+<td><code>W</code>/<code>E</code></td>
+<td>H0 movement pairs</td>
+</tr>
+<tr>
+<td><code>n</code>/<code>s</code></td>
+<td><code>s</code>/<code>n</code></td>
+<td>H1 movement pairs</td>
+</tr>
+<tr>
+<td><code>e</code>/<code>w</code></td>
+<td><code>w</code>/<code>e</code></td>
+<td>H1 movement pairs</td>
+</tr>
+<tr>
+<td><code>&gt;</code>/<code>&lt;</code></td>
+<td><code>&lt;</code>/<code>&gt;</code></td>
+<td>CL movement pairs</td>
+</tr>
+<tr>
+<td><code>^</code>/<code>v</code></td>
+<td><code>v</code>/<code>^</code></td>
+<td>CL movement pairs</td>
+</tr>
+<tr>
+<td><code>]</code>/<code>[</code></td>
+<td><code>[</code>/<code>]</code></td>
+<td>GP movement pairs</td>
+</tr>
+<tr>
+<td><code>}</code>/<code>{</code></td>
+<td><code>{</code>/<code>}</code></td>
+<td>GP movement pairs</td>
+</tr>
+<tr>
+<td><code>H</code>/<code>h</code></td>
+<td><code>h</code>/<code>H</code></td>
+<td>H2 movement pairs</td>
+</tr>
+<tr>
+<td><code>a</code>/<code>d</code></td>
+<td><code>d</code>/<code>a</code></td>
+<td>H2 movement pairs</td>
+</tr>
+</tbody>
+</table>
+<p>Self-inverse ops: <code>X</code>, <code>F</code>, <code>G</code>,
+<code>T</code>, <code>K</code>, <code>Z</code>, <code>x</code>,
+<code>f</code>, <code>z</code>, <code>Y</code>, <code>m</code>,
+<code>j</code>, <code>V</code></p>
+<p>Mirrors (<code>/</code>, <code>\</code>, <code>%</code>,
+<code>?</code>, <code>&amp;</code>, <code>!</code>, <code>(</code>,
+<code>)</code>, <code>#</code>, <code>$</code>) are self-inverse in the
+sense that the IP direction mapping is its own inverse — running the IP
+backward through a mirror reflects it the same way.</p>
+<h2 id="nop">NOP</h2>
+<p>Any payload not corresponding to opcodes 1-56 (and not within Hamming
+distance 1 of such a payload) is a NOP: the IP advances without side
+effects. The canonical “empty cell” is raw value 0 (payload 0).</p>
