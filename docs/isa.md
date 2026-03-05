@@ -1,8 +1,9 @@
-# fb2d Instruction Set Architecture (v1.8)
+# fb2d Instruction Set Architecture (v1.9)
 
-48 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
+56 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
 `payload(cell)` (the 11 data bits of the Hamming(16,11) codeword) as
-the opcode. Payloads 1-48 are opcodes; everything else is NOP.
+the opcode. Payloads corresponding to opcodes 1-56 (or within Hamming
+distance 1 of such a payload) execute that opcode; everything else is NOP.
 
 ## Cell Format
 
@@ -15,8 +16,21 @@ Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
 
 - **Payload**: 11 data bits → opcode or value (0-2047)
 - **Parity**: 5 check bits at positions 0, 1, 2, 4, 8
-- Arithmetic ops (+, -, ., ,, :, ;, P, Q) maintain the Hamming invariant
-- Bit-level ops (r, l, R, L, Y, x, z, f) operate on all 16 raw bits
+- Arithmetic ops (+, -, ., ,, :, ;, P, Q, M) maintain the Hamming invariant
+- Bit-level ops (r, l, R, L, Y, x, z, f, m, j) operate on all 16 raw bits
+
+## Opcode Encoding
+
+Opcode payloads are drawn from an [11,6,4] linear code with minimum
+Hamming distance d_min = 4. This means no combination of 1, 2, or 3
+data-bit flips can turn one valid opcode payload into another.
+
+**Nearest-codeword decoding**: each 11-bit payload within Hamming
+distance 1 of a valid opcode codeword decodes to that opcode (not NOP).
+A single data-bit error in an opcode cell still executes the *correct*
+opcode. Two-bit errors → NOP (guaranteed by d_min = 4). Each opcode has
+a "neighborhood" of 12 payloads (1 center + 11 single-bit neighbors).
+672 of 2048 payloads decode to valid opcodes.
 
 ## Heads
 
@@ -24,6 +38,7 @@ Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
 |------|---------|
 | H0   | Primary data head |
 | H1   | Secondary data head |
+| H2   | Scan head — programmable head for cross-gadget correction |
 | CL   | Condition latch — tested by conditional mirrors; also provides rotation amounts |
 | GP   | Garbage pointer — breadcrumb trail for reversibility |
 
@@ -47,13 +62,14 @@ All heads point to cells on the same toroidal grid as the IP.
 | `!` | 6 | \ reflect if payload([CL]) == 0 |
 
 Mirror geometry:
+
 - `/` maps E↔N, S↔W
 - `\` maps E↔S, N↔W
 
 Conditional mirrors test whether any data bit in [CL] is set
 (`[CL] & DATA_MASK`). Parity bits are ignored.
 
-## Head Movement (16 opcodes)
+## Head Movement (20 opcodes)
 
 | Op | Payload | Description |
 |----|---------|-------------|
@@ -73,6 +89,10 @@ Conditional mirrors test whether any data bit in [CL] is set
 | `[` | 30 | Move GP west |
 | `}` | 31 | Move GP south |
 | `{` | 32 | Move GP north |
+| `H` | 49 | Move H2 north |
+| `h` | 50 | Move H2 south |
+| `a` | 51 | Move H2 east |
+| `d` | 52 | Move H2 west |
 
 All movement wraps on the torus.
 
@@ -117,6 +137,7 @@ correction gadget uses them to manipulate raw bits.
 | `;` | 48 | payload([CL])-- (mod 2048, with parity fixup) | `:` |
 
 Key distinctions:
+
 - **`f`** (lowercase) gates on raw **bit 0** of [CL] — used by the
   barrel-shifter correction gadget
 - **`F`** (uppercase) gates on **payload([CL]) != 0** — used for general
@@ -142,6 +163,7 @@ Key distinctions:
 GP mirrors test `payload([GP])` (data bits only, ignoring parity).
 
 The standard loop pattern is `( P ... %`:
+
 1. `(` tests [GP]: if payload != 0, reflect (skip loop body). On first
    entry [GP] is 0, so IP continues into the body.
 2. `P` increments [GP], leaving a breadcrumb (makes [GP] nonzero).
@@ -150,6 +172,39 @@ The standard loop pattern is `( P ... %`:
 
 On re-entry, `(` sees nonzero [GP] and reflects (exits). The reverse
 path uses `Q` to erase the breadcrumb, restoring [GP] to 0.
+
+## H2 Scan Head Ops (4 opcodes)
+
+H2 is a programmable scan head for cross-gadget correction. In the
+dual-gadget architecture, each gadget's H2 points at the other gadget's
+code cells. The copy-down pattern: `m` copies a remote codeword to a
+local GP cell, correction runs locally, then `j` writes the correction
+mask back to the remote cell.
+
+| Op | Payload | Description | Inverse |
+|----|---------|-------------|---------|
+| `m` | 53 | [H0] ^= [H2] — raw 16-bit XOR (copy-in / uncompute) | self |
+| `M` | 54 | payload([H0]) -= payload([H2]) (mod 2048, with parity fixup) | — |
+| `j` | 55 | [H2] ^= [H0] — raw 16-bit write-back | self |
+| `V` | 56 | swap([CL], [H2]) — test bridge (full 16-bit) | self |
+
+`m` and `j` operate on raw 16-bit cell values (like bit-level ops).
+`M` operates on payloads and maintains the Hamming invariant (like
+byte-level arithmetic). `V` is a full 16-bit swap.
+
+The copy-down pattern for correcting a remote cell:
+
+1. `m` — copy remote codeword [H2] into local zero cell via XOR
+2. Run correction logic locally (H0, H1, CL, GP on the GP row)
+3. `M` — uncompute local copy (payload subtract zeroes the payload,
+   since the remote cell is still the original value)
+4. `j` — write correction mask back: [H2] ^= [H0]
+
+Only H2 touches remote rows; all other heads stay local.
+
+`V` (test bridge) enables boundary detection: swap [CL] with [H2] to
+test a remote cell's value with conditional mirrors (`?`/`%`), then `V`
+again to restore.
 
 ## Reversibility Pairs
 
@@ -163,10 +218,19 @@ Every opcode has a unique inverse (itself or another opcode):
 | `R` | `L` | Rotate right / left by CL |
 | `:` | `;` | CL increment / decrement |
 | `P` | `Q` | GP breadcrumb / erase |
-| `N`/`S` | `S`/`N` | Head movement pairs |
-| `E`/`W` | `W`/`E` | (same for all four heads) |
+| `N`/`S` | `S`/`N` | H0 movement pairs |
+| `E`/`W` | `W`/`E` | H0 movement pairs |
+| `n`/`s` | `s`/`n` | H1 movement pairs |
+| `e`/`w` | `w`/`e` | H1 movement pairs |
+| `>`/`<` | `<`/`>` | CL movement pairs |
+| `^`/`v` | `v`/`^` | CL movement pairs |
+| `]`/`[` | `[`/`]` | GP movement pairs |
+| `}`/`{` | `{`/`}` | GP movement pairs |
+| `H`/`h` | `h`/`H` | H2 movement pairs |
+| `a`/`d` | `d`/`a` | H2 movement pairs |
 
-Self-inverse ops: `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`
+Self-inverse ops: `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`,
+`m`, `j`, `V`
 
 Mirrors (`/`, `\`, `%`, `?`, `&`, `!`, `(`, `)`, `#`, `$`) are
 self-inverse in the sense that the IP direction mapping is its own
@@ -175,6 +239,6 @@ same way.
 
 ## NOP
 
-Any payload not in {1-48} is a NOP: the IP advances without side
-effects. On the 16-bit cell, this means payloads 0, 49-2047 are all
-NOPs. The canonical "empty cell" is raw value 0 (payload 0).
+Any payload not corresponding to opcodes 1-56 (and not within Hamming
+distance 1 of such a payload) is a NOP: the IP advances without side
+effects. The canonical "empty cell" is raw value 0 (payload 0).
