@@ -62,7 +62,7 @@ fb2d is a 2D reversible esoteric language where:
 - **`old-files/2d-older/`** — Earlier 2D simulator iterations.
 - **`old-files/ifbc-02.py`** — Previous compiler version.
 
-## ISA Summary (v1.9, 56 opcodes + NOP)
+## ISA Summary (v1.10, 59 opcodes + NOP)
 
 ### Mirrors
 | Op | Code | Meaning |
@@ -137,6 +137,17 @@ other gadget's code cells. The copy-down pattern: `m` copies a
 remote codeword to a local GP cell, correction runs locally,
 then `j` writes the correction mask back to the remote cell.
 
+### H2 Momentum Ops (v1.10)
+| Op | Code | Meaning |
+|----|------|---------|
+| `A` | 57 | Advance H2 in `h2_dir` — inverse: `B` |
+| `B` | 58 | Retreat H2 opposite `h2_dir` — inverse: `A` |
+| `U` | 59 | Flip `h2_dir` via XOR 2 (E↔W, N↔S) — self-inverse |
+
+Per-IP field `h2_dir` (defaults to `DIR_E`). Enables serpentine
+scanning: H2 sweeps east, detects boundary via `V`, retreats (`B`),
+moves south (`h`), flips direction (`U`), sweeps west, repeat.
+
 ### Reversibility Pairs
 - `+` / `-` are inverses
 - `.` / `,` are inverses
@@ -144,9 +155,10 @@ then `j` writes the correction mask back to the remote cell.
 - `r` / `l` are inverses
 - `R` / `L` are inverses
 - `:` / `;` are inverses
+- `A` / `B` are inverses (H2 momentum advance/retreat)
 - `H`/`h`, `a`/`d` are inverses (H2 head movement)
 - `N`/`S`, `E`/`W`, etc. are inverses (all head movement pairs)
-- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`, `j`, `V` are self-inverse
+- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`, `j`, `V`, `U` are self-inverse
 
 ## ifb Language (intermediate fuckbrain)
 

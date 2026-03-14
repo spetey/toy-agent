@@ -1,0 +1,943 @@
+#!/usr/bin/env python3
+"""
+serpentine-ouroboros-demo.py — Dual ouroboros with serpentine H2 scanning.
+
+Two identical gadgets correcting each other's code, wrapped at configurable width W.
+Uses H2 momentum ops (A/B/U) for serpentine scanning: east across row, south,
+west across, south, east... with V-based boundary detection.
+
+ARCHITECTURE:
+  Gadget A code:     rows 0..R-1 (boustrophedon at width W)
+  Gadget A handler:  row R (boundary handler, hand-placed)
+  Gadget A GP:       row R+1
+  Gadget B code:     rows R+2..2R+1
+  Gadget B handler:  row 2R+2
+  Gadget B GP:       row 2R+3
+
+  Total: T = 2*(R+2) rows x W cols
+
+H2 SCANNING (serpentine):
+  Each IP's H2 sweeps east across a row, detects boundary (zero cell via V),
+  then retreats (B), moves south (h), flips direction (U). West sweep, repeat.
+  No coprimality constraint needed — systematic row-by-row coverage.
+
+BOUNDARY DETECTION:
+  After A (advance H2), V swaps [CL]<->[H2] to test the new cell.
+  If zero (boundary): conditional mirror triggers, IP drops to handler row.
+  Handler: / (S→W), V B h U (restore/turnaround), E e ] > (advance),
+    : (CL++ signal), \ (W→N exit).
+  & gate on last code row: \ if CL!=0 → merges handler path west to col 1.
+  T x preamble at cycle start cleans CL signal back to 0.
+
+FILL CELLS:
+  The last boustrophedon row may be partially filled. Empty cells are filled
+  with X (swap, opcode 19) — a no-op when H0=H1 (as in the gadget epilogue).
+  This prevents false boundary detection within the code area.
+
+Run tests:  python3 programs/serpentine-ouroboros-demo.py [--width W]
+Save demo:  python3 programs/serpentine-ouroboros-demo.py --save [--width W]
+"""
+
+import sys
+import os
+import math
+import random
+import importlib.util
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + '/..')
+from fb2d import (FB2DSimulator, OPCODES, hamming_encode, cell_to_payload,
+                  DIR_E, DIR_N, DIR_S, DIR_W, encode_opcode, OPCODE_PAYLOADS)
+
+# Import correction gadget builder from dual-gadget-demo.py
+_dgd_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'dual-gadget-demo.py')
+_spec = importlib.util.spec_from_file_location('dgd', _dgd_path)
+dgd = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(dgd)
+
+build_h2_correction_gadget = dgd.build_h2_correction_gadget
+place_boustrophedon = dgd.place_boustrophedon
+DSL_EV = dgd.DSL_EV
+DSL_CWL = dgd.DSL_CWL
+DSL_ROT = dgd.DSL_ROT
+DSL_SLOT_WIDTH = dgd.DSL_SLOT_WIDTH
+
+from hamming import encode, inject_error
+
+OP = OPCODES
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Gadget builder
+# ═══════════════════════════════════════════════════════════════════
+
+def build_serpentine_gadget(last_row_dir):
+    """Build correction gadget with serpentine H2 advance.
+
+    Preamble: T x — cleans any [CL] value to 0 at cycle start.
+      T swaps [CL]↔[H0] (H0=H1=CWL slot, value 0 → CL gets 0).
+      x XORs [H0]^=[H1] (same cell, zeroes any value T deposited).
+    This lets the handler set [CL]=1 as a signal, which is cleaned
+    on the next cycle without burning a GP zero.
+
+    Takes the standard 318-op correction from build_h2_correction_gadget()
+    and appends: A V [?|!] V E e ] >
+
+    The conditional mirror depends on the last boustrophedon row direction:
+      - West-going: ? (/ if CL==0 → W→S, drops south to handler)
+      - East-going: ! (\\ if CL==0 → E→S, drops south to handler)
+
+    Args:
+        last_row_dir: DIR_E or DIR_W for the last boustrophedon row
+
+    Returns: list of opchar strings (328 ops total)
+    """
+    base_ops = build_h2_correction_gadget()  # 323 ops (318 corr + 5 advance)
+    correction_ops = base_ops[:318]
+
+    # Preamble: clean any [CL] signal from previous handler return
+    preamble = ['T', 'x']
+
+    # Conditional mirror: ? for west-going, ! for east-going
+    cond_mirror = '?' if last_row_dir == DIR_W else '!'
+
+    # Advance block: A V [?|!] V E e ] >
+    advance_ops = ['A', 'V', cond_mirror, 'V', 'E', 'e', ']', '>']
+
+    return preamble + correction_ops + advance_ops
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Layout calculations
+# ═══════════════════════════════════════════════════════════════════
+
+def _last_row_direction(n_ops, code_left, code_right):
+    """Determine direction of the last boustrophedon row.
+
+    Returns DIR_E or DIR_W.
+    """
+    first_row_slots = code_right - code_left
+    inner_row_slots = code_right - code_left - 1
+
+    if n_ops <= first_row_slots:
+        return DIR_E  # row_count=1, east
+
+    remaining = n_ops - first_row_slots
+    extra_rows = math.ceil(remaining / inner_row_slots)
+    total_row_count = 1 + extra_rows
+
+    # row_count 1=east, 2=west, 3=east, 4=west, ...
+    return DIR_W if total_row_count % 2 == 0 else DIR_E
+
+
+def compute_layout(width):
+    """Compute grid layout for serpentine ouroboros at given width.
+
+    Returns dict with layout information.
+    """
+    code_left = 2
+    code_right = width - 2
+
+    first_row_slots = code_right - code_left      # W - 4
+    inner_row_slots = code_right - code_left - 1   # W - 5
+
+    # Determine last row direction for conditional mirror choice
+    # Use 328 ops (we'll compute this properly after)
+    last_dir = _last_row_direction(328, code_left, code_right)
+    gadget_ops = build_serpentine_gadget(last_dir)
+    n_ops = len(gadget_ops)
+    assert n_ops == 328
+
+    # Recompute with actual op count (should be same, but be safe)
+    last_dir = _last_row_direction(n_ops, code_left, code_right)
+
+    if n_ops <= first_row_slots:
+        code_rows = 1
+    else:
+        remaining = n_ops - first_row_slots
+        code_rows = 1 + math.ceil(remaining / inner_row_slots)
+
+    # Per gadget: R code rows + 1 handler row + 1 GP row = R+2
+    rows_per_gadget = code_rows + 2
+    total_rows = 2 * rows_per_gadget
+
+    layout = {
+        'width': width,
+        'n_ops': n_ops,
+        'code_rows': code_rows,
+        'rows_per_gadget': rows_per_gadget,
+        'total_rows': total_rows,
+        'last_row_dir': last_dir,
+        'ga_code': (0, code_rows - 1),
+        'ga_handler': code_rows,
+        'ga_gp': code_rows + 1,
+        'gb_code': (rows_per_gadget, rows_per_gadget + code_rows - 1),
+        'gb_handler': rows_per_gadget + code_rows,
+        'gb_gp': rows_per_gadget + code_rows + 1,
+        'code_left': code_left,
+        'code_right': code_right,
+        'first_row_slots': first_row_slots,
+        'inner_row_slots': inner_row_slots,
+    }
+    return layout
+
+
+def _boustrophedon_op_position(op_idx, code_left, code_right, start_row):
+    """Return (row, col, direction) for an op at given index in boustrophedon.
+
+    direction is DIR_E or DIR_W for the row containing this op.
+    """
+    first_slots = code_right - code_left
+    inner_slots = code_right - code_left - 1
+
+    if op_idx < first_slots:
+        return start_row, code_left + op_idx, DIR_E
+
+    remaining = op_idx - first_slots
+    row_offset = 1 + remaining // inner_slots
+    pos_in_row = remaining % inner_slots
+    row = start_row + row_offset
+    row_count = row_offset + 1  # 1-indexed
+
+    if row_count % 2 == 0:
+        # West-going: code from right_col-1 downward
+        col = code_right - 1 - pos_in_row
+        return row, col, DIR_W
+    else:
+        # East-going (not first): code from left_col+1 upward
+        col = code_left + 1 + pos_in_row
+        return row, col, DIR_E
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Grid builder
+# ═══════════════════════════════════════════════════════════════════
+
+def make_serpentine_ouroboros(width=99, errors=None):
+    """Build the serpentine dual ouroboros grid.
+
+    Args:
+        width: grid width (no coprimality constraint needed)
+        errors: list of (row, col, bit) tuples for error injection
+
+    Returns: (sim, layout, cycle_length)
+    """
+    layout = compute_layout(width)
+
+    last_dir = layout['last_row_dir']
+    gadget_ops = build_serpentine_gadget(last_dir)
+    op_values = [OP[ch] for ch in gadget_ops]
+
+    T = layout['total_rows']
+    W = width
+    code_left = layout['code_left']
+    code_right = layout['code_right']
+    R = layout['code_rows']
+
+    sim = FB2DSimulator(rows=T, cols=W)
+
+    # ── Place gadget code for both gadgets ──
+    ga_start = layout['ga_code'][0]
+    gb_start = layout['gb_code'][0]
+
+    _place_gadget(sim, layout, op_values, ga_start)
+    _place_gadget(sim, layout, op_values, gb_start)
+
+    # ── Inject errors ──
+    if errors:
+        for row, col, bit in errors:
+            flat = sim._to_flat(row, col)
+            sim.grid[flat] = inject_error(sim.grid[flat], bit)
+
+    # ── GP setup ──
+    ga_gp = layout['ga_gp']
+    gb_gp = layout['gb_gp']
+
+    # ── IP0: runs gadget A, H2 starts on gadget B's first code row ──
+    sim.ip_row = ga_start
+    sim.ip_col = code_left
+    sim.ip_dir = DIR_E
+    sim.h0 = sim._to_flat(ga_gp, DSL_CWL)
+    sim.h1 = sim._to_flat(ga_gp, DSL_CWL)
+    sim.h2 = sim._to_flat(gb_start, code_left)  # H2 starts at gb code area
+    sim.cl = sim._to_flat(ga_gp, DSL_ROT)
+    sim.gp = sim._to_flat(ga_gp, DSL_EV)
+    # h2_dir defaults to DIR_E (set in FB2DSimulator)
+
+    # ── IP1: runs gadget B, H2 starts on gadget A's first code row ──
+    sim.add_ip(
+        ip_row=gb_start, ip_col=code_left, ip_dir=DIR_E,
+        h0=sim._to_flat(gb_gp, DSL_CWL),
+        h1=sim._to_flat(gb_gp, DSL_CWL),
+        h2=sim._to_flat(ga_start, code_left),
+        cl=sim._to_flat(gb_gp, DSL_ROT),
+        gp=sim._to_flat(gb_gp, DSL_EV),
+    )
+
+    # ── Compute cycle length ──
+    cycle_length = _compute_cycle_length(sim, layout)
+
+    return sim, layout, cycle_length
+
+
+def _place_gadget(sim, layout, op_values, start_row):
+    """Place one gadget's code, handler, corridors, and merge gate.
+
+    Handler merge-back:
+      The handler runs west and ends with : (CL++) then \\ (W→N).
+      The \\ sends IP north to the last code row, where & (\\ if CL!=0)
+      redirects N→W. IP then goes west through X-fill (no-ops) to the
+      col 1 corridor, merging with the normal return path.
+
+      The T x preamble at the start of each cycle cleans [CL] back to 0,
+      so & is a no-op on the normal (non-handler) path.
+    """
+    W = layout['width']
+    R = layout['code_rows']
+    code_left = layout['code_left']
+    code_right = layout['code_right']
+    last_dir = layout['last_row_dir']
+    handler_row = start_row + R
+
+    assert last_dir == DIR_W, (
+        f"Handler merge-back requires west-going last row; "
+        f"got {'East' if last_dir == DIR_E else last_dir}. "
+        f"Adjust width so last boustrophedon row goes west.")
+
+    # ── Place boustrophedon code ──
+    rows_used, end_row, last_col, end_dir_int = place_boustrophedon(
+        sim, op_values, code_left, code_right, start_row)
+
+    # ── Fill partial last row with X (no-op when H0=H1) ──
+    _fill_last_row(sim, layout, start_row + R - 1)
+
+    # ── Corridor: last code row col 1 → W→N ──
+    last_code_row = start_row + R - 1
+    sim.grid[sim._to_flat(last_code_row, 1)] = encode_opcode(OP['\\'])
+
+    # ── Corridor: first code row col 1 → N→E ──
+    sim.grid[sim._to_flat(start_row, 1)] = encode_opcode(OP['/'])
+
+    # ── Locate the conditional mirror (? or !) in the boustrophedon ──
+    # With T x preamble, it's op 322 (0-indexed)
+    cond_idx = 322
+    cond_row, cond_col, _ = _boustrophedon_op_position(
+        cond_idx, code_left, code_right, start_row)
+
+    # ── Place boundary handler ops on handler_row ──
+    # IP drops south from cond_col to handler_row going S.
+    # / at (handler_row, cond_col) redirects S→W.
+    # Handler ops run WEST: V B h U E e ] > : \.
+    # : increments [CL] (signal for & gate above).
+    # \ at the western end sends W→N back up to the code row.
+    handler_ops = ['/', 'V', 'B', 'h', 'U', 'E', 'e', ']', '>', ':', '\\']
+    gate_col = cond_col - (len(handler_ops) - 1)  # col where \ exits north
+    assert gate_col >= code_left, (
+        f"Handler ops would extend past code_left "
+        f"(gate_col={gate_col}, code_left={code_left}). Width too narrow.")
+    for i, op_ch in enumerate(handler_ops):
+        col = cond_col - i
+        sim.grid[sim._to_flat(handler_row, col)] = encode_opcode(OP[op_ch])
+
+    # ── Merge gate: & on last code row above handler's \ exit ──
+    # & = \ if [CL]!=0. Handler path: CL=1 → N→W (merge west to col 1).
+    # Normal path: CL=0 → no-op (IP continues west through boustrophedon).
+    sim.grid[sim._to_flat(last_code_row, gate_col)] = encode_opcode(OP['&'])
+
+
+def _fill_last_row(sim, layout, last_row):
+    """Fill empty cells on the last boustrophedon row with X (opcode 19).
+
+    X is a no-op when H0 and H1 point to the same cell, which is true
+    after the correction epilogue + advance. This prevents false H2
+    boundary detection within the code area.
+    """
+    W = layout['width']
+    code_left = layout['code_left']
+    code_right = layout['code_right']
+    fill_value = encode_opcode(OP['X'])
+
+    for col in range(code_left, code_right + 1):
+        flat = sim._to_flat(last_row, col)
+        if sim.grid[flat] == 0:
+            sim.grid[flat] = fill_value
+
+
+def _compute_cycle_length(sim, layout):
+    """Compute steps for one full IP loop through the boustrophedon.
+
+    Traces the IP path through code rows, advance block, handler path
+    (both normal and handler converge back to row 0).
+    """
+    from fb2d import _CELL_TO_PAYLOAD, _PAYLOAD_TO_OPCODE
+
+    start_row = layout['ga_code'][0]
+    code_left = layout['code_left']
+
+    SLASH = {DIR_E: DIR_N, DIR_N: DIR_E, DIR_S: DIR_W, DIR_W: DIR_S}
+    BACKSLASH = {DIR_E: DIR_S, DIR_S: DIR_E, DIR_N: DIR_W, DIR_W: DIR_N}
+    dr = [-1, 0, 1, 0]
+    dc = [0, 1, 0, -1]
+
+    r, c, d = start_row, code_left, DIR_E
+    steps = 0
+
+    while True:
+        steps += 1
+        flat = sim._to_flat(r, c)
+        val = sim.grid[flat]
+        payload = _CELL_TO_PAYLOAD[val]
+        opcode = _PAYLOAD_TO_OPCODE[payload]
+
+        # Handle unconditional mirrors only (conditional mirrors depend on state)
+        if opcode == 1:  # /
+            d = SLASH[d]
+        elif opcode == 2:  # backslash
+            d = BACKSLASH[d]
+
+        # Move
+        r = (r + dr[d]) % sim.rows
+        c = (c + dc[d]) % sim.cols
+
+        if r == start_row and c == code_left and d == DIR_E:
+            break
+
+        if steps > 50000:
+            raise RuntimeError(f"Cycle length exceeded 50000 — IP not looping? "
+                               f"At ({r},{c}) dir={d}")
+
+    return steps
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Serpentine scan order simulation
+# ═══════════════════════════════════════════════════════════════════
+
+def simulate_h2_scan(layout, ip_idx, max_cycles):
+    """Simulate H2 serpentine movement, returning cells visited per cycle.
+
+    Args:
+        layout: from compute_layout()
+        ip_idx: 0 for IP0 (H2 scans gb), 1 for IP1 (H2 scans ga)
+        max_cycles: max cycles to simulate
+
+    Returns: list of (row, col) for each cycle
+    """
+    T = layout['total_rows']
+    W = layout['width']
+    code_left = layout['code_left']
+    code_right = layout['code_right']
+
+    if ip_idx == 0:
+        h2_row = layout['gb_code'][0]
+    else:
+        h2_row = layout['ga_code'][0]
+    h2_col = code_left
+    h2_dir = DIR_E  # starts east
+
+    dr = [-1, 0, 1, 0]
+    dc = [0, 1, 0, -1]
+
+    # Build a map of which cells are non-zero on the target gadget
+    # For simulation purposes, assume:
+    # - Code rows cols code_left..code_right are non-zero
+    # - Col 1 on first and last code rows: non-zero (corridor mirrors)
+    # - Col 0 on handler row: non-zero
+    # - Everything else: zero
+
+    if ip_idx == 0:
+        target_code = layout['gb_code']
+        target_handler = layout['gb_handler']
+    else:
+        target_code = layout['ga_code']
+        target_handler = layout['ga_handler']
+
+    def is_nonzero(row, col):
+        """Check if a cell would be non-zero in the grid."""
+        # Code rows: code area is filled (code + fill cells + mirrors)
+        if target_code[0] <= row <= target_code[1]:
+            if code_left <= col <= code_right:
+                return True
+            if col == 1 and (row == target_code[0] or row == target_code[1]):
+                return True  # corridor mirrors
+            return False
+        # Handler row: has ops at specific columns (11 ops from cond_col)
+        if row == target_handler:
+            cond_row, cond_col, _ = _boustrophedon_op_position(
+                322, code_left, code_right, target_code[0])
+            if cond_col - 10 <= col <= cond_col:
+                return True
+            return False
+        # GP row and other rows: all zero
+        return False
+
+    cells = []
+    for cycle in range(max_cycles):
+        # Record current H2 position (cell to be corrected)
+        cells.append((h2_row, h2_col))
+
+        # Advance H2 in h2_dir
+        new_row = (h2_row + dr[h2_dir]) % T
+        new_col = (h2_col + dc[h2_dir]) % W
+
+        if is_nonzero(new_row, new_col):
+            # Normal: advance H2
+            h2_row, h2_col = new_row, new_col
+        else:
+            # Boundary: retreat, south, flip
+            # B: don't change position (we didn't commit the advance)
+            # h: south
+            h2_row = (h2_row + 1) % T  # south (dr[DIR_S]=1)
+            # U: flip direction
+            h2_dir = h2_dir ^ 2  # E<->W, N<->S
+
+    return cells
+
+
+def h2_cycle_for_cell(layout, ip_idx, target_row, target_col, max_cycles=2000):
+    """Find which cycle H2 visits a specific cell.
+
+    Returns cycle number, or -1 if not found within max_cycles.
+    """
+    cells = simulate_h2_scan(layout, ip_idx, max_cycles)
+    for k, (r, c) in enumerate(cells):
+        if r == target_row and c == target_col:
+            return k
+    return -1
+
+
+def early_code_cells(layout, ip_idx, max_cycle=None):
+    """Return code cells visited within GP budget.
+
+    Returns list of (cycle, row, col).
+    """
+    W = layout['width']
+    if max_cycle is None:
+        max_cycle = W - DSL_ROT - 2
+
+    cells = simulate_h2_scan(layout, ip_idx, max_cycle)
+
+    if ip_idx == 0:
+        target_code = layout['gb_code']
+    else:
+        target_code = layout['ga_code']
+
+    result = []
+    for k, (r, c) in enumerate(cells):
+        if target_code[0] <= r <= target_code[1]:
+            result.append((k, r, c))
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test runner
+# ═══════════════════════════════════════════════════════════════════
+
+def run_serpentine_test(width, errors, label="", check_reverse=False):
+    """Test serpentine ouroboros correction."""
+    if label:
+        print(f"=== {label} ===")
+
+    sim, layout, cycle_length = make_serpentine_ouroboros(width, errors)
+    T = layout['total_rows']
+    W = width
+
+    # Save expected (clean) grid values for error cells
+    expected = {}
+    for row, col, bit in errors:
+        flat = sim._to_flat(row, col)
+        clean = inject_error(sim.grid[flat], bit)
+        expected[(row, col)] = clean
+
+    # Figure out how many cycles we need
+    max_cycles_needed = 0
+    for row, col, bit in errors:
+        ga_code = layout['ga_code']
+        gb_code = layout['gb_code']
+
+        if ga_code[0] <= row <= ga_code[1]:
+            ip_idx = 1  # IP1 corrects GA
+        elif gb_code[0] <= row <= gb_code[1]:
+            ip_idx = 0  # IP0 corrects GB
+        else:
+            continue
+
+        k = h2_cycle_for_cell(layout, ip_idx, row, col)
+        if k < 0:
+            print(f"    WARNING: cell ({row},{col}) not reached within scan budget")
+            continue
+        max_cycles_needed = max(max_cycles_needed, k + 1)
+
+    n_cycles = max_cycles_needed + 2
+    total_rounds = n_cycles * cycle_length
+
+    if label:
+        print(f"    Grid: {T}x{W} ({layout['code_rows']} code rows/gadget)")
+        print(f"    Gadget: {layout['n_ops']} ops, cycle={cycle_length} steps")
+        print(f"    Errors: {len(errors)} injected")
+        print(f"    Cycles needed: {max_cycles_needed}, running {n_cycles}"
+              f" ({total_rounds} rounds)")
+
+    for _ in range(total_rounds):
+        sim.step_all()
+
+    # Check corrected cells
+    all_ok = True
+    for row, col, bit in errors:
+        flat = sim._to_flat(row, col)
+        result = sim.grid[flat]
+        exp = expected[(row, col)]
+        ok = (result == exp)
+        if label or not ok:
+            print(f"    ({row},{col}) bit {bit}:"
+                  f" 0x{result:04x} expected 0x{exp:04x}"
+                  f" {'ok' if ok else 'FAIL'}")
+        all_ok &= ok
+
+    if check_reverse:
+        for _ in range(total_rounds):
+            sim.step_back_all()
+
+        reverse_ok = True
+        for row, col, bit in errors:
+            flat = sim._to_flat(row, col)
+            result = sim.grid[flat]
+            exp_original = inject_error(expected[(row, col)], bit)
+            if result != exp_original:
+                reverse_ok = False
+                if label:
+                    print(f"    [REVERSE] ({row},{col}): 0x{result:04x}"
+                          f" expected 0x{exp_original:04x}")
+
+        if label:
+            print(f"    Reverse: {'ok' if reverse_ok else 'FAIL'}")
+        all_ok &= reverse_ok
+
+    return all_ok
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Tests
+# ═══════════════════════════════════════════════════════════════════
+
+def test_layout_info(width=99):
+    """Print layout information."""
+    layout = compute_layout(width)
+    print(f"=== Layout for W={width} ===")
+    print(f"    Gadget: {layout['n_ops']} ops")
+    print(f"    Code rows per gadget: {layout['code_rows']}")
+    print(f"    Last row direction: {'East' if layout['last_row_dir'] == DIR_E else 'West'}")
+    print(f"    Grid: {layout['total_rows']}x{width}"
+          f" = {layout['total_rows'] * width} cells")
+    print(f"    GA code: rows {layout['ga_code'][0]}-{layout['ga_code'][1]}")
+    print(f"    GA handler: row {layout['ga_handler']}")
+    print(f"    GA GP: row {layout['ga_gp']}")
+    print(f"    GB code: rows {layout['gb_code'][0]}-{layout['gb_code'][1]}")
+    print(f"    GB handler: row {layout['gb_handler']}")
+    print(f"    GB GP: row {layout['gb_gp']}")
+    # Show first few serpentine cells for IP0
+    cells = early_code_cells(layout, 0, max_cycle=20)
+    print(f"    IP0 H2 first code cells: "
+          + ", ".join(f"({r},{c})@{k}" for k, r, c in cells[:8]))
+    return True
+
+
+def test_cycle_length(width=99):
+    """Verify cycle length computation."""
+    print(f"=== Cycle length (W={width}) ===")
+    sim, layout, cycle_length = make_serpentine_ouroboros(width)
+    print(f"    Cycle length: {cycle_length} steps")
+
+    start_row = sim.ip_row
+    start_col = sim.ip_col
+    start_dir = sim.ip_dir
+
+    for _ in range(cycle_length):
+        sim.step_all()
+
+    ok = (sim.ip_row == start_row and sim.ip_col == start_col
+          and sim.ip_dir == start_dir)
+    print(f"    IP returns to start: {'ok' if ok else 'FAIL'}"
+          f" ({sim.ip_row},{sim.ip_col} dir={sim.ip_dir})")
+    return ok
+
+
+def test_scan_pattern(width=99):
+    """Verify serpentine scan visits expected cells."""
+    print(f"=== Scan pattern (W={width}) ===")
+    layout = compute_layout(width)
+    # Need enough cycles to span multiple rows (code_right - code_left + overhead)
+    n_cycles = (layout['code_right'] - layout['code_left']) * 2 + 20
+    cells = simulate_h2_scan(layout, 0, max_cycles=n_cycles)
+
+    # Check first few cells are on expected rows
+    gb_start = layout['gb_code'][0]
+    code_left = layout['code_left']
+
+    first_row_cells = [(k, r, c) for k, (r, c) in enumerate(cells)
+                       if r == gb_start]
+    print(f"    First row cells: {len(first_row_cells)}")
+    if first_row_cells:
+        print(f"    First: ({first_row_cells[0][1]},{first_row_cells[0][2]})@{first_row_cells[0][0]}")
+        print(f"    Last:  ({first_row_cells[-1][1]},{first_row_cells[-1][2]})@{first_row_cells[-1][0]}")
+
+    # Check that we see cells on multiple rows
+    rows_seen = set(r for r, c in cells)
+    print(f"    Rows visited in {n_cycles} cycles: {sorted(rows_seen)}")
+    ok = len(rows_seen) > 1
+    print(f"    Multiple rows: {'ok' if ok else 'FAIL'}")
+    return ok
+
+
+def test_single_error_gb(width=99):
+    """Single error on gadget B code, corrected by IP0."""
+    layout = compute_layout(width)
+    cells = early_code_cells(layout, 0, max_cycle=80)
+    gb_code = layout['gb_code']
+    gb_cells = [(k, r, c) for k, r, c in cells
+                if gb_code[0] <= r <= gb_code[1]]
+    assert gb_cells, "No gadget B cells in early scan!"
+    k, row, col = gb_cells[0]
+    return run_serpentine_test(
+        width=width,
+        errors=[(row, col, 3)],
+        label=f"Single error on gadget B ({row},{col})@cycle{k} (W={width})")
+
+
+def test_single_error_ga(width=99):
+    """Single error on gadget A code, corrected by IP1."""
+    layout = compute_layout(width)
+    cells = early_code_cells(layout, 1, max_cycle=80)
+    ga_code = layout['ga_code']
+    ga_cells = [(k, r, c) for k, r, c in cells
+                if ga_code[0] <= r <= ga_code[1]]
+    assert ga_cells, "No gadget A cells in early scan!"
+    k, row, col = ga_cells[0]
+    return run_serpentine_test(
+        width=width,
+        errors=[(row, col, 7)],
+        label=f"Single error on gadget A ({row},{col})@cycle{k} (W={width})")
+
+
+def test_errors_both_gadgets(width=99):
+    """Errors on both gadgets — mutual correction."""
+    layout = compute_layout(width)
+    ga_code = layout['ga_code']
+    gb_code = layout['gb_code']
+
+    cells0 = early_code_cells(layout, 0, max_cycle=80)
+    gb_cells = [(k, r, c) for k, r, c in cells0
+                if gb_code[0] <= r <= gb_code[1]]
+
+    cells1 = early_code_cells(layout, 1, max_cycle=80)
+    ga_cells = [(k, r, c) for k, r, c in cells1
+                if ga_code[0] <= r <= ga_code[1]]
+
+    errors = []
+    for i in range(min(2, len(gb_cells))):
+        k, r, c = gb_cells[i]
+        errors.append((r, c, 3 + i * 4))
+    for i in range(min(2, len(ga_cells))):
+        k, r, c = ga_cells[i]
+        errors.append((r, c, 7 + i * 4))
+
+    return run_serpentine_test(
+        width=width,
+        errors=errors,
+        label=f"Errors on both gadgets ({len(errors)} errors, W={width})")
+
+
+def test_all_16_positions(width=99):
+    """Every bit position on an early gadget B cell."""
+    layout = compute_layout(width)
+    cells = early_code_cells(layout, 0, max_cycle=80)
+    gb_code = layout['gb_code']
+    gb_cells = [(k, r, c) for k, r, c in cells
+                if gb_code[0] <= r <= gb_code[1]]
+    assert gb_cells, "No gadget B cells in early scan!"
+    _, row, col = gb_cells[0]
+
+    all_ok = True
+    for bit in range(16):
+        ok = run_serpentine_test(
+            width=width,
+            errors=[(row, col, bit)],
+            label="")
+        if not ok:
+            print(f"    bit {bit}: FAIL")
+            all_ok = False
+    print(f"=== All 16 error positions at ({row},{col}) (W={width}) ===")
+    print(f"  {'PASS' if all_ok else 'FAIL'}")
+    return all_ok
+
+
+def test_random_early(width=99, n_errors=8, seed=42):
+    """Random errors on early scan cells (within GP budget)."""
+    random.seed(seed)
+    layout = compute_layout(width)
+    ga_code = layout['ga_code']
+    gb_code = layout['gb_code']
+
+    # Use default max_cycle (GP budget) to avoid exceeding GP trail
+    cells0 = early_code_cells(layout, 0)
+    gb_candidates = [(r, c) for k, r, c in cells0
+                     if gb_code[0] <= r <= gb_code[1]]
+
+    cells1 = early_code_cells(layout, 1)
+    ga_candidates = [(r, c) for k, r, c in cells1
+                     if ga_code[0] <= r <= ga_code[1]]
+
+    seen = set()
+    unique = []
+    for r, c in gb_candidates + ga_candidates:
+        if (r, c) not in seen:
+            seen.add((r, c))
+            unique.append((r, c))
+
+    random.shuffle(unique)
+    errors = []
+    for r, c in unique[:n_errors]:
+        bit = random.randint(0, 15)
+        errors.append((r, c, bit))
+
+    return run_serpentine_test(
+        width=width,
+        errors=errors,
+        label=f"Random early ({len(errors)} errors, W={width})")
+
+
+def test_reverse(width=99):
+    """Test reversibility."""
+    layout = compute_layout(width)
+    cells = early_code_cells(layout, 0, max_cycle=20)
+    gb_code = layout['gb_code']
+    gb_cells = [(k, r, c) for k, r, c in cells
+                if gb_code[0] <= r <= gb_code[1]]
+    assert gb_cells
+    _, row, col = gb_cells[0]
+
+    return run_serpentine_test(
+        width=width,
+        errors=[(row, col, 3)],
+        label=f"Reverse check ({row},{col}) (W={width})",
+        check_reverse=True)
+
+
+def test_even_width(width=100):
+    """Test with an even width (no coprimality needed for serpentine)."""
+    layout = compute_layout(width)
+    cells = early_code_cells(layout, 0, max_cycle=80)
+    gb_code = layout['gb_code']
+    gb_cells = [(k, r, c) for k, r, c in cells
+                if gb_code[0] <= r <= gb_code[1]]
+    if not gb_cells:
+        print(f"=== Even width W={width} ===")
+        print(f"    No early GB cells — skipping")
+        return True
+    k, row, col = gb_cells[0]
+    return run_serpentine_test(
+        width=width,
+        errors=[(row, col, 5)],
+        label=f"Even width W={width}: error on GB ({row},{col})@cycle{k}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Save demo
+# ═══════════════════════════════════════════════════════════════════
+
+def save_demo(width=99, filename=None):
+    """Save an interactive demo .fb2d file."""
+    layout = compute_layout(width)
+    ga_start = layout['ga_code'][0]
+    gb_start = layout['gb_code'][0]
+    ga_end = layout['ga_code'][1]
+    gb_end = layout['gb_code'][1]
+
+    errors = [
+        (ga_start, 5, 3),
+        (ga_end, 15, 11),
+        (gb_start, 8, 7),
+        (gb_end, 20, 14),
+    ]
+
+    sim, layout, cycle_length = make_serpentine_ouroboros(width, errors)
+    T = layout['total_rows']
+
+    if filename is None:
+        filename = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                f'serpentine-ouroboros-w{width}.fb2d')
+    sim.save_state(filename)
+
+    print(f"Saved: {filename}")
+    print(f"  Grid: {T}x{width} ({layout['code_rows']} code rows/gadget)")
+    print(f"  Gadget: {layout['n_ops']} ops, cycle={cycle_length} steps")
+    print(f"  GA code: rows {ga_start}-{ga_end}, handler: {layout['ga_handler']}, GP: {layout['ga_gp']}")
+    print(f"  GB code: rows {gb_start}-{gb_end}, handler: {layout['gb_handler']}, GP: {layout['gb_gp']}")
+    print(f"  {len(errors)} errors injected")
+    print()
+    print(f"In fb2d_server GUI:")
+    print(f"  Load: serpentine-ouroboros-w{width}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Main
+# ═══════════════════════════════════════════════════════════════════
+
+if __name__ == '__main__':
+    width = 99
+    for i, arg in enumerate(sys.argv):
+        if arg == '--width' and i + 1 < len(sys.argv):
+            width = int(sys.argv[i + 1])
+
+    if '--save' in sys.argv:
+        save_demo(width=width)
+        sys.exit(0)
+
+    print(f"Serpentine dual ouroboros (W={width})")
+    layout = compute_layout(width)
+    print(f"  {layout['code_rows']} code rows/gadget,"
+          f" {layout['total_rows']} total rows,"
+          f" {layout['n_ops']} ops/cycle")
+    print()
+
+    all_ok = True
+
+    all_ok &= test_layout_info(width)
+    print()
+
+    all_ok &= test_cycle_length(width)
+    print()
+
+    all_ok &= test_scan_pattern(width)
+    print()
+
+    all_ok &= test_single_error_gb(width)
+    print()
+
+    all_ok &= test_single_error_ga(width)
+    print()
+
+    all_ok &= test_errors_both_gadgets(width)
+    print()
+
+    all_ok &= test_all_16_positions(width)
+    print()
+
+    all_ok &= test_random_early(width)
+    print()
+
+    all_ok &= test_reverse(width)
+    print()
+
+    all_ok &= test_even_width()
+    print()
+
+    if all_ok:
+        print("=" * 60)
+        print(f"ALL SERPENTINE OUROBOROS TESTS PASSED (W={width})")
+        print("=" * 60)
+    else:
+        print("=" * 60)
+        print("SOME TESTS FAILED")
+        print("=" * 60)
+        sys.exit(1)

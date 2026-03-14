@@ -93,35 +93,41 @@ def _noise_after_step():
         _inject_noise_now()
 
 
-# ── GP cleanup step tracking ────────────────────────────────────
-_gp_step_counter = 0
-_gp_prev_cols = {}  # ip_index -> previous gp column
+# ── GP cleanup cheat ─────────────────────────────────────────
+gp_cleanup_interval = 0      # 0 = disabled; >0 = clean every N step_count units
 
 
 def _gp_cleanup_after_step():
-    """Called after each step_all(). Zeros GP rows when GP wraps."""
-    global _gp_step_counter, gp_cleanup_count
-    if not gp_cleanup_enabled:
+    """Called after each step_all().  Zeros all GP rows every N steps.
+
+    The interval is in step_count units (= n_ips * step_all_calls).
+    For serpentine-ouroboros-w99 with 2 IPs:
+      90 cycles × 388 steps/cycle × 2 IPs = 69840.
+
+    The interval is device-specific and set via the /api/gp_cleanup
+    endpoint or the GUI prompt.
+    """
+    global gp_cleanup_count
+    if not gp_cleanup_enabled or gp_cleanup_interval <= 0:
         return
-    _gp_step_counter += 1
-    if _gp_step_counter < sim.cols:
+    # Use the simulator's own step_count for timing
+    if sim.step_count == 0 or sim.step_count % gp_cleanup_interval != 0:
         return
-    _gp_step_counter = 0
-    # Check at every cycle boundary whether any IP's GP has wrapped
+
+    # Zero ALL GP rows
     sim._save_active()
-    for i, ip in enumerate(sim.ips):
-        gp_flat = ip['gp']
-        gp_col = gp_flat % sim.cols
-        gp_row = gp_flat // sim.cols
-        prev = _gp_prev_cols.get(i)
-        _gp_prev_cols[i] = gp_col
-        if prev is not None and gp_col < prev:
-            # GP wrapped — zero the entire GP row
-            for c in range(sim.cols):
-                sim.grid[gp_row * sim.cols + c] = 0
-            gp_cleanup_count += 1
-            print(f'[gp-cleanup] IP{i}: zeroed row {gp_row}'
-                  f' (cleanup #{gp_cleanup_count})')
+    W = sim.cols
+    gp_rows_cleaned = set()
+    for ip in sim.ips:
+        gp_row = ip['gp'] // W
+        if gp_row not in gp_rows_cleaned:
+            base = gp_row * W
+            for c in range(W):
+                sim.grid[base + c] = 0
+            gp_rows_cleaned.add(gp_row)
+    gp_cleanup_count += 1
+    print(f'[gp-cleanup] step {sim.step_count}: zeroed rows '
+          f'{sorted(gp_rows_cleaned)} (cleanup #{gp_cleanup_count})')
 
 
 def serialize_state():
@@ -154,6 +160,7 @@ def serialize_state():
         'noise_total_injected': noise_total_injected,
         # GP cleanup state
         'gp_cleanup_enabled': gp_cleanup_enabled,
+        'gp_cleanup_interval': gp_cleanup_interval,
         'gp_cleanup_count': gp_cleanup_count,
     }
     return result
@@ -172,7 +179,7 @@ def get_state():
 @app.route('/api/load', methods=['POST'])
 def load_file():
     global current_file, noise_step_counter, noise_total_injected, noise_cycle_count
-    global _gp_step_counter, _gp_prev_cols, gp_cleanup_count
+    global gp_cleanup_count
     data = request.get_json(force=True)
     filename = data.get('filename', '')
     # Sanitize: only allow filenames, no path traversal
@@ -189,7 +196,6 @@ def load_file():
     noise_cycle_count = 0
     # Reset GP cleanup counters
     _gp_step_counter = 0
-    _gp_prev_cols = {}
     gp_cleanup_count = 0
     return jsonify(serialize_state())
 
@@ -198,7 +204,7 @@ def load_file():
 def reset_state():
     """Reload the current file to reset back to step 0."""
     global noise_step_counter, noise_total_injected, noise_cycle_count
-    global _gp_step_counter, _gp_prev_cols, gp_cleanup_count
+    global gp_cleanup_count
     data = request.get_json(force=True) if request.data else {}
     filename = data.get('filename', '') or current_file
     if not filename:
@@ -215,7 +221,6 @@ def reset_state():
     noise_cycle_count = 0
     # Reset GP cleanup counters
     _gp_step_counter = 0
-    _gp_prev_cols = {}
     gp_cleanup_count = 0
     return jsonify(serialize_state())
 
@@ -404,10 +409,11 @@ def add_ip():
     h0 = int(data.get('h0', 0))
     h1 = int(data.get('h1', 0))
     h2 = int(data.get('h2', 0))
+    h2_dir = int(data.get('h2_dir', 1))  # DIR_E = 1
     cl = int(data.get('cl', 0))
     gp = int(data.get('gp', 0))
     idx = sim.add_ip(ip_row=ip_row, ip_col=ip_col, ip_dir=ip_dir,
-                     h0=h0, h1=h1, h2=h2, cl=cl, gp=gp)
+                     h0=h0, h1=h1, h2=h2, h2_dir=h2_dir, cl=cl, gp=gp)
     result = serialize_state()
     result['added_ip'] = idx
     return jsonify(result)
@@ -488,19 +494,20 @@ def set_noise():
 
 @app.route('/api/gp_cleanup', methods=['POST'])
 def set_gp_cleanup():
-    global gp_cleanup_enabled, gp_cleanup_count, _gp_step_counter, _gp_prev_cols
+    global gp_cleanup_enabled, gp_cleanup_count, gp_cleanup_interval
     data = request.get_json(force=True)
     if 'enabled' in data:
         new_enabled = bool(data['enabled'])
         if new_enabled and not gp_cleanup_enabled:
-            _gp_step_counter = 0
-            _gp_prev_cols = {}
             gp_cleanup_count = 0
         gp_cleanup_enabled = new_enabled
+    if 'interval' in data:
+        gp_cleanup_interval = int(data['interval'])
     print(f'[gp-cleanup] config: enabled={gp_cleanup_enabled}'
-          f' cleanups={gp_cleanup_count}')
+          f' interval={gp_cleanup_interval} cleanups={gp_cleanup_count}')
     return jsonify({
         'enabled': gp_cleanup_enabled,
+        'interval': gp_cleanup_interval,
         'count': gp_cleanup_count,
     })
 

@@ -301,7 +301,8 @@ const OPCODE_CHARS = {
   44:'R', 45:'L', 46:'Y',
   47:':', 48:';',
   49:'H', 50:'h', 51:'a', 52:'d',
-  53:'m', 54:'M', 55:'j', 56:'V'
+  53:'m', 54:'M', 55:'j', 56:'V',
+  57:'A', 58:'B', 59:'U'
 };
 
 // d_min=4 opcode encoding: opcode number → 11-bit payload value
@@ -316,6 +317,7 @@ const OPCODE_PAYLOADS = {
   42: 1066, 43: 1515, 44: 1452, 45: 1133, 46: 1902, 47: 1711,
   48:  432, 49:  113, 50:  882, 51:  691, 52:  756, 53:  821,
   54:   54, 55:  503, 56:  568,
+  57:  189, 58:  250, 59:  315,
 };
 
 // Reverse lookup: payload → opcode number (0=NOP for unrecognized)
@@ -352,7 +354,8 @@ const OPCODE_NAMES = {
   44:'rot right by [CL]', 45:'rot left by [CL]', 46:'XOR rot (fused)',
   47:'[CL]++', 48:'[CL]--',
   49:'H2 North', 50:'H2 South', 51:'H2 East', 52:'H2 West',
-  53:'[H0]^=[H2]', 54:'payload-=[H2]', 55:'[H2]^=[H0]', 56:'swap([CL],[H2])'
+  53:'[H0]^=[H2]', 54:'payload-=[H2]', 55:'[H2]^=[H0]', 56:'swap([CL],[H2])',
+  57:'H2 advance', 58:'H2 retreat', 59:'H2 flip dir'
 };
 
 const COLORS = {
@@ -549,7 +552,8 @@ function updateStatus() {
     html += `<span class="head-label head-cl" style="${dim}">CL:${rc(ip.cl)}</span> `;
     html += `<span class="head-label head-h0" style="${dim}">H0:${rc(ip.h0)}</span> `;
     html += `<span class="head-label head-h1" style="${dim}">H1:${rc(ip.h1)}</span> `;
-    html += `<span class="head-label head-h2" style="${dim}">H2:${rc(ip.h2)}</span> `;
+    const h2Arrow = DIR_ARROWS[ip.h2_dir !== undefined ? ip.h2_dir : 1];
+    html += `<span class="head-label head-h2" style="${dim}">H2:${rc(ip.h2)}${h2Arrow}</span> `;
     html += `<span class="head-label head-gp" style="${dim}">GP:${rc(ip.gp)}</span>`;
     if (i < nIps - 1) html += ' <span style="color:#444">|</span> ';
   }
@@ -1469,6 +1473,7 @@ const OPCODE_GROUPS = [
   { label: 'GP Mirrors', ops: [[34,'('], [35,')'], [36,'#'], [37,'$']] },
   { label: 'H2 Move', ops: [[49,'H'], [50,'h'], [51,'a'], [52,'d']] },
   { label: 'H2 Data', ops: [[53,'m'], [54,'M'], [55,'j'], [56,'V']] },
+  { label: 'H2 Momentum', ops: [[57,'A'], [58,'B'], [59,'U']] },
 ];
 
 let pickerCell = null;
@@ -1673,6 +1678,7 @@ function updateNoiseStats(st) {
 
 // ── GP cleanup cheat ──────────────────────────────────────────
 let gpCleanupEnabled = false;
+let gpCleanupInterval = 0;
 
 async function toggleGpCleanup() {
   gpCleanupEnabled = !gpCleanupEnabled;
@@ -1681,6 +1687,13 @@ async function toggleGpCleanup() {
   if (gpCleanupEnabled) {
     btn.classList.add('active');
     stats.style.display = '';
+    // If no interval set, prompt for one
+    if (gpCleanupInterval <= 0) {
+      const val = prompt('GP cleanup interval (steps).\n'
+        + 'For serpentine-ouroboros-w99: 69840\n'
+        + '(= 90 cycles × 388 steps × 2 IPs)', '69840');
+      if (val) gpCleanupInterval = parseInt(val, 10) || 0;
+    }
   } else {
     btn.classList.remove('active');
     stats.style.display = 'none';
@@ -1688,7 +1701,7 @@ async function toggleGpCleanup() {
   await api('gp_cleanup', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ enabled: gpCleanupEnabled })
+    body: JSON.stringify({ enabled: gpCleanupEnabled, interval: gpCleanupInterval })
   });
 }
 
@@ -1696,7 +1709,11 @@ function updateGpCleanupStats(st) {
   if (!st) return;
   const el = document.getElementById('gpCleanupStats');
   if (el && st.gp_cleanup_count !== undefined && st.gp_cleanup_enabled) {
-    el.textContent = `${st.gp_cleanup_count} cleanups`;
+    const ivl = st.gp_cleanup_interval ? ` (every ${st.gp_cleanup_interval})` : '';
+    el.textContent = `${st.gp_cleanup_count} cleanups${ivl}`;
+  }
+  if (st.gp_cleanup_interval !== undefined) {
+    gpCleanupInterval = st.gp_cleanup_interval;
   }
   if (st.gp_cleanup_enabled !== undefined && st.gp_cleanup_enabled !== gpCleanupEnabled) {
     gpCleanupEnabled = st.gp_cleanup_enabled;

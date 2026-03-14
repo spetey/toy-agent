@@ -1,6 +1,6 @@
-# fb2d Instruction Set Architecture (v1.9)
+# fb2d Instruction Set Architecture (v1.10)
 
-56 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
+59 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
 `payload(cell)` (the 11 data bits of the Hamming(16,11) codeword) as
 the opcode. Payloads corresponding to opcodes 1-56 (or within Hamming
 distance 1 of such a payload) execute that opcode; everything else is NOP.
@@ -54,12 +54,12 @@ All heads point to cells on the same toroidal grid as the IP.
 
 | Op | Payload | Description |
 |----|---------|-------------|
-| `/` | 1 | Unconditional / reflect |
-| `\` | 2 | Unconditional \ reflect |
-| `%` | 3 | / reflect if payload([CL]) != 0 |
-| `?` | 4 | / reflect if payload([CL]) == 0 |
-| `&` | 5 | \ reflect if payload([CL]) != 0 |
-| `!` | 6 | \ reflect if payload([CL]) == 0 |
+| `/` | 1 | Unconditional `/` reflect |
+| `\` | 2 | Unconditional `\` reflect |
+| `%` | 3 | `/` reflect if payload([CL]) != 0 |
+| `?` | 4 | `/` reflect if payload([CL]) == 0 |
+| `&` | 5 | `\` reflect if payload([CL]) != 0 |
+| `!` | 6 | `\` reflect if payload([CL]) == 0 |
 
 Mirror geometry:
 
@@ -154,10 +154,10 @@ Key distinctions:
 | `P` | 27 | payload([GP])++ — leave breadcrumb | `Q` |
 | `Q` | 28 | payload([GP])-- — erase breadcrumb | `P` |
 | `K` | 33 | swap(CL register, GP register) — exchange head positions | self |
-| `(` | 34 | \ reflect if payload([GP]) != 0 | — |
-| `)` | 35 | \ reflect if payload([GP]) == 0 | — |
-| `#` | 36 | / reflect if payload([GP]) == 0 | — |
-| `$` | 37 | / reflect if payload([GP]) != 0 | — |
+| `(` | 34 | `\` reflect if payload([GP]) != 0 | — |
+| `)` | 35 | `\` reflect if payload([GP]) == 0 | — |
+| `#` | 36 | `/` reflect if payload([GP]) == 0 | — |
+| `$` | 37 | `/` reflect if payload([GP]) != 0 | — |
 | `Z` | 38 | swap([H0], [GP]) — full 16-bit GP swap | self |
 
 GP mirrors test `payload([GP])` (data bits only, ignoring parity).
@@ -206,6 +206,28 @@ Only H2 touches remote rows; all other heads stay local.
 test a remote cell's value with conditional mirrors (`?`/`%`), then `V`
 again to restore.
 
+## H2 Momentum Ops (3 opcodes)
+
+H2 momentum ops give H2 a persistent direction (`h2_dir`, per-IP,
+defaults to East). This enables serpentine scanning: H2 sweeps east
+across a row, detects a boundary via `V`, then retreats, moves south,
+flips direction, and sweeps west — systematic row-by-row coverage
+without coprimality constraints.
+
+| Op | Payload | Description | Inverse |
+|----|---------|-------------|---------|
+| `A` | 57 | Advance H2 one step in `h2_dir` | `B` |
+| `B` | 58 | Retreat H2 one step opposite `h2_dir` | `A` |
+| `U` | 59 | Flip `h2_dir` via XOR 2 (E↔W, N↔S) | self |
+
+The serpentine boundary detection pattern:
+
+1. `A` — advance H2 in current direction
+2. `V` — swap [CL]↔[H2] to test the new cell
+3. `?` — if [CL]==0 (zero cell = boundary), redirect to handler
+4. `V` — restore [CL]↔[H2]
+5. Handler: `V B h U` — restore, retreat, move south, flip direction
+
 ## Reversibility Pairs
 
 Every opcode has a unique inverse (itself or another opcode):
@@ -228,17 +250,17 @@ Every opcode has a unique inverse (itself or another opcode):
 | `}`/`{` | `{`/`}` | GP movement pairs |
 | `H`/`h` | `h`/`H` | H2 movement pairs |
 | `a`/`d` | `d`/`a` | H2 movement pairs |
+| `A`/`B` | `B`/`A` | H2 momentum advance / retreat |
 
 Self-inverse ops: `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`,
-`m`, `j`, `V`
+`m`, `j`, `V`, `U`
 
 Mirrors (`/`, `\`, `%`, `?`, `&`, `!`, `(`, `)`, `#`, `$`) are
-self-inverse in the sense that the IP direction mapping is its own
-inverse — running the IP backward through a mirror reflects it the
-same way.
+self-inverse: the IP direction mapping is its own inverse — running
+the IP backward through a mirror reflects it the same way.
 
 ## NOP
 
-Any payload not corresponding to opcodes 1-56 (and not within Hamming
+Any payload not corresponding to opcodes 1-59 (and not within Hamming
 distance 1 of such a payload) is a NOP: the IP advances without side
 effects. The canonical "empty cell" is raw value 0 (payload 0).

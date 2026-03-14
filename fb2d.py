@@ -114,6 +114,10 @@ OPCODES = {
     'M':  54,  # payload(H0) -= payload(H2) with Δp  (inverse: see notes)
     'j':  55,  # [H2] ^= [H0]  (raw 16-bit write-back, self-inverse)
     'V':  56,  # swap([CL], [H2])  (test bridge, self-inverse)
+    # ── H2 momentum operations (v1.10) ──
+    'A':  57,  # advance H2 in h2_dir  (inverse: B)
+    'B':  58,  # retreat H2 opposite h2_dir  (inverse: A)
+    'U':  59,  # flip h2_dir (E↔W, N↔S)  (self-inverse)
 }
 
 OPCODE_TO_CHAR = {v: k for k, v in OPCODES.items()}
@@ -141,6 +145,7 @@ OPCODE_PAYLOADS = {
     42: 1066, 43: 1515, 44: 1452, 45: 1133, 46: 1902, 47: 1711,
     48:  432, 49:  113, 50:  882, 51:  691, 52:  756, 53:  821,
     54:   54, 55:  503, 56:  568,
+    57:  189, 58:  250, 59:  315,
 }
 
 # Reverse lookup: 11-bit payload → opcode number (0 = NOP for unrecognized)
@@ -338,6 +343,7 @@ class FB2DSimulator:
         self.h0 = 0
         self.h1 = 0
         self.h2 = 0  # Scan head for cross-gadget correction
+        self.h2_dir = DIR_E  # H2 momentum direction (for advance/retreat)
         self.cl = 0
         self.gp = 0  # Garbage pointer for breadcrumb trails
 
@@ -376,7 +382,7 @@ class FB2DSimulator:
 
     # ── Multi-IP support ─────────────────────────────────────────
 
-    _IP_FIELDS = ('ip_row', 'ip_col', 'ip_dir', 'h0', 'h1', 'h2', 'cl', 'gp')
+    _IP_FIELDS = ('ip_row', 'ip_col', 'ip_dir', 'h0', 'h1', 'h2', 'h2_dir', 'cl', 'gp')
 
     def _capture_ip_state(self):
         """Snapshot the active IP's state into a dict."""
@@ -404,14 +410,16 @@ class FB2DSimulator:
         self._load_active(index)
 
     def add_ip(self, ip_row=0, ip_col=0, ip_dir=None,
-               h0=0, h1=0, h2=0, cl=0, gp=0):
+               h0=0, h1=0, h2=0, h2_dir=None, cl=0, gp=0):
         """Add a new IP with the given state. Returns the IP index."""
         if ip_dir is None:
             ip_dir = DIR_E
+        if h2_dir is None:
+            h2_dir = DIR_E
         self._save_active()
         state = {
             'ip_row': ip_row, 'ip_col': ip_col, 'ip_dir': ip_dir,
-            'h0': h0, 'h1': h1, 'h2': h2, 'cl': cl, 'gp': gp,
+            'h0': h0, 'h1': h1, 'h2': h2, 'h2_dir': h2_dir, 'cl': cl, 'gp': gp,
         }
         self.ips.append(state)
         self.n_ips = len(self.ips)
@@ -616,7 +624,17 @@ class FB2DSimulator:
             self.grid[self.cl], self.grid[self.h2] = \
                 self.grid[self.h2], self.grid[self.cl]
 
-        # else: NOP (0 or 57–2047 payload)
+        # ── H2 momentum operations (v1.10) ──
+        elif opcode == 57:   # A advance H2 in h2_dir
+            self.h2 = self._move_head(self.h2, self.h2_dir)
+
+        elif opcode == 58:   # B retreat H2 opposite h2_dir
+            self.h2 = self._move_head(self.h2, self.h2_dir ^ 2)  # N↔S, E↔W
+
+        elif opcode == 59:   # U flip h2_dir (E↔W, N↔S, self-inverse)
+            self.h2_dir = self.h2_dir ^ 2
+
+        # else: NOP (0 or 60–2047 payload)
 
         # ── Trace output ──
         if self.trace:
@@ -805,6 +823,16 @@ class FB2DSimulator:
         elif opcode == 56:   # V swap is self-inverse
             self.grid[self.cl], self.grid[self.h2] = \
                 self.grid[self.h2], self.grid[self.cl]
+
+        # ── H2 momentum undo (v1.10) ──
+        elif opcode == 57:   # A was advance, undo = retreat
+            self.h2 = self._move_head(self.h2, self.h2_dir ^ 2)
+
+        elif opcode == 58:   # B was retreat, undo = advance
+            self.h2 = self._move_head(self.h2, self.h2_dir)
+
+        elif opcode == 59:   # U flip is self-inverse
+            self.h2_dir = self.h2_dir ^ 2
 
         # Mirrors (incl 34–37) and NOP: no data effect to undo (direction handled above)
 
@@ -1206,14 +1234,16 @@ class FB2DSimulator:
                     f.write(f"{p}ip_row={ip['ip_row']}\n{p}ip_col={ip['ip_col']}\n")
                     f.write(f"{p}ip_dir={ip['ip_dir']}\n")
                     f.write(f"{p}cl={ip['cl']}\n{p}h0={ip['h0']}\n")
-                    f.write(f"{p}h1={ip['h1']}\n{p}h2={ip['h2']}\n{p}gp={ip['gp']}\n")
+                    f.write(f"{p}h1={ip['h1']}\n{p}h2={ip['h2']}\n")
+                    f.write(f"{p}h2_dir={ip.get('h2_dir', DIR_E)}\n{p}gp={ip['gp']}\n")
             else:
                 # Single-IP: unprefixed keys (backward compatible)
                 ip = self.ips[0]
                 f.write(f"ip_row={ip['ip_row']}\nip_col={ip['ip_col']}\n")
                 f.write(f"ip_dir={ip['ip_dir']}\n")
                 f.write(f"cl={ip['cl']}\nh0={ip['h0']}\n")
-                f.write(f"h1={ip['h1']}\nh2={ip['h2']}\ngp={ip['gp']}\n")
+                f.write(f"h1={ip['h1']}\nh2={ip['h2']}\n")
+                f.write(f"h2_dir={ip.get('h2_dir', DIR_E)}\ngp={ip['gp']}\n")
             f.write(f"step={self.step_count}\n")
             f.write(f"grid={','.join(str(v) for v in self.grid)}\n")
 
@@ -1251,6 +1281,7 @@ class FB2DSimulator:
                 'h0': int(data.get('h0', 0)),
                 'h1': int(data.get('h1', 0)),
                 'h2': int(data.get('h2', 0)),
+                'h2_dir': int(data.get('h2_dir', DIR_E)),
                 'cl': int(data.get('cl', 0)),
                 'gp': int(data.get('gp', 0)),
             })
@@ -1264,6 +1295,7 @@ class FB2DSimulator:
                     'h0': int(data.get(f'{p}h0', 0)),
                     'h1': int(data.get(f'{p}h1', 0)),
                     'h2': int(data.get(f'{p}h2', 0)),
+                    'h2_dir': int(data.get(f'{p}h2_dir', DIR_E)),
                     'cl': int(data.get(f'{p}cl', 0)),
                     'gp': int(data.get(f'{p}gp', 0)),
                 })
@@ -1765,9 +1797,10 @@ def interactive_session():
                         r, c = ipstate['ip_row'], ipstate['ip_col']
                         d = DIR_ARROWS[ipstate['ip_dir']]
                         active = " *" if i == sim.active_ip else ""
+                        h2d = DIR_ARROWS[ipstate.get('h2_dir', DIR_E)]
                         print(f"  IP{i}: ({r},{c}) {d}  "
                               f"CL={ipstate['cl']} H0={ipstate['h0']} "
-                              f"H1={ipstate['h1']} H2={ipstate['h2']} "
+                              f"H1={ipstate['h1']} H2={ipstate['h2']}({h2d}) "
                               f"GP={ipstate['gp']}{active}")
                 elif len(args) == 1 and args[0].isdigit():
                     # Select active IP: ip 0, ip 1, etc.
