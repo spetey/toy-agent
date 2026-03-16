@@ -2,7 +2,9 @@
 """
 F***brain 2D Grid Simulator v1
 Authored or modified by Claude
-Version: 2026-02-26 v1.9 — H2 scan head for cross-gadget correction
+Version: 2026-03-14 v1.11 — head-overlap NOP guards for true reversibility
+                            v1.10: H2 momentum ops (A/B/U)
+                            v1.9: H2 scan head for cross-gadget correction
                             v1.8: [CL]++ and [CL]-- opcodes (: and ;)
                             v1.7: R/L rotate-by-[CL], Y fused rotate-XOR
                             v1.6: bit-level ops (x=XOR, r/l rotate, f bit-Fredkin, z bit-GP-swap)
@@ -99,7 +101,7 @@ OPCODES = {
     'r':  40,  # [H0] rotate right 1 bit  (bit0→bit7, inverse: l)
     'l':  41,  # [H0] rotate left 1 bit   (bit7→bit0, inverse: r)
     'f':  42,  # if [CL]&1: swap([H0], [H1])  (bit-0 Fredkin, self-inverse)
-    'z':  43,  # swap(bit0 of [H0], bit0 of [GP])  (bit-level GP swap, self-inverse)
+    'z':  43,  # swap(bit0 of [H0], bit0 of [H1])  (bit-level swap, self-inverse)
     'R':  44,  # [H0] rotate right by ([CL] & 15) bits  (inverse: L)
     'L':  45,  # [H0] rotate left  by ([CL] & 15) bits  (inverse: R)
     'Y':  46,  # [H0] ^= ror([H1], [CL] & 15)  (fused rotate-XOR, self-inverse)
@@ -471,25 +473,28 @@ class FB2DSimulator:
             self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
         elif opcode == 17:   # . payload(H0) += payload(H1) with Δp
-            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-            _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
-            _fl = _op ^ _np
-            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+            if self.h0 != self.h1:  # NOP under head overlap (non-bijective)
+                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+                _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+                _fl = _op ^ _np
+                self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 18:   # , payload(H0) -= payload(H1) with Δp
-            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-            _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
-            _fl = _op ^ _np
-            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+            if self.h0 != self.h1:  # NOP under head overlap (non-bijective)
+                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+                _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+                _fl = _op ^ _np
+                self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 19:   # X swap([H0], [H1])
             self.grid[self.h0], self.grid[self.h1] = \
                 self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 20:   # F Fredkin: if payload(CL)!=0: swap([H0], [H1])
-            if self.grid[self.cl] & DATA_MASK:
-                self.grid[self.h0], self.grid[self.h1] = \
-                    self.grid[self.h1], self.grid[self.h0]
+            if self.cl != self.h0 and self.cl != self.h1:  # NOP under head overlap (non-bijective)
+                if self.grid[self.cl] & DATA_MASK:
+                    self.grid[self.h0], self.grid[self.h1] = \
+                        self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 21:   # G swap(H1_register, grid[H0])
             self.h1, self.grid[self.h0] = self.grid[self.h0], self.h1
@@ -556,7 +561,8 @@ class FB2DSimulator:
 
         # ── Bit-level operations (v1.6) ──
         elif opcode == 39:   # x  [H0] ^= [H1]  (XOR, self-inverse)
-            self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
+            if self.h0 != self.h1:  # NOP under head overlap (non-bijective)
+                self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
 
         elif opcode == 40:   # r  [H0] rotate right 1 bit (raw 16-bit)
             v = self.grid[self.h0]
@@ -567,17 +573,18 @@ class FB2DSimulator:
             self.grid[self.h0] = (((v << 1) & CELL_MASK) | (v >> 15)) & CELL_MASK
 
         elif opcode == 42:   # f  if [CL]&1: swap([H0], [H1])  (bit-0 Fredkin)
-            if self.grid[self.cl] & 1:
-                self.grid[self.h0], self.grid[self.h1] = \
-                    self.grid[self.h1], self.grid[self.h0]
+            if self.cl != self.h0 and self.cl != self.h1:  # NOP under head overlap (non-bijective)
+                if self.grid[self.cl] & 1:
+                    self.grid[self.h0], self.grid[self.h1] = \
+                        self.grid[self.h1], self.grid[self.h0]
 
-        elif opcode == 43:   # z  swap bit0 of [H0] with bit0 of [GP] (raw 16-bit)
+        elif opcode == 43:   # z  swap bit0 of [H0] with bit0 of [H1] (raw 16-bit)
             a = self.grid[self.h0]
-            b = self.grid[self.gp]
+            b = self.grid[self.h1]
             a_bit = a & 1
             b_bit = b & 1
             self.grid[self.h0] = (a & 0xFFFE) | b_bit
-            self.grid[self.gp] = (b & 0xFFFE) | a_bit
+            self.grid[self.h1] = (b & 0xFFFE) | a_bit
 
         elif opcode == 44:   # R  [H0] ror by (payload([CL]) & 15) bits (raw 16-bit)
             n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
@@ -592,10 +599,11 @@ class FB2DSimulator:
                 self.grid[self.h0] = ((v << n) & CELL_MASK | (v >> (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 46:   # Y  [H0] ^= ror([H1], payload([CL]) & 15)  (raw 16-bit, self-inverse)
-            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
-            v = self.grid[self.h1]
-            rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v
-            self.grid[self.h0] = self.grid[self.h0] ^ rotated
+            if self.h0 != self.h1:  # NOP under head overlap (non-bijective when n!=0)
+                n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
+                v = self.grid[self.h1]
+                rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v
+                self.grid[self.h0] = self.grid[self.h0] ^ rotated
 
         elif opcode == 47:   # :  payload(CL)++ with Δp parity fixup
             self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
@@ -609,16 +617,19 @@ class FB2DSimulator:
             self.h2 = self._move_head(self.h2, dirs[opcode])
 
         elif opcode == 53:   # m [H0] ^= [H2]  (raw 16-bit XOR, self-inverse)
-            self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h2]
+            if self.h0 != self.h2:  # NOP under head overlap (non-bijective)
+                self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h2]
 
         elif opcode == 54:   # M payload(H0) -= payload(H2) with Δp (uncompute)
-            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-            _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h2]])) & PAYLOAD_MASK
-            _fl = _op ^ _np
-            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+            if self.h0 != self.h2:  # NOP under head overlap (non-bijective)
+                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+                _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h2]])) & PAYLOAD_MASK
+                _fl = _op ^ _np
+                self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 55:   # j [H2] ^= [H0]  (raw 16-bit write-back, self-inverse)
-            self.grid[self.h2] = self.grid[self.h2] ^ self.grid[self.h0]
+            if self.h2 != self.h0:  # NOP under head overlap (non-bijective)
+                self.grid[self.h2] = self.grid[self.h2] ^ self.grid[self.h0]
 
         elif opcode == 56:   # V swap([CL], [H2])  (test bridge, self-inverse)
             self.grid[self.cl], self.grid[self.h2] = \
@@ -698,25 +709,28 @@ class FB2DSimulator:
             self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
         elif opcode == 17:   # was +=, undo -= (Δp sub)
-            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-            _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
-            _fl = _op ^ _np
-            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+            if self.h0 != self.h1:  # NOP under head overlap
+                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+                _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+                _fl = _op ^ _np
+                self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 18:   # was -=, undo += (Δp add)
-            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-            _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
-            _fl = _op ^ _np
-            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+            if self.h0 != self.h1:  # NOP under head overlap
+                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+                _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+                _fl = _op ^ _np
+                self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 19:   # x is self-inverse
             self.grid[self.h0], self.grid[self.h1] = \
                 self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 20:   # F is self-inverse (payload test)
-            if self.grid[self.cl] & DATA_MASK:
-                self.grid[self.h0], self.grid[self.h1] = \
-                    self.grid[self.h1], self.grid[self.h0]
+            if self.cl != self.h0 and self.cl != self.h1:  # NOP under head overlap
+                if self.grid[self.cl] & DATA_MASK:
+                    self.grid[self.h0], self.grid[self.h1] = \
+                        self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 21:   # G is self-inverse
             self.h1, self.grid[self.h0] = self.grid[self.h0], self.h1
@@ -757,7 +771,8 @@ class FB2DSimulator:
 
         # ── Bit-level undo (v1.6) ──
         elif opcode == 39:   # x XOR is self-inverse
-            self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
+            if self.h0 != self.h1:  # NOP under head overlap
+                self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
 
         elif opcode == 40:   # r was ror-1, undo with rol-1 (raw 16-bit)
             v = self.grid[self.h0]
@@ -768,17 +783,18 @@ class FB2DSimulator:
             self.grid[self.h0] = ((v >> 1) | ((v & 1) << 15)) & CELL_MASK
 
         elif opcode == 42:   # f bit-0 Fredkin is self-inverse
-            if self.grid[self.cl] & 1:
-                self.grid[self.h0], self.grid[self.h1] = \
-                    self.grid[self.h1], self.grid[self.h0]
+            if self.cl != self.h0 and self.cl != self.h1:  # NOP under head overlap
+                if self.grid[self.cl] & 1:
+                    self.grid[self.h0], self.grid[self.h1] = \
+                        self.grid[self.h1], self.grid[self.h0]
 
-        elif opcode == 43:   # z bit-0 GP swap is self-inverse (raw 16-bit)
+        elif opcode == 43:   # z bit-0 swap is self-inverse (raw 16-bit)
             a = self.grid[self.h0]
-            b = self.grid[self.gp]
+            b = self.grid[self.h1]
             a_bit = a & 1
             b_bit = b & 1
             self.grid[self.h0] = (a & 0xFFFE) | b_bit
-            self.grid[self.gp] = (b & 0xFFFE) | a_bit
+            self.grid[self.h1] = (b & 0xFFFE) | a_bit
 
         elif opcode == 44:   # R was ror-by-CL, undo with rol-by-CL (payload 16-bit)
             n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
@@ -793,10 +809,11 @@ class FB2DSimulator:
                 self.grid[self.h0] = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 46:   # Y is self-inverse (payload 16-bit)
-            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
-            v = self.grid[self.h1]
-            rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v
-            self.grid[self.h0] = self.grid[self.h0] ^ rotated
+            if self.h0 != self.h1:  # NOP under head overlap
+                n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
+                v = self.grid[self.h1]
+                rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v
+                self.grid[self.h0] = self.grid[self.h0] ^ rotated
 
         elif opcode == 47:   # : was [CL]++, undo -- (Δp dec)
             self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
@@ -809,16 +826,19 @@ class FB2DSimulator:
             self.h2 = self._move_head(self.h2, HEAD_MOVE_INVERSE[opcode])
 
         elif opcode == 53:   # m XOR is self-inverse
-            self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h2]
+            if self.h0 != self.h2:  # NOP under head overlap
+                self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h2]
 
         elif opcode == 54:   # M was -=, undo += (Δp add)
-            _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-            _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h2]])) & PAYLOAD_MASK
-            _fl = _op ^ _np
-            self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+            if self.h0 != self.h2:  # NOP under head overlap
+                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
+                _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h2]])) & PAYLOAD_MASK
+                _fl = _op ^ _np
+                self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 55:   # j XOR is self-inverse
-            self.grid[self.h2] = self.grid[self.h2] ^ self.grid[self.h0]
+            if self.h2 != self.h0:  # NOP under head overlap
+                self.grid[self.h2] = self.grid[self.h2] ^ self.grid[self.h0]
 
         elif opcode == 56:   # V swap is self-inverse
             self.grid[self.cl], self.grid[self.h2] = \

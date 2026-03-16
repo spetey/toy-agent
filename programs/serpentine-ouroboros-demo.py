@@ -9,25 +9,32 @@ west across, south, east... with V-based boundary detection.
 ARCHITECTURE:
   Gadget A code:     rows 0..R-1 (boustrophedon at width W)
   Gadget A handler:  row R (boundary handler, hand-placed)
-  Gadget A GP:       row R+1
-  Gadget B code:     rows R+2..2R+1
-  Gadget B handler:  row 2R+2
-  Gadget B GP:       row 2R+3
+  Gadget A stomach:  row R+1 (DSL scratch window: H0, H1, CL here)
+  Gadget A waste:    row R+2 (GP lives here, eats zeros, excretes waste)
+  Gadget B code:     rows R+3..2R+2
+  Gadget B handler:  row 2R+3
+  Gadget B stomach:  row 2R+4
+  Gadget B waste:    row 2R+5
 
-  Total: T = 2*(R+2) rows x W cols
+  Total: T = 2*(R+3) rows x W cols
 
 H2 SCANNING (serpentine):
-  Each IP's H2 sweeps east across a row, detects boundary (zero cell via V),
+  Each IP's H2 sweeps east across a row, detects boundary (zero cell),
   then retreats (B), moves south (h), flips direction (U). West sweep, repeat.
   No coprimality constraint needed — systematic row-by-row coverage.
 
-BOUNDARY DETECTION:
-  After A (advance H2), V swaps [CL]<->[H2] to test the new cell.
+BOUNDARY DETECTION (local-only, no remote cell modification):
+  After A (advance H2), m copies [H2] to local [H0] via XOR (H0 was 0),
+  T moves the value to CL for the conditional mirror test.
   If zero (boundary): conditional mirror triggers, IP drops to handler row.
-  Handler: / (S→W), V B h U (restore/turnaround), E e ] > (advance),
-    : (CL++ signal), \ (W→N exit).
+  If non-zero: T restores CL, m restores H0. Remote cell never modified.
+  Handler: / (S→W), B h U (turnaround), : (CL++ signal), \ (W→N exit).
   & gate on last code row: \ if CL!=0 → merges handler path west to col 1.
-  T x preamble at cycle start cleans CL signal back to 0.
+  T Z ] preamble at cycle start deposits CL signal to waste row.
+
+  OLD DESIGN used V (swap [CL]↔[H2]) for boundary detection. This
+  temporarily corrupted the remote cell, causing cross-IP interference
+  when the other IP's instruction pointer hit the corrupted cell.
 
 FILL CELLS:
   The last boustrophedon row may be partially filled. Empty cells are filled
@@ -72,39 +79,68 @@ OP = OPCODES
 # ═══════════════════════════════════════════════════════════════════
 
 def build_serpentine_gadget(last_row_dir):
-    """Build correction gadget with serpentine H2 advance.
+    """Build contained correction gadget with serpentine H2 advance.
 
-    Preamble: T x — cleans any [CL] value to 0 at cycle start.
-      T swaps [CL]↔[H0] (H0=H1=CWL slot, value 0 → CL gets 0).
-      x XORs [H0]^=[H1] (same cell, zeroes any value T deposited).
-    This lets the handler set [CL]=1 as a signal, which is cleaned
-    on the next cycle without burning a GP zero.
+    CONTAINED DESIGN: H0/H1/CL stay at fixed DSL window positions on the
+    stomach row across cycles. GP lives on the waste row below, eating
+    fresh zeros and excreting waste. Only H2 advances (serpentine).
 
-    Takes the standard 318-op correction from build_h2_correction_gadget()
-    and appends: A V [?|!] V E e ] >
+    Preamble: T Z ] — deposits handler signal to waste row.
+      T swaps [CL]↔[H0] (CL=ROT, H0=CWL). If handler fired, CL has
+      the : signal; T moves it to [CWL] and zeros CL.
+      Z swaps [H0]↔[GP] (H0=CWL on stomach, GP on waste row). Handler
+      signal goes to waste row; fresh zero comes to CWL.
+      ] advances GP east past the deposited waste.
+      On clean cycles: all values are 0, so T and Z are 0↔0 no-ops.
+      GP still advances (eats a zero that stays zero).
 
-    The conditional mirror depends on the last boustrophedon row direction:
-      - West-going: ? (/ if CL==0 → W→S, drops south to handler)
-      - East-going: ! (\\ if CL==0 → E→S, drops south to handler)
+    Phase G waste deposit (after Phase F, H0=EV, H1=PA):
+      Z deposits EV waste to waste row (swap [H0=EV]↔[GP=waste]).
+      ] advances GP. E moves H0 to PA.
+      Z deposits PA waste to waste row.
+      ] advances GP. E moves H0 to CWL, e moves H1 to CWL.
+      On clean cycles: EV=PA=0, Z swaps 0↔0, no drift.
+
+    GP budget: 3 ] per cycle (1 preamble + 2 Phase G). With width W,
+    GP wraps after W/3 cycles. Cheat mode refills waste row on wrap.
 
     Args:
         last_row_dir: DIR_E or DIR_W for the last boustrophedon row
 
-    Returns: list of opchar strings (328 ops total)
+    Returns: list of opchar strings
     """
     base_ops = build_h2_correction_gadget()  # 323 ops (318 corr + 5 advance)
-    correction_ops = base_ops[:318]
+    # Take correction through Phase F, WITHOUT epilogue (E E e).
+    # After Phase F: H0=EV(0), H1=PA(1).
+    correction_without_epilogue = base_ops[:315]
 
-    # Preamble: clean any [CL] signal from previous handler return
-    preamble = ['T', 'x']
+    # Preamble: deposit handler signal to waste row
+    preamble = ['T', 'Z', ']']
+
+    # ── Phase G: deposit EV and PA waste to waste row ──
+    # State after Phase F: H0=EV(0), H1=PA(1). GP on waste row.
+    phase_g = [
+        'Z',    # deposit EV waste: [H0=EV] ↔ [GP=waste_row]
+        ']',    # GP advance east on waste row
+        'E',    # H0: EV(0) → PA(1)
+        'Z',    # deposit PA waste: [H0=PA] ↔ [GP=waste_row]
+        ']',    # GP advance east on waste row
+        'E',    # H0: PA(1) → CWL(2)
+        'e',    # H1: PA(1) → CWL(2)
+    ]
 
     # Conditional mirror: ? for west-going, ! for east-going
     cond_mirror = '?' if last_row_dir == DIR_W else '!'
 
-    # Advance block: A V [?|!] V E e ] >
-    advance_ops = ['A', 'V', cond_mirror, 'V', 'E', 'e', ']', '>']
+    # H2-only advance (calculating heads stay fixed on stomach)
+    # OLD: ['A', 'V', cond_mirror, 'V'] — V temporarily corrupts remote cell,
+    # causing cross-IP interference when interleaved with the other IP.
+    # NEW: m copies [H2] to local [H0] (XOR, H0 was 0), T moves it to CL
+    # for the conditional mirror test, T restores, m restores. NO remote write.
+    h2_advance = ['A', 'm', 'T', cond_mirror, 'T', 'm']
 
-    return preamble + correction_ops + advance_ops
+    ops = preamble + correction_without_epilogue + phase_g + h2_advance
+    return ops
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -141,15 +177,19 @@ def compute_layout(width):
     first_row_slots = code_right - code_left      # W - 4
     inner_row_slots = code_right - code_left - 1   # W - 5
 
-    # Determine last row direction for conditional mirror choice
-    # Use 328 ops (we'll compute this properly after)
-    last_dir = _last_row_direction(328, code_left, code_right)
+    # Determine last row direction for conditional mirror choice.
+    # Build a trial gadget to get the op count, then verify direction.
+    last_dir = _last_row_direction(329, code_left, code_right)  # estimate
     gadget_ops = build_serpentine_gadget(last_dir)
     n_ops = len(gadget_ops)
-    assert n_ops == 328
 
-    # Recompute with actual op count (should be same, but be safe)
+    # Recompute with actual op count (may differ from estimate)
     last_dir = _last_row_direction(n_ops, code_left, code_right)
+    # Rebuild if direction changed (affects conditional mirror choice)
+    gadget_ops2 = build_serpentine_gadget(last_dir)
+    if len(gadget_ops2) != n_ops:
+        n_ops = len(gadget_ops2)
+        last_dir = _last_row_direction(n_ops, code_left, code_right)
 
     if n_ops <= first_row_slots:
         code_rows = 1
@@ -157,8 +197,8 @@ def compute_layout(width):
         remaining = n_ops - first_row_slots
         code_rows = 1 + math.ceil(remaining / inner_row_slots)
 
-    # Per gadget: R code rows + 1 handler row + 1 GP row = R+2
-    rows_per_gadget = code_rows + 2
+    # Per gadget: R code rows + 1 handler + 1 stomach + 1 waste = R+3
+    rows_per_gadget = code_rows + 3
     total_rows = 2 * rows_per_gadget
 
     layout = {
@@ -170,10 +210,12 @@ def compute_layout(width):
         'last_row_dir': last_dir,
         'ga_code': (0, code_rows - 1),
         'ga_handler': code_rows,
-        'ga_gp': code_rows + 1,
+        'ga_gp': code_rows + 1,           # stomach (DSL scratch window)
+        'ga_waste': code_rows + 2,         # waste row (GP lives here)
         'gb_code': (rows_per_gadget, rows_per_gadget + code_rows - 1),
         'gb_handler': rows_per_gadget + code_rows,
-        'gb_gp': rows_per_gadget + code_rows + 1,
+        'gb_gp': rows_per_gadget + code_rows + 1,      # stomach
+        'gb_waste': rows_per_gadget + code_rows + 2,    # waste row
         'code_left': code_left,
         'code_right': code_right,
         'first_row_slots': first_row_slots,
@@ -249,9 +291,11 @@ def make_serpentine_ouroboros(width=99, errors=None):
             flat = sim._to_flat(row, col)
             sim.grid[flat] = inject_error(sim.grid[flat], bit)
 
-    # ── GP setup ──
-    ga_gp = layout['ga_gp']
-    gb_gp = layout['gb_gp']
+    # ── Row setup ──
+    ga_gp = layout['ga_gp']       # stomach row
+    gb_gp = layout['gb_gp']       # stomach row
+    ga_waste = layout['ga_waste']  # waste row (GP lives here)
+    gb_waste = layout['gb_waste']  # waste row
 
     # ── IP0: runs gadget A, H2 starts on gadget B's first code row ──
     sim.ip_row = ga_start
@@ -261,7 +305,7 @@ def make_serpentine_ouroboros(width=99, errors=None):
     sim.h1 = sim._to_flat(ga_gp, DSL_CWL)
     sim.h2 = sim._to_flat(gb_start, code_left)  # H2 starts at gb code area
     sim.cl = sim._to_flat(ga_gp, DSL_ROT)
-    sim.gp = sim._to_flat(ga_gp, DSL_EV)
+    sim.gp = sim._to_flat(ga_waste, 0)  # GP on waste row, col 0
     # h2_dir defaults to DIR_E (set in FB2DSimulator)
 
     # ── IP1: runs gadget B, H2 starts on gadget A's first code row ──
@@ -271,7 +315,7 @@ def make_serpentine_ouroboros(width=99, errors=None):
         h1=sim._to_flat(gb_gp, DSL_CWL),
         h2=sim._to_flat(ga_start, code_left),
         cl=sim._to_flat(gb_gp, DSL_ROT),
-        gp=sim._to_flat(gb_gp, DSL_EV),
+        gp=sim._to_flat(gb_waste, 0),  # GP on waste row, col 0
     )
 
     # ── Compute cycle length ──
@@ -289,8 +333,9 @@ def _place_gadget(sim, layout, op_values, start_row):
       redirects N→W. IP then goes west through X-fill (no-ops) to the
       col 1 corridor, merging with the normal return path.
 
-      The T x preamble at the start of each cycle cleans [CL] back to 0,
-      so & is a no-op on the normal (non-handler) path.
+      The T Z ] preamble at the start of each cycle deposits any [CL]
+      signal to the waste row, cleaning CL back to 0. So & is a no-op
+      on the normal (non-handler) path.
     """
     W = layout['width']
     R = layout['code_rows']
@@ -319,18 +364,24 @@ def _place_gadget(sim, layout, op_values, start_row):
     sim.grid[sim._to_flat(start_row, 1)] = encode_opcode(OP['/'])
 
     # ── Locate the conditional mirror (? or !) in the boustrophedon ──
-    # With T x preamble, it's op 322 (0-indexed)
-    cond_idx = 322
+    # The conditional mirror is the 4th-to-last op in the gadget:
+    #   ... [Phase G] [E e] [A m T ?|! T m]
+    # Its index = total_ops - 3 (0-indexed).
+    gadget_ops = build_serpentine_gadget(last_dir)
+    cond_idx = len(gadget_ops) - 3
     cond_row, cond_col, _ = _boustrophedon_op_position(
         cond_idx, code_left, code_right, start_row)
 
     # ── Place boundary handler ops on handler_row ──
     # IP drops south from cond_col to handler_row going S.
     # / at (handler_row, cond_col) redirects S→W.
-    # Handler ops run WEST: V B h U E e ] > : \.
+    # Handler ops run WEST: V B h U : \.
+    # CONTAINED: no E e ] > (calculating heads don't advance).
     # : increments [CL] (signal for & gate above).
     # \ at the western end sends W→N back up to the code row.
-    handler_ops = ['/', 'V', 'B', 'h', 'U', 'E', 'e', ']', '>', ':', '\\']
+    # V removed: was no-op (swaps 0↔0 on boundary), and avoids any
+    # residual cross-IP interference risk from touching remote cell.
+    handler_ops = ['/', 'B', 'h', 'U', ':', '\\']
     gate_col = cond_col - (len(handler_ops) - 1)  # col where \ exits north
     assert gate_col >= code_left, (
         f"Handler ops would extend past code_left "
@@ -461,11 +512,13 @@ def simulate_h2_scan(layout, ip_idx, max_cycles):
             if col == 1 and (row == target_code[0] or row == target_code[1]):
                 return True  # corridor mirrors
             return False
-        # Handler row: has ops at specific columns (11 ops from cond_col)
+        # Handler row: has 6 ops from cond_col westward
         if row == target_handler:
+            gadget = build_serpentine_gadget(layout['last_row_dir'])
+            cond_idx = len(gadget) - 3
             cond_row, cond_col, _ = _boustrophedon_op_position(
-                322, code_left, code_right, target_code[0])
-            if cond_col - 10 <= col <= cond_col:
+                cond_idx, code_left, code_right, target_code[0])
+            if cond_col - 5 <= col <= cond_col:
                 return True
             return False
         # GP row and other rows: all zero
@@ -533,8 +586,28 @@ def early_code_cells(layout, ip_idx, max_cycle=None):
 # Test runner
 # ═══════════════════════════════════════════════════════════════════
 
-def run_serpentine_test(width, errors, label="", check_reverse=False):
-    """Test serpentine ouroboros correction."""
+def _cheat_clear_waste(sim, layout):
+    """Cheat mode: zero both waste rows so GP never encounters old waste.
+
+    This is a non-reversible intervention. It simulates the future
+    compressor/mouth that would earn clean zeros by metabolizing fuel.
+    For now, it just hands the agent free zeros.
+    """
+    W = layout['width']
+    for waste_row in [layout['ga_waste'], layout['gb_waste']]:
+        base = waste_row * W
+        for c in range(W):
+            sim.grid[base + c] = 0
+
+
+def run_serpentine_test(width, errors, label="", check_reverse=False,
+                        cheat=True):
+    """Test serpentine ouroboros correction.
+
+    Args:
+        cheat: if True, clear waste rows between cycles to prevent GP
+               from encountering old waste on wrap. Non-reversible.
+    """
     if label:
         print(f"=== {label} ===")
 
@@ -578,8 +651,15 @@ def run_serpentine_test(width, errors, label="", check_reverse=False):
         print(f"    Cycles needed: {max_cycles_needed}, running {n_cycles}"
               f" ({total_rounds} rounds)")
 
-    for _ in range(total_rounds):
-        sim.step_all()
+    if cheat:
+        # Run cycle-by-cycle, clearing waste between cycles
+        for cyc in range(n_cycles):
+            for _ in range(cycle_length):
+                sim.step_all()
+            _cheat_clear_waste(sim, layout)
+    else:
+        for _ in range(total_rounds):
+            sim.step_all()
 
     # Check corrected cells
     all_ok = True
@@ -595,20 +675,22 @@ def run_serpentine_test(width, errors, label="", check_reverse=False):
         all_ok &= ok
 
     if check_reverse:
+        # Reverse test needs a clean run without cheat (non-reversible).
+        # Build a fresh sim, run forward without cheat, then backward.
+        sim2, _, _ = make_serpentine_ouroboros(width, errors)
+        grid_before = sim2.grid[:]
         for _ in range(total_rounds):
-            sim.step_back_all()
+            sim2.step_all()
+        for _ in range(total_rounds):
+            sim2.step_back_all()
 
-        reverse_ok = True
-        for row, col, bit in errors:
-            flat = sim._to_flat(row, col)
-            result = sim.grid[flat]
-            exp_original = inject_error(expected[(row, col)], bit)
-            if result != exp_original:
-                reverse_ok = False
-                if label:
-                    print(f"    [REVERSE] ({row},{col}): 0x{result:04x}"
-                          f" expected 0x{exp_original:04x}")
-
+        reverse_ok = (sim2.grid == grid_before)
+        if not reverse_ok:
+            diffs = [(i, grid_before[i], sim2.grid[i])
+                     for i in range(len(sim2.grid))
+                     if grid_before[i] != sim2.grid[i]]
+            if label:
+                print(f"    [REVERSE] {len(diffs)} cells differ")
         if label:
             print(f"    Reverse: {'ok' if reverse_ok else 'FAIL'}")
         all_ok &= reverse_ok
@@ -631,10 +713,12 @@ def test_layout_info(width=99):
           f" = {layout['total_rows'] * width} cells")
     print(f"    GA code: rows {layout['ga_code'][0]}-{layout['ga_code'][1]}")
     print(f"    GA handler: row {layout['ga_handler']}")
-    print(f"    GA GP: row {layout['ga_gp']}")
+    print(f"    GA stomach: row {layout['ga_gp']}")
+    print(f"    GA waste: row {layout['ga_waste']}")
     print(f"    GB code: rows {layout['gb_code'][0]}-{layout['gb_code'][1]}")
     print(f"    GB handler: row {layout['gb_handler']}")
-    print(f"    GB GP: row {layout['gb_gp']}")
+    print(f"    GB stomach: row {layout['gb_gp']}")
+    print(f"    GB waste: row {layout['gb_waste']}")
     # Show first few serpentine cells for IP0
     cells = early_code_cells(layout, 0, max_cycle=20)
     print(f"    IP0 H2 first code cells: "
@@ -841,6 +925,50 @@ def test_even_width(width=100):
         label=f"Even width W={width}: error on GB ({row},{col})@cycle{k}")
 
 
+def test_late_errors_cheat(width=99):
+    """Test errors on late rows (last code row) using cheat mode.
+
+    These errors are reached after ~370 cycles. Without cheat mode,
+    GP wraps and old waste contaminates the stomach. Cheat mode clears
+    the waste rows between cycles, simulating the future compressor.
+    """
+    layout = compute_layout(width)
+    ga_start, ga_end = layout['ga_code']
+    gb_start, gb_end = layout['gb_code']
+
+    errors = [
+        (ga_end, 15, 11),   # GA last row
+        (gb_end, 20, 14),   # GB last row
+    ]
+    return run_serpentine_test(
+        width=width,
+        errors=errors,
+        label=f"Late errors with cheat mode (W={width})",
+        cheat=True)
+
+
+def test_full_sweep_cheat(width=99):
+    """Test errors on both early and late rows with cheat mode.
+
+    4 errors spread across both gadgets, first and last code rows.
+    """
+    layout = compute_layout(width)
+    ga_start, ga_end = layout['ga_code']
+    gb_start, gb_end = layout['gb_code']
+
+    errors = [
+        (ga_start, 5, 3),
+        (ga_end, 15, 11),
+        (gb_start, 8, 7),
+        (gb_end, 20, 14),
+    ]
+    return run_serpentine_test(
+        width=width,
+        errors=errors,
+        label=f"Full sweep 4 errors with cheat mode (W={width})",
+        cheat=True)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Save demo
 # ═══════════════════════════════════════════════════════════════════
@@ -871,8 +999,8 @@ def save_demo(width=99, filename=None):
     print(f"Saved: {filename}")
     print(f"  Grid: {T}x{width} ({layout['code_rows']} code rows/gadget)")
     print(f"  Gadget: {layout['n_ops']} ops, cycle={cycle_length} steps")
-    print(f"  GA code: rows {ga_start}-{ga_end}, handler: {layout['ga_handler']}, GP: {layout['ga_gp']}")
-    print(f"  GB code: rows {gb_start}-{gb_end}, handler: {layout['gb_handler']}, GP: {layout['gb_gp']}")
+    print(f"  GA code: rows {ga_start}-{ga_end}, handler: {layout['ga_handler']}, stomach: {layout['ga_gp']}, waste: {layout['ga_waste']}")
+    print(f"  GB code: rows {gb_start}-{gb_end}, handler: {layout['gb_handler']}, stomach: {layout['gb_gp']}, waste: {layout['gb_waste']}")
     print(f"  {len(errors)} errors injected")
     print()
     print(f"In fb2d_server GUI:")
@@ -930,6 +1058,12 @@ if __name__ == '__main__':
     print()
 
     all_ok &= test_even_width()
+    print()
+
+    all_ok &= test_late_errors_cheat(width)
+    print()
+
+    all_ok &= test_full_sweep_cheat(width)
     print()
 
     if all_ok:

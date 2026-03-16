@@ -1,3 +1,177 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>barrel-shifter-correction</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+</head>
+<body>
 <h1 id="barrel-shifter-hamming1611-correction">Barrel-Shifter
 Hamming(16,11) Correction</h1>
 <p>How the fb2d gadget corrects single-bit errors using only 1 dirty
@@ -213,9 +387,220 @@ into at most one dirty cell using <code>z</code> + <code>x</code>:</p>
 <pre><code>z:  swap bit 0 of EV with bit 0 of PA (via GP)
 x:  EV ^= PA</code></pre>
 <p>See the worked example below for why this works.</p>
-<h3 id="phase-g-epilogue-7-ops">Phase G: Epilogue (~7 ops)</h3>
+<h3 id="epilogue-7-ops">Epilogue (~7 ops)</h3>
 <p>Move H0 and H1 back to CW. All heads restored.</p>
-<p><strong>Total: 336 ops.</strong></p>
+<p><strong>Total (standalone gadget): 336 ops.</strong></p>
+<hr />
+<h2 id="h2-copy-down-variant-dual-gadget-mutual-correction">H2 Copy-Down
+Variant (dual-gadget mutual correction)</h2>
+<p>In the dual-gadget architecture, two gadgets correct each other’s
+code. Each gadget’s H2 scans the other gadget’s code cells. Instead of
+H0 shuttling between the data row and GP row, a <strong>copy-down
+pattern</strong> keeps all correction work local to the GP row
+(“stomach”):</p>
+<pre><code>Stomach layout (9 slots):
+EV  PA  CWL  S0  S1  S2  S3  SCR  ROT
+0   1   2    3   4   5   6   7    8</code></pre>
+<ul>
+<li><strong>CWL</strong> (codeword local): local copy of the remote code
+cell</li>
+<li><strong>EV</strong> (evidence): correction mask (p_all &lt;&lt;
+syndrome)</li>
+<li><strong>PA</strong> (parity): overall parity accumulator</li>
+<li><strong>S0-S3</strong>: syndrome bit accumulators</li>
+<li><strong>SCR</strong> (scratch): barrel shifter scratch cell (always
+0 after use)</li>
+<li><strong>ROT</strong> (rotation): CL sits here; used for rotation
+counting</li>
+</ul>
+<p>The flow becomes:</p>
+<pre><code>Copy-in:   m                    — [H0] ^= [H2] (CWL gets remote CW)
+Phase A:   Y parity
+Phase B:   z-extract p_all → EV
+Phase A&#39;:  Y-uncompute PA
+Phase C:   Y syndrome
+Phase D:   Barrel shifter → EV = p_all &lt;&lt; syndrome
+Phase C&#39;:  Y-uncompute S0-S3
+Uncompute: M                    — payload(H0) -= payload(H2) (CWL → 0)
+Write-back: j                   — [H2] ^= [H0] (remote gets mask XOR)
+Phase F:   z+x cleanup</code></pre>
+<p>After Phase F: H0=EV, H1=PA, GP=EV. At most 1 dirty cell (EV or
+PA).</p>
+<p><strong>Total (copy-down): 323 ops</strong> (315 correction + 3
+epilogue + 5 advance).</p>
+<hr />
+<h2 id="contained-design-phase-g-waste-cleanup">Contained Design: Phase
+G (waste cleanup)</h2>
+<p>In the <strong>contained serpentine</strong> design, H0/H1/CL/GP stay
+at fixed positions on the stomach row across cycles. Only H2 advances
+(serpentine scan). The “advance” block (<code>E e ] &gt;</code>) is
+removed. This means waste from EV and PA can’t be left behind as heads
+advance — it must be deposited into a <strong>dump corridor</strong> on
+the same row.</p>
+<h3 id="stomach-dump-corridor-layout">Stomach + dump corridor
+layout</h3>
+<pre><code>EV PA CWL S0 S1 S2 S3 SCR ROT | dump9 dump10 ... dump13 dump14
+0  1  2   3  4  5  6  7   8   | 9     10          13     14
+&lt;-------- stomach -----------&gt;   &lt;--- dump corridor ---&gt;</code></pre>
+<p>Dump slots 9-13 hold EV waste; slot 14 holds PA waste.</p>
+<h3 id="phase-g-f-chain-waste-deposit-51-ops">Phase G: f-chain waste
+deposit (~51 ops)</h3>
+<p>After Phase F, the stomach has at most two dirty cells: EV (with
+evidence mask) and PA (with p_all). All waste values have <strong>bit 0
+= 1</strong>.</p>
+<p>Phase G deposits this waste into the dump corridor using
+<code>f</code> (bit-0 Fredkin gate: if [CL] &amp; 1, swap [H0] ↔︎
+[H1]):</p>
+<pre><code>T              EV waste → ROT (CL&#39;s cell). CL.bit0 = waste &amp; 1.
+E × 8          H0: EV → ROT
+e × 8          H1: PA → dump9
+f e f e f e f e f   5 conditional swaps (shift-register deposit)
+] K T K [      K-T-K trick: PA waste → ROT via CL/GP register swap
+e f            Single f deposits PA waste at dump14
+W × 6          H0: ROT → CWL
+w × 12         H1: dump14 → CWL</code></pre>
+<p><strong>Clean cells</strong> (EV=0, PA=0): CL.bit0=0 after T, all f
+ops are no-ops. No cell values change. No drift.</p>
+<p><strong>Dirty cells</strong>: CL.bit0=1, f fires. The f-chain acts as
+a shift register — each dirty cycle pushes waste one slot deeper into
+the dump corridor. N_DUMP=5 handles up to 5 dirty cycles before
+overflow.</p>
+<h3 id="preamble-t-x-cycle-start-cleanup">Preamble: T x (cycle start
+cleanup)</h3>
+<p>Each cycle begins with <code>T x</code> which cleans any residual in
+ROT:</p>
+<ul>
+<li><code>T</code>: swap [CL=ROT] ↔︎ [H0=CWL]. Deposits ROT’s value into
+CWL.</li>
+<li><code>x</code>: [CWL] ^= [CWL] = 0. Zeros CWL (destroying the
+deposited value).</li>
+</ul>
+<p>This also cleans the handler’s CL++ signal (<code>:</code> sets
+[ROT]=1, preamble zeros it). The <code>x</code> with H0=H1 is
+intentionally non-injective — it destroys the handler signal, which is
+acceptable because the signal has no information content beyond “handler
+ran.”</p>
+<h3 id="waste-value-summary">Waste value summary</h3>
+<table>
+<thead>
+<tr>
+<th>Error type</th>
+<th>R_EV</th>
+<th>R_PA</th>
+<th>R_EV.bit0</th>
+<th>R_PA.bit0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>None</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Bit 0</td>
+<td>0</td>
+<td>1</td>
+<td>0</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Bit k (≥1)</td>
+<td>(1&lt;&lt;k)|1</td>
+<td>0</td>
+<td>1</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Double</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p>All nonzero waste values have bit 0 = 1. This is why <code>f</code>
+(bit-0 Fredkin) works but <code>F</code> (payload Fredkin, checks
+DATA_MASK) does NOT — waste values like 0x5 = bits {0,2} have no data
+bits set and pass through DATA_MASK as zero.</p>
+<h3 id="known-issue-f-reversibility-when-cl-h0">Known issue: f
+reversibility when CL = H0</h3>
+<p>During the f-chain, H0 and CL both point to ROT. When f fires (dirty
+cycle), it swaps [H0=ROT] ↔︎ [H1=dump], zeroing ROT. This changes [CL]
+from nonzero to zero, making f non-self-inverse: applying f again reads
+[CL]=0 and doesn’t fire. The function is <strong>not injective</strong>
+when CL=H0 and [H1]=0.</p>
+<p>This affects <code>step_back()</code> (simulator reverse stepping)
+but not forward operation. The ouroboros never runs backward. A proper
+fix requires separating CL from H0 during f ops, likely via XOR-copy of
+the waste flag to a dedicated condition cell. See the head-overlap
+reversibility discussion below.</p>
+<hr />
+<h2 id="head-overlap-reversibility-constraints">Head-overlap
+reversibility constraints</h2>
+<p>Several fb2d ops are NOT bijective when heads overlap:</p>
+<table>
+<colgroup>
+<col style="width: 12%" />
+<col style="width: 27%" />
+<col style="width: 24%" />
+<col style="width: 36%" />
+</colgroup>
+<thead>
+<tr>
+<th>Op</th>
+<th>Overlap</th>
+<th>Effect</th>
+<th>Bijective?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>x</code></td>
+<td>H0=H1</td>
+<td>[H0] ^= [H0] = 0</td>
+<td>No (all values → 0)</td>
+</tr>
+<tr>
+<td><code>,</code></td>
+<td>H0=H1</td>
+<td>[H0] -= [H0] = 0</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>m</code></td>
+<td>H0=H2</td>
+<td>[H0] ^= [H0] = 0</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>j</code></td>
+<td>H2=H0</td>
+<td>[H2] ^= [H2] = 0</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>f</code>/<code>F</code></td>
+<td>CL=H0 or CL=H1</td>
+<td>Condition changes with swap</td>
+<td>No (when [other]=0)</td>
+</tr>
+</tbody>
+</table>
+<p>All other ops (swaps: <code>X</code>, <code>T</code>, <code>V</code>,
+<code>Z</code>, <code>K</code>; increments: <code>+</code>,
+<code>-</code>, <code>:</code>, <code>;</code>; rotations:
+<code>r</code>, <code>l</code>, <code>R</code>, <code>L</code>; mirrors)
+are bijective under all head configurations.</p>
+<p>For the language to be truly reversible (“every state has a unique
+predecessor”), programs must avoid these overlaps during non-injective
+ops, OR the ops must be redefined to be identity (NOP) under overlap.
+The preamble’s <code>x</code> with H0=H1 is an intentional
+information-destroying use (zeroing a cell whose value is
+known/discardable).</p>
 <h2 id="worked-example-payload-42-error-on-bit-5">Worked example:
 payload 42, error on bit 5</h2>
 <h3 id="encoding">Encoding</h3>
@@ -328,36 +713,49 @@ codeword back in CW, all GP cells back to 0. The dirty cell from Phase F
 gets cleaned by the reverse of z+x, the Y-uncompute phases re-dirty and
 then un-dirty the accumulators, and so on.</p>
 <h2 id="cost-summary">Cost summary</h2>
-<table>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 13%" />
+<col style="width: 27%" />
+<col style="width: 27%" />
+<col style="width: 19%" />
+</colgroup>
 <thead>
 <tr>
-<th>Resource</th>
-<th>Value</th>
+<th>Variant</th>
+<th>Code ops</th>
+<th>Dirty cells (error)</th>
+<th>Dirty cells (clean)</th>
+<th>Stomach width</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Code ops</td>
+<td>Standalone</td>
 <td>336</td>
-</tr>
-<tr>
-<td>Dirty cells (single-bit error)</td>
 <td>1</td>
-</tr>
-<tr>
-<td>Dirty cells (no error / double error)</td>
 <td>0</td>
-</tr>
-<tr>
-<td>GP slot width</td>
 <td>8 cells</td>
 </tr>
 <tr>
-<td>Grid (wrapped 60-wide)</td>
-<td>8 × 60</td>
+<td>H2 copy-down</td>
+<td>323</td>
+<td>1</td>
+<td>0</td>
+<td>9 cells</td>
+</tr>
+<tr>
+<td>Contained serpentine</td>
+<td>372</td>
+<td>1 (in dump corridor)</td>
+<td>0</td>
+<td>9 + N_DUMP+1 cells</td>
 </tr>
 </tbody>
 </table>
-<p>Each correction consumes 1 clean zero cell from the GP row (for
-errors) or 0 (for clean codewords). Clean zeros are the agent’s
+<p>Each correction deposits at most 1 waste cell into the dump corridor
+(for errors) or 0 (for clean codewords). Clean zeros are the agent’s
 fundamental resource — this is about as cheap as correction can get.</p>
+</body>
+</html>

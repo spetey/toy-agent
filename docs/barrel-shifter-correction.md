@@ -238,11 +238,162 @@ x:  EV ^= PA
 
 See the worked example below for why this works.
 
-### Phase G: Epilogue (~7 ops)
+### Epilogue (~7 ops)
 
 Move H0 and H1 back to CW. All heads restored.
 
-**Total: 336 ops.**
+**Total (standalone gadget): 336 ops.**
+
+---
+
+## H2 Copy-Down Variant (dual-gadget mutual correction)
+
+In the dual-gadget architecture, two gadgets correct each other's code.
+Each gadget's H2 scans the other gadget's code cells. Instead of H0
+shuttling between the data row and GP row, a **copy-down pattern** keeps
+all correction work local to the GP row ("stomach"):
+
+```
+Stomach layout (9 slots):
+EV  PA  CWL  S0  S1  S2  S3  SCR  ROT
+0   1   2    3   4   5   6   7    8
+```
+
+- **CWL** (codeword local): local copy of the remote code cell
+- **EV** (evidence): correction mask (p_all << syndrome)
+- **PA** (parity): overall parity accumulator
+- **S0-S3**: syndrome bit accumulators
+- **SCR** (scratch): barrel shifter scratch cell (always 0 after use)
+- **ROT** (rotation): CL sits here; used for rotation counting
+
+The flow becomes:
+
+```
+Copy-in:   m                    — [H0] ^= [H2] (CWL gets remote CW)
+Phase A:   Y parity
+Phase B:   z-extract p_all → EV
+Phase A':  Y-uncompute PA
+Phase C:   Y syndrome
+Phase D:   Barrel shifter → EV = p_all << syndrome
+Phase C':  Y-uncompute S0-S3
+Uncompute: M                    — payload(H0) -= payload(H2) (CWL → 0)
+Write-back: j                   — [H2] ^= [H0] (remote gets mask XOR)
+Phase F:   z+x cleanup
+```
+
+After Phase F: H0=EV, H1=PA, GP=EV. At most 1 dirty cell (EV or PA).
+
+**Total (copy-down): 323 ops** (315 correction + 3 epilogue + 5 advance).
+
+---
+
+## Contained Design: Phase G (waste cleanup)
+
+In the **contained serpentine** design, H0/H1/CL/GP stay at fixed
+positions on the stomach row across cycles. Only H2 advances (serpentine
+scan). The "advance" block (`E e ] >`) is removed. This means waste
+from EV and PA can't be left behind as heads advance — it must be
+deposited into a **dump corridor** on the same row.
+
+### Stomach + dump corridor layout
+
+```
+EV PA CWL S0 S1 S2 S3 SCR ROT | dump9 dump10 ... dump13 dump14
+0  1  2   3  4  5  6  7   8   | 9     10          13     14
+<-------- stomach ----------->   <--- dump corridor --->
+```
+
+Dump slots 9-13 hold EV waste; slot 14 holds PA waste.
+
+### Phase G: f-chain waste deposit (~51 ops)
+
+After Phase F, the stomach has at most two dirty cells: EV (with
+evidence mask) and PA (with p_all). All waste values have **bit 0 = 1**.
+
+Phase G deposits this waste into the dump corridor using `f` (bit-0
+Fredkin gate: if [CL] & 1, swap [H0] ↔ [H1]):
+
+```
+T              EV waste → ROT (CL's cell). CL.bit0 = waste & 1.
+E × 8          H0: EV → ROT
+e × 8          H1: PA → dump9
+f e f e f e f e f   5 conditional swaps (shift-register deposit)
+] K T K [      K-T-K trick: PA waste → ROT via CL/GP register swap
+e f            Single f deposits PA waste at dump14
+W × 6          H0: ROT → CWL
+w × 12         H1: dump14 → CWL
+```
+
+**Clean cells** (EV=0, PA=0): CL.bit0=0 after T, all f ops are no-ops.
+No cell values change. No drift.
+
+**Dirty cells**: CL.bit0=1, f fires. The f-chain acts as a shift
+register — each dirty cycle pushes waste one slot deeper into the dump
+corridor. N_DUMP=5 handles up to 5 dirty cycles before overflow.
+
+### Preamble: T x (cycle start cleanup)
+
+Each cycle begins with `T x` which cleans any residual in ROT:
+
+- `T`: swap [CL=ROT] ↔ [H0=CWL]. Deposits ROT's value into CWL.
+- `x`: [CWL] ^= [CWL] = 0. Zeros CWL (destroying the deposited value).
+
+This also cleans the handler's CL++ signal (`:` sets [ROT]=1, preamble
+zeros it). The `x` with H0=H1 is intentionally non-injective — it
+destroys the handler signal, which is acceptable because the signal
+has no information content beyond "handler ran."
+
+### Waste value summary
+
+| Error type | R_EV | R_PA | R_EV.bit0 | R_PA.bit0 |
+|------------|------|------|-----------|-----------|
+| None       | 0    | 0    | 0         | 0         |
+| Bit 0      | 0    | 1    | 0         | 1         |
+| Bit k (≥1) | (1<<k)\|1 | 0 | 1     | 0         |
+| Double     | 0    | 0    | 0         | 0         |
+
+All nonzero waste values have bit 0 = 1. This is why `f` (bit-0
+Fredkin) works but `F` (payload Fredkin, checks DATA_MASK) does NOT —
+waste values like 0x5 = bits {0,2} have no data bits set and pass
+through DATA_MASK as zero.
+
+### Known issue: f reversibility when CL = H0
+
+During the f-chain, H0 and CL both point to ROT. When f fires (dirty
+cycle), it swaps [H0=ROT] ↔ [H1=dump], zeroing ROT. This changes [CL]
+from nonzero to zero, making f non-self-inverse: applying f again reads
+[CL]=0 and doesn't fire. The function is **not injective** when CL=H0
+and [H1]=0.
+
+This affects `step_back()` (simulator reverse stepping) but not forward
+operation. The ouroboros never runs backward. A proper fix requires
+separating CL from H0 during f ops, likely via XOR-copy of the waste
+flag to a dedicated condition cell. See the head-overlap reversibility
+discussion below.
+
+---
+
+## Head-overlap reversibility constraints
+
+Several fb2d ops are NOT bijective when heads overlap:
+
+| Op | Overlap | Effect | Bijective? |
+|----|---------|--------|------------|
+| `x` | H0=H1 | [H0] ^= [H0] = 0 | No (all values → 0) |
+| `,` | H0=H1 | [H0] -= [H0] = 0 | No |
+| `m` | H0=H2 | [H0] ^= [H0] = 0 | No |
+| `j` | H2=H0 | [H2] ^= [H2] = 0 | No |
+| `f`/`F` | CL=H0 or CL=H1 | Condition changes with swap | No (when [other]=0) |
+
+All other ops (swaps: `X`, `T`, `V`, `Z`, `K`; increments: `+`, `-`,
+`:`, `;`; rotations: `r`, `l`, `R`, `L`; mirrors) are bijective under
+all head configurations.
+
+For the language to be truly reversible ("every state has a unique
+predecessor"), programs must avoid these overlaps during non-injective
+ops, OR the ops must be redefined to be identity (NOP) under overlap.
+The preamble's `x` with H0=H1 is an intentional information-destroying
+use (zeroing a cell whose value is known/discardable).
 
 ## Worked example: payload 42, error on bit 5
 
@@ -392,14 +543,12 @@ un-dirty the accumulators, and so on.
 
 ## Cost summary
 
-| Resource | Value |
-|----------|-------|
-| Code ops | 336 |
-| Dirty cells (single-bit error) | 1 |
-| Dirty cells (no error / double error) | 0 |
-| GP slot width | 8 cells |
-| Grid (wrapped 60-wide) | 8 × 60 |
+| Variant | Code ops | Dirty cells (error) | Dirty cells (clean) | Stomach width |
+|---------|----------|---------------------|---------------------|---------------|
+| Standalone | 336 | 1 | 0 | 8 cells |
+| H2 copy-down | 323 | 1 | 0 | 9 cells |
+| Contained serpentine | 372 | 1 (in dump corridor) | 0 | 9 + N_DUMP+1 cells |
 
-Each correction consumes 1 clean zero cell from the GP row (for errors)
-or 0 (for clean codewords). Clean zeros are the agent's fundamental
-resource — this is about as cheap as correction can get.
+Each correction deposits at most 1 waste cell into the dump corridor
+(for errors) or 0 (for clean codewords). Clean zeros are the agent's
+fundamental resource — this is about as cheap as correction can get.

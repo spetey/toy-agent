@@ -122,17 +122,15 @@ def build_h2_correction_gadget_2bit(neighbor_delta_rows=3):
     # ── Copy-in: m copies [H2] to [H0] at CWL ──
     gb.emit('m')
 
-    # ── GP: EV → PA ──
-    gb.emit(']')
-    gb.gp_col = DSL2_PA
-
     # ── Phase A: Overall parity via Y ──
     gb.move_h0_col(DSL2_PA)
     gb.xor_accumulate_bits(list(range(16)))
 
     # ── Phase B: z-extract PA.bit0 → EV ──
     gb.move_h0_col(DSL2_EV)
+    gb.move_h1_col(DSL2_PA)          # CWL(2) → PA(1): w×1
     gb.emit('z')
+    gb.move_h1_col(DSL2_CWL)        # PA(1) → CWL(2): e×1
 
     # ── Phase A': Y-uncompute PA ──
     gb.move_h0_col(DSL2_PA)
@@ -173,26 +171,26 @@ def build_h2_correction_gadget_2bit(neighbor_delta_rows=3):
     # ═══════════════════════════════════════════════════════════════
     # 2-BIT DETECTION + NEIGHBOR COPY
     # ═══════════════════════════════════════════════════════════════
-    # State: H0=EV(0), H1=SCR(7), CL@S3(6), GP@PA(1)
+    # State: H0=EV(0), H1=SCR(7), CL@S3(6), GP@EV(0)
 
     # ── Step 1: Pack syndrome-OR into ACC ──
-    # Move H0 to ACC, GP to S0
+    # Move H0 to ACC, H1 to S0
     gb.move_h0_col(DSL2_ACC)      # EV(0) → ACC(9): E×9
-    gb.move_gp_col(DSL2_S0)       # PA(1) → S0(3): ]×2
+    gb.move_h1_col(DSL2_S0)       # SCR(7) → S0(3): w×4
 
     # z+l packing: extract S0-S3 bit0 into ACC
     gb.emit('z')                   # ACC.bit0 ↔ S0.bit0
     gb.emit('l')                   # rotate ACC left
-    gb.move_gp_col(DSL2_S1)       # ] → S1
+    gb.move_h1_col(DSL2_S1)       # e → S1
     gb.emit('z')                   # ACC.bit0 ↔ S1.bit0
     gb.emit('l')                   # rotate ACC left
-    gb.move_gp_col(DSL2_S2)       # ] → S2
+    gb.move_h1_col(DSL2_S2)       # e → S2
     gb.emit('z')                   # ACC.bit0 ↔ S2.bit0
     gb.emit('l')                   # rotate ACC left
-    gb.move_gp_col(DSL2_S3)       # ] → S3
+    gb.move_h1_col(DSL2_S3)       # e → S3
     gb.emit('z')                   # ACC.bit0 ↔ S3.bit0
     # State: ACC = s0<<3|s1<<2|s2<<1|s3, S0-S3.bit0=0
-    # H0=ACC(9), GP@S3(6)
+    # H0=ACC(9), H1@S3(6)
 
     # Shift packed value left 9: bits 0-3 → bits 9-12 (all data positions).
     # F's DATA_MASK strips Hamming parity positions {0,1,2,4,8} — without
@@ -203,7 +201,7 @@ def build_h2_correction_gadget_2bit(neighbor_delta_rows=3):
 
     # ── Step 2: Neighbor copy into NBR ──
     gb.move_h0_col(DSL2_NBR)      # ACC(9) → NBR(10): E×1
-    gb.move_h1_col(DSL2_CWL)      # SCR(7) → CWL(2): w×5
+    gb.move_h1_col(DSL2_CWL)      # S3(6) → CWL(2): w×4
 
     # Move H2 to neighbor row
     if neighbor_delta_rows > 0:
@@ -238,25 +236,26 @@ def build_h2_correction_gadget_2bit(neighbor_delta_rows=3):
     # Shift packed value right 9: undo the left-9 shift before unpacking
     gb.emit_n('r', 9)
 
-    # GP is at S3(6)
+    # H1 at NBR(10), move to S3 for z unpacking
+    gb.move_h1_col(DSL2_S3)       # NBR(10) → S3(6): w×4
     gb.emit('z')                   # ACC.bit0 ↔ S3.bit0 → restore S3
     gb.emit('r')                   # rotate ACC right
-    gb.move_gp_col(DSL2_S2)       # [ → S2
+    gb.move_h1_col(DSL2_S2)       # w → S2
     gb.emit('z')                   # restore S2
     gb.emit('r')
-    gb.move_gp_col(DSL2_S1)       # [ → S1
+    gb.move_h1_col(DSL2_S1)       # w → S1
     gb.emit('z')                   # restore S1
     gb.emit('r')
-    gb.move_gp_col(DSL2_S0)       # [ → S0
+    gb.move_h1_col(DSL2_S0)       # w → S0
     gb.emit('z')                   # restore S0
     # After: ACC=0, S0-S3 restored
-    # H0=ACC(9), GP@S0(3)
+    # H0=ACC(9), H1@S0(3)
 
     # ═══════════════════════════════════════════════════════════════
     # Phase C': Y-uncompute S0-S3
     # ═══════════════════════════════════════════════════════════════
     gb.move_h0_col(DSL2_S3)       # ACC(9) → S3(6): W×3
-    gb.move_h1_col(DSL2_CWL)      # NBR(10) → CWL(2): w×8
+    gb.move_h1_col(DSL2_CWL)      # S0(3) → CWL(2): w×1
     gb.move_cl_col(DSL2_ROT)      # ACC(9) → ROT(8): <×1
     gb.cl_payload = 8              # [ROT] = 8 (from Phase C)
 
@@ -288,11 +287,8 @@ def build_h2_correction_gadget_2bit(neighbor_delta_rows=3):
 
     # ── Phase F: Cleanup z+x ──
     gb.move_h1_col(DSL2_PA)       # CWL(2) → PA(1): w×1
-    gb.emit('z')                   # swap bit0 of EV with GP@PA
+    gb.emit('z')                   # swap bit0 of EV with H1@PA
     gb.emit('x')                   # EV ^= PA
-
-    # ── GP: PA → EV ──
-    gb.move_gp_col(DSL2_EV)       # S0(3) → EV(0): [×3
 
     # ── Epilogue: return H0, H1 to CWL ──
     gb.move_h0_col(DSL2_CWL)      # EV(0) → CWL(2): E×2

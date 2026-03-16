@@ -179,7 +179,7 @@ def get_state():
 @app.route('/api/load', methods=['POST'])
 def load_file():
     global current_file, noise_step_counter, noise_total_injected, noise_cycle_count
-    global gp_cleanup_count
+    global gp_cleanup_count, gp_cleanup_enabled, gp_cleanup_interval
     data = request.get_json(force=True)
     filename = data.get('filename', '')
     # Sanitize: only allow filenames, no path traversal
@@ -194,9 +194,11 @@ def load_file():
     noise_step_counter = 0
     noise_total_injected = 0
     noise_cycle_count = 0
-    # Reset GP cleanup counters
+    # Reset GP cleanup fully on load (interval was persisting across loads)
     _gp_step_counter = 0
     gp_cleanup_count = 0
+    gp_cleanup_enabled = False
+    gp_cleanup_interval = 0
     return jsonify(serialize_state())
 
 
@@ -204,7 +206,7 @@ def load_file():
 def reset_state():
     """Reload the current file to reset back to step 0."""
     global noise_step_counter, noise_total_injected, noise_cycle_count
-    global gp_cleanup_count
+    global gp_cleanup_count, gp_cleanup_enabled, gp_cleanup_interval
     data = request.get_json(force=True) if request.data else {}
     filename = data.get('filename', '') or current_file
     if not filename:
@@ -219,9 +221,11 @@ def reset_state():
     noise_step_counter = 0
     noise_total_injected = 0
     noise_cycle_count = 0
-    # Reset GP cleanup counters
+    # Reset GP cleanup fully on reset
     _gp_step_counter = 0
     gp_cleanup_count = 0
+    gp_cleanup_enabled = False
+    gp_cleanup_interval = 0
     return jsonify(serialize_state())
 
 

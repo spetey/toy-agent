@@ -170,10 +170,6 @@ def build_h2_correction_gadget():
     # After: [H0] = payload(remote), H2 unchanged.
     gb.emit('m')
 
-    # ── GP: EV → PA (for z ops later) ──
-    gb.emit(']')
-    gb.gp_col = DSL_PA
-
     # ── Phase A: Overall parity via Y ──
     # H0 on PA, H1 on CWL. Y at rotations 0..15.
     gb.move_h0_col(DSL_PA)          # CWL(2) → PA(1): W×1
@@ -181,7 +177,9 @@ def build_h2_correction_gadget():
 
     # ── Phase B: z-extract PA.bit0 → EV ──
     gb.move_h0_col(DSL_EV)          # PA(1) → EV(0): W×1
+    gb.move_h1_col(DSL_PA)          # CWL(2) → PA(1): w×1
     gb.emit('z')                     # EV.bit0 ← PA.bit0; PA.bit0 ← 0
+    gb.move_h1_col(DSL_CWL)         # PA(1) → CWL(2): e×1
 
     # ── Phase A': Y-uncompute PA ──
     gb.move_h0_col(DSL_PA)          # EV(0) → PA(1): E×1
@@ -260,10 +258,6 @@ def build_h2_correction_gadget():
     gb.move_h1_col(DSL_PA)          # CWL(2) → PA(1): w×1
     gb.emit('z')                     # swap bit0 of EV with PA
     gb.emit('x')                     # EV ^= PA
-
-    # ── GP: PA → EV ──
-    gb.emit('[')
-    gb.gp_col = DSL_EV
 
     # ── Epilogue: return H0, H1 to CWL ──
     gb.move_h0_col(DSL_CWL)         # EV(0) → CWL(2): E×2

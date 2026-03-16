@@ -23,7 +23,7 @@ After correction: S0-S3,SCR,ROT clean (Y-uncomputed/unused). ≤1 dirty cell
 
 Y opcode: [H0] ^= ror([H1], payload([CL]) & 15)  — self-inverse.
 f opcode: if [CL]&1: swap([H0], [H1])  — bit-0 Fredkin, reads raw bit0.
-z opcode: swap(bit0 of [H0], bit0 of [GP])  — raw bit swap.
+z opcode: swap(bit0 of [H0], bit0 of [H1])  — raw bit swap.
 
 ALGORITHM PHASES (all on CODE row, IP walks East):
 
@@ -297,11 +297,13 @@ def build_gadget(gp_distance=2, n_rows=3):
     phase_a_ops = gb.pos()
 
     # ── Phase B: z-extract PA.bit0 → EVIDENCE ──
-    # Move H0 to EV. z swaps bit0 of [H0=EV(=0)] with [GP=PA].
+    # Move H0 to EV, H1 to PA. z swaps bit0 of [H0=EV(=0)] with [H1=PA].
     # After: EV = raw p_all (0 or 1), PA.bit0 = 0.
 
     gb.move_h0_col(GP_EV)       # PA(0) → EV(5): E×5
+    gb.move_h1(gp_row_idx, GP_PA)  # CW(DATA,0) → PA(GP,0)
     gb.emit('z')                 # EV.bit0 ← PA.bit0; PA.bit0 ← 0
+    gb.move_h1(DATA_ROW, CW)    # PA(GP,0) → CW(DATA,0)
 
     phase_b_ops = gb.pos() - phase_a_ops
 
@@ -409,7 +411,7 @@ def build_gadget(gp_distance=2, n_rows=3):
 
     # ── Phase F: Cleanup z+x ──
     # Merge PA and EV residuals into ≤1 dirty cell.
-    # z: swap bit0 of EV with GP(=PA).  x: EV ^= PA.
+    # z: swap bit0 of EV with H1(=PA).  x: EV ^= PA.
     #   No error:       PA=0, EV=0 → both stay 0.      (0 dirty)
     #   Double error:   PA=0, EV=0 → both stay 0.      (0 dirty)
     #   Bit-0 error:    PA=1, EV=1 → z(same), x: EV=0. (PA=1 dirty)
@@ -1351,10 +1353,6 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
         n_rows=n_rows)
     gp_row_idx = gp_distance
 
-    # ── GP: move from EV to PA for z ops ──
-    gb.emit(']')                     # GP: EV(0) → PA(1)
-    gb.gp_col = SL_PA
-
     # ── Phase A: Overall parity via Y ──
     # H0 on PA (GP row), H1 on CW (DATA row), CL on ROT (payload 0).
     # PA is at col SL_PA = 1, same column as CW.
@@ -1366,11 +1364,13 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     phase_a_ops = gb.pos()
 
     # ── Phase B: z-extract PA.bit0 → EVIDENCE ──
-    # H0 to EV. z swaps bit0 of [H0=EV] with [GP=PA].
+    # H0 to EV, H1 to PA. z swaps bit0 of [H0=EV] with [H1=PA].
     # After: EV = raw p_all (0 or 1), PA.bit0 = 0.
 
     gb.move_h0_col(SL_EV)           # PA(1) → EV(0): W×1
+    gb.move_h1(gp_row_idx, SL_PA)   # CW(DATA,1) → PA(GP,1)
     gb.emit('z')                     # EV.bit0 ← PA.bit0; PA.bit0 ← 0
+    gb.move_h1(DATA_ROW, SL_CW)     # PA(GP,1) → CW(DATA,1)
 
     phase_b_ops = gb.pos() - phase_a_ops
 
@@ -1490,10 +1490,6 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     # the syndrome bits in S0-S3 are still live (syndrome ≠ 0, p_all = 0
     # distinguishes double errors from no-error). The gadget architecture
     # supports this without structural changes.
-
-    # ── GP: move back from PA to EV ──
-    gb.emit('[')                              # GP: PA(1) → EV(0)
-    gb.gp_col = SL_EV
 
     # ── Phase G: Epilogue ──
     # Return H0 and H1 to (DATA_ROW, CW).
