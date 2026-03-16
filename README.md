@@ -82,9 +82,9 @@ change each IP's direction. Each IP has five independent heads:
 | GP | Garbage pointer (breadcrumb trail for reversibility) |
 
 Code and data share the same surface (von Neumann architecture). The
-ISA has 59 opcodes (byte-level arithmetic, bit-level operations, head
+ISA has 62 opcodes (byte-level arithmetic, bit-level operations, head
 movement, mirrors, garbage-pointer operations, H2 scan ops, and H2
-momentum ops for serpentine scanning). See
+momentum ops for serpentine scanning with vertical ping-pong). See
 [`docs/isa.md`](docs/isa.md) for the full ISA reference.
 
 ### 16-Bit Cells
@@ -223,7 +223,7 @@ programs/                        Example programs and analysis scripts
   *.fb2d                         State files (loadable in simulator)
   *.ifb                          ifb source files
 docs/                            Design documents
-  isa.md                         ISA reference (59 opcodes, v1.10)
+  isa.md                         ISA reference (62 opcodes, v1.12)
   barrel-shifter-correction.md   Barrel-shifter correction algorithm walkthrough
   tc_proof_sketch.md             Turing completeness proof sketch
   nested-loops-notes.md          Nested loop implementation notes
@@ -232,30 +232,37 @@ CLAUDE.md                        Detailed project context for AI assistants
 
 ## Status
 
-This is active research software. The language design is at v1.10
-(59 opcodes). Recent milestones:
+This is active research software. The language design is at v1.12
+(62 opcodes). Recent milestones:
 
-- **Serpentine ouroboros** (v1.10): dual self-correcting gadgets with
-  serpentine H2 scanning using the new momentum ops (`A`/`B`/`U`).
-  H2 sweeps row-by-row across the partner gadget's code using boundary
-  detection (`V` + conditional mirrors), retreating and flipping
-  direction at each edge. Runs for 90+ correction cycles per GP
-  cleanup interval. Load `serpentine-ouroboros-w99` in the GUI.
+- **Serpentine ouroboros with vertical ping-pong** (v1.12): dual
+  self-correcting gadgets with serpentine H2 scanning using horizontal
+  momentum (`A`/`B`/`U`) and vertical momentum (`C`/`D`/`O`). H2
+  ping-pongs between the first code row and handler row, covering all
+  code + handler rows without entering stomach/waste. ~864 cycles per
+  full down-up sweep at W=99. Infinite-zeros cheat enables correction
+  at any cycle count; raw reversibility verified to 200 cycles.
+  Load `serpentine-ouroboros-w99` in the GUI.
+- **H2 vertical momentum ops** (v1.12): 3 new opcodes — `C` (advance
+  H2 in `h2_vdir`), `D` (retreat), `O` (flip N↔S). Enables bounded
+  ping-pong scanning without hardcoded vertical movement.
 - **Boustrophedon ouroboros**: dual self-correcting gadgets with
   diagonal H2 scanning. Each IP's H2 scans the other gadget's code
   in boustrophedon layout, correcting single-bit errors via the
   barrel-shifter algorithm. All tests pass including random multi-error
   correction. Load `boustrophedon-ouroboros-w99` in the GUI.
-- **H2 momentum ops** (v1.10): 3 new opcodes — `A` (advance H2 in
-  persistent direction), `B` (retreat), `U` (flip direction). Enables
+- **H2 horizontal momentum ops** (v1.10): 3 opcodes — `A` (advance H2
+  in persistent direction), `B` (retreat), `U` (flip direction). Enables
   serpentine scanning without coprimality constraints.
 - **Configurable GP cleanup**: interval-based GP row zeroing (cheat
-  button in the GUI). Device-specific interval set via prompt or API.
+  button in the GUI). Infinite-zeros mode zeros waste every step for
+  unbounded correction (not reversible; true reversibility requires
+  a reversible compressor).
 - **Noise resilience demonstrated**: with d_min=4 opcode encoding,
   nearest-codeword decoding, and GP cleanup, the mutual correction
   demo sustains indefinitely at 1 random bit-flip per sweep (~325
   columns). Tested stable for 28+ sweeps.
-- **d_min=4 opcode encoding**: [11,6,4] linear code maps all 59 opcodes
+- **d_min=4 opcode encoding**: [11,6,4] linear code maps all 62 opcodes
   to payloads with minimum Hamming distance 4. Single data-bit errors
   execute the *correct* opcode — not NOP, not a wrong opcode.
 - **Mutual correction**: two identical Hamming gadgets on separate IPs,
@@ -268,7 +275,7 @@ This is active research software. The language design is at v1.10
 
 | Program | Load in GUI | Description |
 |---------|-------------|-------------|
-| `serpentine-ouroboros-w99` | 2 IPs, 12×99 | **Start here.** Serpentine dual ouroboros — two gadgets correcting each other with row-by-row H2 scanning via momentum ops. Set batch to 388, enable GP cleanup (`G`, interval 69840). |
+| `serpentine-ouroboros-w99` | 2 IPs, 14×99 | **Start here.** Serpentine dual ouroboros — two gadgets correcting each other with row-by-row H2 scanning via momentum ops. H2 ping-pongs vertically (C/D/O). Set batch to 388, enable GP cleanup (`G`). |
 | `boustrophedon-ouroboros-w99` | 2 IPs, 12×99 | Diagonal-scan dual ouroboros — same mutual correction with diagonal H2 pattern. |
 | `mutual-correction-demo` | 2 IPs, 4×325 | Original mutual correction demo. Enable noise (`N`) + GP cleanup (`G`), set batch to 325. |
 | `factorial-03` | 1 IP, 8×64 | Factorial computation (compiled from ifb) |
@@ -303,10 +310,11 @@ python3 ifbc.py --test-all
 python3 programs/carry-demo.py
 ```
 
-Next steps: contained calculation area per gadget (not relying on torus
-row wrapping for CL/H0/H1), fuel/compression for sustainable zero
-production (replacing GP cleanup cheat), adaptive sweep boundaries
-via H2 probe.
+Next steps: cross-gadget consultation for double-bit errors (consult the
+partner's clean copy), fast-path syndrome skip (skip correction when
+parity=0), fuel/compression for sustainable zero production (replacing GP
+cleanup cheat), reversible noise injection (multibaker-style deterministic
+bit swaps), adaptive sweep boundaries via H2 probe.
 
 ## License
 

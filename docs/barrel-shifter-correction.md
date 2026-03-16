@@ -331,17 +331,36 @@ No cell values change. No drift.
 register — each dirty cycle pushes waste one slot deeper into the dump
 corridor. N_DUMP=5 handles up to 5 dirty cycles before overflow.
 
-### Preamble: T x (cycle start cleanup)
+### Preamble: T Z ] (cycle start cleanup)
 
-Each cycle begins with `T x` which cleans any residual in ROT:
+Each cycle begins with `T Z ]` which deposits the handler signal to
+the waste row:
 
-- `T`: swap [CL=ROT] ↔ [H0=CWL]. Deposits ROT's value into CWL.
-- `x`: [CWL] ^= [CWL] = 0. Zeros CWL (destroying the deposited value).
+- `T`: swap [CL=ROT] ↔ [H0=CWL]. If the handler fired, CL has the
+  `:` signal; T moves it to CWL and zeros CL.
+- `Z`: swap [H0=CWL] ↔ [GP=waste_row]. Handler signal goes to waste;
+  fresh zero comes to CWL.
+- `]`: advance GP east past the deposited waste.
 
-This also cleans the handler's CL++ signal (`:` sets [ROT]=1, preamble
-zeros it). The `x` with H0=H1 is intentionally non-injective — it
-destroys the handler signal, which is acceptable because the signal
-has no information content beyond "handler ran."
+On clean cycles (no handler fired): all values are 0, so T and Z are
+0↔0 no-ops. GP still advances (eats a zero that stays zero).
+
+This replaces the earlier `T x` preamble which was non-injective
+(H0=H1 XOR zeroed the cell). The `T Z ]` pattern is fully reversible
+— the handler signal is deposited to waste rather than destroyed.
+
+### GP budget
+
+The contained serpentine design uses 4 `]` per cycle:
+- 1 in the preamble (T Z ])
+- 2 in Phase G (EV deposit + PA deposit)
+- 1 in the handler deposit between & gates (T Z ])
+
+With grid width W, GP wraps after W/4 cycles. For W=99: ~24 cycles
+per wrap. The "infinite-zeros" cheat zeros waste rows after every
+step, eliminating the GP budget limit. This is not reversible (zeroing
+destroys breadcrumbs step_back needs). True reversibility requires
+either a reversible compressor or enough waste capacity to never wrap.
 
 ### Waste value summary
 

@@ -62,7 +62,7 @@ fb2d is a 2D reversible esoteric language where:
 - **`old-files/2d-older/`** — Earlier 2D simulator iterations.
 - **`old-files/ifbc-02.py`** — Previous compiler version.
 
-## ISA Summary (v1.10, 59 opcodes + NOP)
+## ISA Summary (v1.12, 62 opcodes + NOP)
 
 ### Mirrors
 | Op | Code | Meaning |
@@ -137,7 +137,7 @@ other gadget's code cells. The copy-down pattern: `m` copies a
 remote codeword to a local GP cell, correction runs locally,
 then `j` writes the correction mask back to the remote cell.
 
-### H2 Momentum Ops (v1.10)
+### H2 Horizontal Momentum Ops (v1.10)
 | Op | Code | Meaning |
 |----|------|---------|
 | `A` | 57 | Advance H2 in `h2_dir` — inverse: `B` |
@@ -145,8 +145,22 @@ then `j` writes the correction mask back to the remote cell.
 | `U` | 59 | Flip `h2_dir` via XOR 2 (E↔W, N↔S) — self-inverse |
 
 Per-IP field `h2_dir` (defaults to `DIR_E`). Enables serpentine
-scanning: H2 sweeps east, detects boundary via `V`, retreats (`B`),
-moves south (`h`), flips direction (`U`), sweeps west, repeat.
+scanning: H2 sweeps east, detects boundary via `m T ? T m` (local-only
+test), retreats (`B`), advances vertically (`C`), flips direction (`U`).
+
+### H2 Vertical Momentum Ops (v1.12)
+| Op | Code | Meaning |
+|----|------|---------|
+| `C` | 60 | Advance H2 in `h2_vdir` — inverse: `D` |
+| `D` | 61 | Retreat H2 opposite `h2_vdir` — inverse: `C` |
+| `O` | 62 | Flip `h2_vdir` via XOR 2 (N↔S, E↔W) — self-inverse |
+
+Per-IP field `h2_vdir` (defaults to `DIR_S`). Enables ping-pong
+bounded scanning: after horizontal boundary, `C` advances H2 vertically.
+A vertical boundary test (`m T ? T m` on code row) detects when H2
+leaves the code+handler area. If boundary: `D O C` (retreat, flip, re-
+advance) bounces H2 back. H2 ping-pongs between first code row and
+handler row without ever entering stomach/waste rows.
 
 ### Reversibility Pairs
 - `+` / `-` are inverses
@@ -155,10 +169,11 @@ moves south (`h`), flips direction (`U`), sweeps west, repeat.
 - `r` / `l` are inverses
 - `R` / `L` are inverses
 - `:` / `;` are inverses
-- `A` / `B` are inverses (H2 momentum advance/retreat)
+- `A` / `B` are inverses (H2 horizontal momentum advance/retreat)
+- `C` / `D` are inverses (H2 vertical momentum advance/retreat)
 - `H`/`h`, `a`/`d` are inverses (H2 head movement)
 - `N`/`S`, `E`/`W`, etc. are inverses (all head movement pairs)
-- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`, `j`, `V`, `U` are self-inverse
+- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`, `j`, `V`, `U`, `O` are self-inverse
 
 ## ifb Language (intermediate fuckbrain)
 
@@ -311,13 +326,19 @@ range check using existing ops. For now, hardcode sweep ranges.
 1. ~~Upgrade to 16-bit cells with systematic Hamming(16,11) SECDED.~~ ✓
 2. ~~Build Hamming(16,11) correction gadget (sliding-window).~~ ✓
 3. ~~Add H2 scan head for cross-gadget correction.~~ ✓
-4. **[CURRENT]** Two gadgets correcting each other with hardcoded layout,
-   using copy-down pattern (m/M/j ops via H2).
+4. ~~Two gadgets correcting each other with hardcoded layout,
+   using copy-down pattern (m/M/j ops via H2).~~ ✓
 5. ~~Add multiple IP support to the simulator.~~ ✓
    Interleaved round-robin: `step_all()` steps each IP in order.
    Per-IP state: ip_row, ip_col, ip_dir, h0, h1, h2, cl, gp.
    Grid is shared. REPL: `ip`, `addip`, `rmip` commands.
-6. Simulated noise: verify mutual correction under random bit flips.
+5b. ~~H2 vertical momentum (C/D/O) for ping-pong bounded scanning.~~ ✓
+    H2 ping-pongs between first code row and handler row (inclusive).
+    Handler row is X-filled and gets error-corrected by the sweep.
+    Vertical boundary test (m T ? T m on code row) + bounce sub-handler
+    (/ D O C : \) on handler row.  GP wrapping contamination still
+    limits cycle count without cheat mode (~219 cycles for W=99).
+6. **[CURRENT]** Simulated noise: verify mutual correction under random bit flips.
    GUI noise injection with per-sweep rate. d_min=4 opcode encoding
    ensures single data-bit flips → NOP (not wrong opcodes).
 7. Fast-path parity check gadget: multi-row layout where clean cells
