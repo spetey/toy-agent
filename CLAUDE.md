@@ -338,27 +338,37 @@ range check using existing ops. For now, hardcode sweep ranges.
     Vertical boundary test (m T ? T m on code row) + bounce sub-handler
     (/ D O C : \) on handler row.  GP wrapping contamination still
     limits cycle count without cheat mode (~219 cycles for W=99).
-6. **[CURRENT]** Simulated noise: verify mutual correction under random bit flips.
+6. ~~Simulated noise: verify mutual correction under random bit flips.~~ ✓
    GUI noise injection with per-sweep rate. d_min=4 opcode encoding
    ensures single data-bit flips → NOP (not wrong opcodes).
-7. Fast-path parity check gadget: multi-row layout where clean cells
-   (parity=0) skip correction rows. Parity check = 36 ops; full
-   correction = 323 ops. In W=48 boustrophedon: clean cell = 48 steps
-   vs dirty cell = 336 steps → 5× faster sweep at 95% clean cells.
-   Deferred until boustrophedon layout with agent border detection.
-8. Add simple compression (XOR-of-identical-pairs) to replace infinite
-   zero reservoir with finite fuel.
-9. Adaptive sweep boundaries via H2 + V probe.
-10. Non-zero background: agents metabolize compressible data for energy.
-11. Cross-gadget consultation for double-bit errors: when a gadget
-    encounters a cell with a 2-bit error (detected but uncorrectable by
-    SECDED), it consults the corresponding cell in the other gadget as a
-    reference copy. If the other copy is clean (syndrome=0), use it to
-    reconstruct the correct value. This adds a second layer of redundancy
-    beyond single-gadget Hamming correction. Natural extension toward
-    replication: if gadgets already read each other for consultation,
-    the machinery for copying an entire gadget (spawning a replica) is
-    similar — consult becomes "copy all cells" instead of "copy one cell."
+6b. ~~Infinite-zeros cheat for unbounded correction.~~ ✓
+    Zeros waste rows after every step_all(). Not reversible (destroys
+    breadcrumbs step_back needs). True reversibility needs a reversible
+    compressor or enough waste capacity to never wrap GP.
+    Sweep length: ~864 cycles per full H2 down-up sweep at W=99.
+7. **[NEXT]** Cross-gadget consultation for 2+-bit errors: when SECDED
+   detects an uncorrectable error (syndrome≠0, p_all=0), consult the
+   partner gadget's corresponding cell. If the partner copy is clean
+   (syndrome=0), XOR it in as the correction. Natural extension toward
+   replication — consult all cells = spawn a replica.
+8. **[NEXT]** Fast-path syndrome skip: when a scanned cell has parity=0
+   (no error), skip the full 323-op correction. Parity-only check is
+   ~36 ops. At 95% clean cells: ~5× faster sweeps. Multi-row layout
+   where parity check is on main path, correction rows via conditional
+   mirror. May benefit from a special row width for clean wrap.
+9. **[NEXT]** Compression: XOR-of-identical-pairs to replace infinite-
+   zero reservoir with finite fuel. Two identical cells XOR to zero
+   (fuel for GP). Reversible: the non-zero residual is waste.
+10. Reversible noise injection (multibaker-map style): a stored iid
+    string determines when to swap two random bits on the grid.
+    Deterministic at micro-level (reversible), stochastic-looking at
+    macro-level. Same mechanism could serve as reversible waste sink.
+11. Non-zero boundary cells: payload 2047 (0xFFFF) as boundary marker.
+    Not a valid opcode (NOP). Testable with `+ ? -` (3 ops). Enables
+    agents in non-zero soup where zero ≠ empty. Replaces zero-testing
+    for adaptive boundary detection.
+12. Adaptive sweep boundaries via H2 + boundary cell probe.
+13. Non-zero background: agents metabolize compressible data for energy.
 
 ## Design Decisions Log
 
