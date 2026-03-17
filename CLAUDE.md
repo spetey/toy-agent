@@ -49,6 +49,9 @@ fb2d is a 2D reversible esoteric language where:
   with dirty working-area cells). NoisePool provides deterministic,
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
+- **`programs/probe-bypass-demo.py`** — Probe-bypass dual-gadget builder
+  and test suite. Builds `probe-bypass-w99.fb2d` (the main working example).
+  Run tests: `python3 programs/probe-bypass-demo.py`
 - **`programs/`** — Example .fb2d state files and .ifb source files.
   `load`/`save` in fb2d.py defaults to this directory.
 
@@ -66,6 +69,24 @@ fb2d is a 2D reversible esoteric language where:
 - **`old-files/1d-and-before/`** — Earlier 1D simulators and programs.
 - **`old-files/2d-older/`** — Earlier 2D simulator iterations.
 - **`old-files/ifbc-02.py`** — Previous compiler version.
+
+## Minimal Working Example
+
+**`programs/probe-bypass-w99.fb2d`** — Two mutually-correcting Hamming(16,11)
+gadgets on a 20×99 grid with probe-bypass parity skip. Load in the GUI:
+
+```bash
+python3 fb2d_server.py
+# Open http://localhost:8000, load probe-bypass-w99
+# Enable noise (seed 42, 50 flips/1M), watch corrections in real-time
+```
+
+Each gadget's H2 scans the other's code+handler+bypass rows. Clean cells
+(~95%) take a 28-op bypass; dirty cells get full 358-op Hamming correction.
+Waste cleanup is auto-enabled. NOP filler (payload 1017, shown as `o` in
+GUI) is 2-bit-error safe — the 64th codeword of the [11,6,4] opcode code.
+
+Build and test: `python3 programs/probe-bypass-demo.py`
 
 ## ISA Summary (v1.12, 62 opcodes + NOP)
 
@@ -109,7 +130,7 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `r` | 40 | [H0] rotate right 1 bit — inverse: `l` |
 | `l` | 41 | [H0] rotate left 1 bit — inverse: `r` |
 | `f` | 42 | if [CL]&1: swap([H0], [H1]) — bit-0 Fredkin |
-| `z` | 43 | swap(bit0 of [H0], bit0 of [GP]) |
+| `z` | 43 | swap(bit0 of [H0], bit0 of [H1]) |
 | `R` | 44 | [H0] rotate right by ([CL]&15) bits — inverse: `L` |
 | `L` | 45 | [H0] rotate left by ([CL]&15) bits — inverse: `R` |
 | `Y` | 46 | [H0] ^= ror([H1], [CL]&15) — fused rotate-XOR, self-inverse |
@@ -233,6 +254,9 @@ output x            // write to GP trail, zero var
 ## Running Tests
 
 ```bash
+# Probe-bypass dual-gadget tests (layout, cycle length, no-error, single-error):
+python3 programs/probe-bypass-demo.py
+
 # Compiler tests (11 tests including factorial, nested loops, stream I/O):
 python3 ifbc.py --test-all
 
@@ -242,9 +266,8 @@ python3 test_pools.py
 # Carry arithmetic demo (10 tests including multi-byte carry):
 python3 programs/carry-demo.py
 
-# Interactive simulator:
-python3 fb2d.py
-# Then: load factorial-03
+# Interactive GUI (load probe-bypass-w99 for the main example):
+python3 fb2d_server.py
 ```
 
 ## Self-Correcting Agent Architecture (Design Sketch)
@@ -252,16 +275,22 @@ python3 fb2d.py
 The long-term goal: an agent on the torus that resists its own degradation
 by noise. The architecture has several layers:
 
-### Grid Layout
+### Grid Layout (Probe-Bypass, per gadget)
 
 ```
-[FUEL rows: compressible data, consumed in-place leaving waste behind]
-[AGENT rows: code (correction gadgets + loops) in boustrophedon layout]
-[GP row(s): dirty trail behind GP ← GP ← clean zeros ahead]
+Row 0:        BLANK (zeros — top H2 boundary, future -1 border cells)
+Row 1:        BYPASS ROW (NOP filler, bypass ops going West)
+Row 2:        HANDLER ROW (NOP filler, boundary handlers going East)
+Rows 3..R+2:  CODE ROWS (boustrophedon, correction gadget)
+Row R+3:      BLANK (zeros — bottom H2 boundary, future -1 border cells)
+Row R+4:      STOMACH (working area: 9 fixed cells for H0, H1, CL)
+Row R+5:      WASTE ROW (GP roams East, eats zeros, deposits waste)
 ```
 
-The agent sweeps its own code and data, correcting single-bit errors via
-Hamming SECDED. Each correction consumes ~2 clean GP cells (PA, SYND).
+Two gadgets (A and B) stacked vertically. Each IP runs its own gadget's
+code; each IP's H2 scans the other gadget's bypass+handler+code rows.
+The agent corrects single-bit errors via Hamming(16,11) SECDED.
+Each correction consumes ~2 clean waste cells (PA, signal).
 
 ### Fuel → Zeros → Corrections
 
@@ -285,12 +314,13 @@ gadgets correcting each other**.
   executing simultaneously on the shared grid. Required for real-time
   mutual correction.
 
-### 16-Bit Cells (Planned)
+### 16-Bit Cells
 
-Upgrade from 8-bit to 16-bit cells with systematic Hamming(16,11) SECDED:
-- 11 data bits (payload): opcodes (0–48) + data values (0–2047)
-- 5 parity bits: maintained by Δp fixup on arithmetic ops (+, -, etc.)
-- IP reads `cell % 2048` as the opcode. Valid opcode → execute, else NOP.
+Cells are 16-bit with systematic Hamming(16,11) SECDED:
+- 11 data bits (payload) at DATA_MASK=0xFEE8 positions
+- 5 parity bits at positions 0, 1, 2, 4, 8
+- IP extracts payload → nearest-codeword opcode decoding ([11,6,4] code)
+- 63 opcodes use 63 of 64 codewords; the 64th (payload 1017) is NOP filler
 - Bit-level ops (r, l, R, L, Y, z, x) act on full 16 bits — needed by
   the correction gadget to access parity bit positions.
 - Arithmetic ops (+, -, ., ,, :, ;) preserve the Hamming invariant via
@@ -341,11 +371,10 @@ range check using existing ops. For now, hardcode sweep ranges.
    Per-IP state: ip_row, ip_col, ip_dir, h0, h1, h2, cl, gp.
    Grid is shared. REPL: `ip`, `addip`, `rmip` commands.
 5b. ~~H2 vertical momentum (C/D/O) for ping-pong bounded scanning.~~ ✓
-    H2 ping-pongs between first code row and handler row (inclusive).
-    Handler row is X-filled and gets error-corrected by the sweep.
-    Vertical boundary test (m T ? T m on code row) + bounce sub-handler
-    (/ D O C : \) on handler row.  GP wrapping contamination still
-    limits cycle count without cheat mode (~219 cycles for W=99).
+    H2 ping-pongs between bypass row and last code row (inclusive).
+    Blank (zero) rows above bypass and below code serve as boundaries.
+    Vertical boundary test (m T ? T m on code row) + bounce handler
+    (/ D O ; X \) on handler row. Uses ; (not :) for & merge visibility.
 6. ~~Simulated noise: verify mutual correction under random bit flips.~~ ✓
    Deterministic noise via NoisePool (seed-based, rate in flips/1M rounds).
    d_min=4 opcode encoding ensures single data-bit flips → NOP (not wrong
@@ -362,21 +391,20 @@ range check using existing ops. For now, hardcode sweep ranges.
    partner gadget's corresponding cell. If the partner copy is clean
    (syndrome=0), XOR it in as the correction. Natural extension toward
    replication — consult all cells = spawn a replica.
-8. **[RESEARCH]** Fast-path syndrome skip: preliminary research in
-   `programs/fastpath-demo.py`. Parity prefix (73 ops) checks overall
-   parity via Phase A+B+A' + `l l l` rotation (bit0→bit3 for DATA_MASK
-   visibility). GP-conditional `#` branches clean cells to BYPASS_ROW.
-   **Learnings**: (a) Branching works — `#` correctly distinguishes
-   clean vs dirty cells, all 16 error positions correct via slow path.
-   (b) NOT actually faster in-world: IP traverses the same number of
-   grid columns either way (NOPs cost 1 step same as ops). A real
-   speedup needs the IP to physically skip columns (shorter row or
-   jump). (c) Only useful in serpentine-boustrophedon bounded layout,
-   not torus-wrapping. (d) Multi-cell scanning requires IP return
-   mechanism (torus wrap collides with bypass entry mirror). (e) Key
-   technical discovery: GP-conditional mirrors test DATA_MASK=0xFEE8
-   which excludes bit positions 0,1,2,4,8; must rotate p_all to a
-   data-bit position. (f) `z` swaps bit0 of [H0] with [H1], not [GP].
+8. ~~Probe-bypass parity skip for clean-cell fast path.~~ ✓
+   `programs/probe-bypass-demo.py`. Checks overall parity before full
+   correction. Clean cells (syndrome=0) branch to a 28-op bypass row;
+   dirty cells get full 358-op Hamming correction. 65% step savings.
+   Layout per gadget (R+6 rows): blank/bypass/handler/code×R/blank/
+   stomach/waste.  Key discoveries:
+   (a) `;` not `:` for signaling — `:` (0→1) invisible to DATA_MASK
+   since bit 0 is a parity position. `;` (0→0xFFFF) sets all bits.
+   (b) Bypass must undo Phase A+B's 15 `:` increments (15 `;` ops).
+   (c) Bounce handler `/ D O ; X \` — no C (avoids double vertical move).
+   (d) NOP filler payload 1017: 64th codeword of [11,6,4] code, both
+   1-bit and 2-bit data-error safe (all decode to NOP). Payload 15 was
+   unsafe (8/11 single-bit flips → real opcodes N/n/e/w).
+   (e) `z` swaps bit0 of [H0] with [H1], not [GP] (ISA doc corrected).
 9. **[NEXT]** Compression: XOR-of-identical-pairs to replace infinite-
    zero reservoir with finite fuel. Two identical cells XOR to zero
    (fuel for GP). Reversible: the non-zero residual is waste.
@@ -396,7 +424,7 @@ range check using existing ops. For now, hardcode sweep ranges.
 - **x -> X rename (v1.6)**: byte-level swap promoted to uppercase `X`.
   Lowercase `x` now means XOR. This frees lowercase letters for bit ops.
 - **Bit-level ops (v1.6)**: `x` (XOR), `r`/`l` (rotate), `f` (bit-0
-  Fredkin), `z` (bit-0 GP swap). Motivated by need for carry detection,
+  Fredkin), `z` (bit-0 H1 swap). Motivated by need for carry detection,
   LEB128 encoding, and future error correction.
 - **GP = garbage pointer**: records "breadcrumbs" for reversibility.
   Loops use `( P ... %` pattern. Nested loops use monotonic GP advance.
@@ -417,3 +445,24 @@ range check using existing ops. For now, hardcode sweep ranges.
   CORRECT opcode. Safety: 2-bit errors → NOP (guaranteed by d_min=4).
   Each opcode has a "neighborhood" of 12 payloads (1 center + 11
   single-bit neighbors). 672 of 2048 payloads decode to valid opcodes.
+- **NOP filler = payload 1017**: the 64th (last unused) codeword of the
+  [11,6,4] opcode code. As a true codeword, it has d_min=4 from all
+  other codewords: all 1-bit AND 2-bit data errors still decode to NOP
+  (0/55 two-bit pairs → real opcodes). Data-bit distance 8 from zero
+  (robust edge detection). Previous choices were worse: payload 15
+  (8/11 one-bit flips → real opcodes!), payload 1019 (1-bit safe but
+  30/55 two-bit → real opcodes). Lesson: NOP filler must be a codeword
+  of the opcode code, not just "in the correction ball."
+- **`;` not `:` for merge-gate signaling**: `:` increments CL from 0 to
+  1. Value 1 = bit 0 only. The `&` mirror tests `grid[CL] & DATA_MASK`,
+  and bit 0 is a Hamming parity position NOT in DATA_MASK (0xFEE8). So
+  `1 & 0xFEE8 = 0` and `&` never fires. `;` decrements 0→0xFFFF (all
+  bits set), making `&` fire correctly.
+- **Probe-bypass architecture**: check overall parity before expensive
+  Hamming correction. Clean cells (95%+) take a short bypass path.
+  The bypass must undo all CL increments from Phase A+B (15 `;` ops)
+  plus one more `;` for merge-gate signaling. The "stomach" (working
+  area) has 9 fixed cells; GP ("the mouth") roams the waste row.
+- **Blank boundary rows**: zero-filled rows above bypass and below code
+  serve as H2 vertical boundaries. Future: -1 border cells (payload
+  2047) for adaptive boundary detection in non-zero environments.

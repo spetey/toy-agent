@@ -306,7 +306,8 @@ const OPCODE_CHARS = {
   47:':', 48:';',
   49:'H', 50:'h', 51:'a', 52:'d',
   53:'m', 54:'M', 55:'j', 56:'V',
-  57:'A', 58:'B', 59:'U'
+  57:'A', 58:'B', 59:'U',
+  60:'C', 61:'D', 62:'O'
 };
 
 // d_min=4 opcode encoding: opcode number → 11-bit payload value
@@ -322,6 +323,7 @@ const OPCODE_PAYLOADS = {
   48:  432, 49:  113, 50:  882, 51:  691, 52:  756, 53:  821,
   54:   54, 55:  503, 56:  568,
   57:  189, 58:  250, 59:  315,
+  60:  380, 61:  639, 62:  958,
 };
 
 // Reverse lookup: payload → opcode number (0=NOP for unrecognized)
@@ -354,12 +356,13 @@ const OPCODE_NAMES = {
   27:'[GP]++', 28:'[GP]--', 29:'GP East', 30:'GP West', 31:'GP South', 32:'GP North',
   33:'swap(CL,GP)', 34:'\\if[GP]!=0', 35:'\\if[GP]==0',
   36:'/if[GP]==0', 37:'/if[GP]!=0', 38:'swap([H0],[GP])',
-  39:'XOR', 40:'rot right', 41:'rot left', 42:'bit Fredkin', 43:'bit GP swap',
+  39:'XOR', 40:'rot right', 41:'rot left', 42:'bit Fredkin', 43:'bit H1 swap',
   44:'rot right by [CL]', 45:'rot left by [CL]', 46:'XOR rot (fused)',
   47:'[CL]++', 48:'[CL]--',
   49:'H2 North', 50:'H2 South', 51:'H2 East', 52:'H2 West',
   53:'[H0]^=[H2]', 54:'payload-=[H2]', 55:'[H2]^=[H0]', 56:'swap([CL],[H2])',
-  57:'H2 advance', 58:'H2 retreat', 59:'H2 flip dir'
+  57:'H2 advance', 58:'H2 retreat', 59:'H2 flip dir',
+  60:'H2 v-advance', 61:'H2 v-retreat', 62:'H2 v-flip'
 };
 
 const COLORS = {
@@ -911,9 +914,18 @@ function drawRulers(r0, r1, c0, c1) {
   }
 }
 
+// NOP filler: payload 1017 (cell 0x7e8e). The 64th codeword of the [11,6,4]
+// opcode code — a true codeword, not just in the correction ball. Both 1-bit
+// AND 2-bit data errors still decode to NOP (0/55 two-bit errors → real opcode).
+// Displayed as 'o' to distinguish from zero-payload NOP (·).
+// Data-bit distance 8 from zero, distance 3 from 2047 (boundary marker).
+const NOP_FILLER_PAYLOAD = 1017;
+
 function cellChar(val) {
   const payload = cellToPayload(val);
   const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
+  // Show NOP filler as 'o' to distinguish from true NOP (payload 0)
+  if (opcode === 0 && payload === NOP_FILLER_PAYLOAD) return 'o';
   if (opcode in OPCODE_CHARS) return OPCODE_CHARS[opcode];
   return val.toString(16).padStart(4, '0');
 }
@@ -1155,7 +1167,8 @@ canvas.addEventListener('mousemove', (e) => {
     const ch = cellChar(val);
     const payload = cellToPayload(val);
     const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
-    const name = OPCODE_NAMES[opcode] || (opcode === 0 ? 'NOP' : `op${opcode}`);
+    const name = (opcode === 0 && payload === NOP_FILLER_PAYLOAD) ? 'NOP filler'
+               : OPCODE_NAMES[opcode] || (opcode === 0 ? 'NOP' : `op${opcode}`);
     const { syn, pAll } = hammingSyndrome(val);
     const synStr = syn === 0 && pAll === 0 ? 'ok' : `syn=${syn}${pAll ? '!' : ''}`;
     const bits = val.toString(2).padStart(16, '0');

@@ -1272,11 +1272,16 @@ class FB2DSimulator:
 
     # ── Save / Load ────────────────────────────────────────────────
 
-    def save_state(self, filename):
+    def save_state(self, filename, hints=None):
+        """Save state to file.  Optional hints dict adds key=value lines
+        (e.g. {'waste_cleanup': 1}) that the server can read on load."""
         self._save_active()
         with open(filename, 'w') as f:
             f.write(f"# F***brain 2D state\n")
             f.write(f"rows={self.rows}\ncols={self.cols}\n")
+            if hints:
+                for k, v in hints.items():
+                    f.write(f"{k}={v}\n")
             if self.n_ips > 1:
                 f.write(f"n_ips={self.n_ips}\n")
                 for i, ip in enumerate(self.ips):
