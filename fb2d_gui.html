@@ -914,11 +914,12 @@ function drawRulers(r0, r1, c0, c1) {
   }
 }
 
-// NOP filler: payload 1019 (cell 0x7ebd). Valid Hamming codeword in the
-// correction ball of opcode 0 — every single data-bit flip still decodes to NOP.
+// NOP filler: payload 1017 (cell 0x7e8e). The 64th codeword of the [11,6,4]
+// opcode code — a true codeword, not just in the correction ball. Both 1-bit
+// AND 2-bit data errors still decode to NOP (0/55 two-bit errors → real opcode).
 // Displayed as 'o' to distinguish from zero-payload NOP (·).
-// Data-bit distance 9 from zero, distance 2 from 2047 (boundary marker).
-const NOP_FILLER_PAYLOAD = 1019;
+// Data-bit distance 8 from zero, distance 3 from 2047 (boundary marker).
+const NOP_FILLER_PAYLOAD = 1017;
 
 function cellChar(val) {
   const payload = cellToPayload(val);

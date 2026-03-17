@@ -102,11 +102,15 @@ OP = OPCODES
 # NOP cell value: non-zero valid Hamming codeword, decodes to NOP (opcode 0).
 # Used to fill handler/bypass rows so H2 sees non-zero cells but IP passes through.
 # Must be in the [11,6,4] opcode code's correction ball for opcode 0 — i.e.,
-# every single data-bit flip still decodes to NOP. Payload 15 (old value) was
-# NOT in the correction ball: 8/11 data-bit flips produced real opcodes (N,n,e,w).
-# Payload 1019 (cell 0x7ebd) is safe: 0 problems under all 16 single-bit flips,
-# data-bit distance 9 from zero, distance 2 from 2047 (future boundary marker).
-NOP_CELL = hamming_encode(1019)  # 0x7ebd, data-bit dist 9 from zero
+# every single data-bit flip still decodes to NOP.
+#
+# Payload 1017 is the 64th (last unused) codeword of the [11,6,4] opcode code.
+# As a codeword, it has d_min=4 from all other codewords, giving:
+#   - 1-bit safe: all 11 data-bit flips → NOP (0/11 become real opcodes)
+#   - 2-bit safe: all 55 data-bit pairs → NOP (0/55 become real opcodes)
+# Compare payload 1019 (non-codeword): 1-bit safe but 30/55 2-bit → real opcodes.
+# Data-bit distance 8 from zero, distance 3 from 2047 (future boundary marker).
+NOP_CELL = hamming_encode(1017)  # 0x7e8e, data-bit dist 8 from zero
 
 
 # ═══════════════════════════════════════════════════════════════════
