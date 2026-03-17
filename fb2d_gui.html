@@ -140,19 +140,23 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
   <button id="btnNoise" title="Toggle noise injection (N)">&#x26A1; Noise</button>
   <div id="noiseControls" style="display:none;">
     <label style="color:#aaa; font-size:11px;">Rate:</label>
-    <input type="number" id="noiseRate" value="1.00" min="0" max="100" step="0.1"
-           style="width:52px; background:#0f3460; color:#e0e0e0; border:1px solid #533483;
+    <input type="number" id="noiseRate" value="100" min="0" max="1000000" step="1"
+           style="width:60px; background:#0f3460; color:#e0e0e0; border:1px solid #533483;
                   border-radius:3px; padding:1px 4px; font-size:12px; text-align:right;">
-    <span style="color:#888; font-size:11px;">/sweep</span>
+    <span style="color:#888; font-size:11px;">/1M rounds</span>
     <select id="noiseType" style="background:#0f3460; color:#e0e0e0; border:1px solid #533483;
                                    border-radius:3px; padding:1px 4px; font-size:12px;">
       <option value="any">any</option>
       <option value="parity">parity</option>
       <option value="data">data</option>
     </select>
+    <label style="color:#aaa; font-size:11px; margin-left:6px;">Seed:</label>
+    <input type="number" id="noiseSeed" value="42" min="0" step="1"
+           style="width:52px; background:#0f3460; color:#e0e0e0; border:1px solid #533483;
+                  border-radius:3px; padding:1px 4px; font-size:12px; text-align:right;">
     <span id="noiseStats" style="color:#ff9f43; font-size:11px; margin-left:4px;">0 injected</span>
   </div>
-  <button id="btnGpCleanup" title="Auto-zero GP rows on wrap (cheat)">&#x267B; GP</button>
+  <button id="btnGpCleanup" title="Reversible waste cleanup (clean cells GP leaves behind)">&#x267B; Waste</button>
   <span id="gpCleanupStats" style="color:#55efc4; font-size:11px; display:none;"></span>
   <span style="color:#555">|</span>
   <button id="btnHelp" title="Keyboard shortcuts (?)">?</button>
@@ -216,7 +220,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
       <kbd>Space</kbd> Play / Pause<br>
       <kbd>R</kbd> Reset to step 0<br>
       <kbd>N</kbd> Toggle noise injection<br>
-      <kbd>G</kbd> Toggle GP cleanup (cheat)
+      <kbd>G</kbd> Toggle waste cleanup (reversible)
     </div>
     <div class="section">
       <kbd>F</kbd> Fit to grid &nbsp; <kbd>+</kbd> Zoom in &nbsp; <kbd>-</kbd> Zoom out
@@ -559,7 +563,8 @@ function updateStatus() {
   }
   document.getElementById('ipStatusAll').innerHTML = html;
   updateIPButtons();
-  document.getElementById('stepDisplay').textContent = `Step ${state.step_count}`;
+  const sac = state.step_all_count !== undefined ? state.step_all_count : state.step_count;
+  document.getElementById('stepDisplay').textContent = `Round ${sac}`;
   document.getElementById('gridSize').textContent = `${state.rows}\u00d7${state.cols}`;
 }
 
@@ -1640,10 +1645,11 @@ async function toggleNoise() {
 async function sendNoiseConfig() {
   const rate = parseFloat(document.getElementById('noiseRate').value) || 0;
   const type = document.getElementById('noiseType').value;
+  const seed = parseInt(document.getElementById('noiseSeed').value) || 42;
   await api('noise', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ enabled: noiseEnabled, rate, type })
+    body: JSON.stringify({ enabled: noiseEnabled, rate, type, seed })
   });
 }
 
@@ -1653,13 +1659,14 @@ function updateNoiseStats(st) {
   if (el) {
     if (st.noise_enabled) {
       const nIps = st.n_ips || 1;
-      const cycles = st.cols ? Math.floor(st.step_count / (st.cols * nIps)) : 0;
-      const sweepPct = st.cols ? Math.round(100 * cycles / st.cols) : 0;
-      const sweeps = st.cols ? (cycles / st.cols).toFixed(1) : '?';
-      el.textContent = `${st.noise_total_injected} injected (${sweeps} sweeps)`;
+      el.textContent = `${st.noise_total_injected} injected`;
     } else if (st.noise_total_injected !== undefined) {
       el.textContent = st.noise_total_injected + ' injected';
     }
+  }
+  // Sync seed from server
+  if (st.noise_seed !== undefined) {
+    document.getElementById('noiseSeed').value = st.noise_seed;
   }
   // Sync toggle state from server (e.g. on page load)
   if (st.noise_enabled !== undefined && st.noise_enabled !== noiseEnabled) {
@@ -1676,9 +1683,8 @@ function updateNoiseStats(st) {
   }
 }
 
-// ── GP cleanup cheat ──────────────────────────────────────────
+// ── Waste cleanup (reversible) ───────────────────────────────
 let gpCleanupEnabled = false;
-let gpCleanupInterval = 0;
 
 async function toggleGpCleanup() {
   gpCleanupEnabled = !gpCleanupEnabled;
@@ -1687,44 +1693,33 @@ async function toggleGpCleanup() {
   if (gpCleanupEnabled) {
     btn.classList.add('active');
     stats.style.display = '';
-    // If no interval set, prompt for one
-    if (gpCleanupInterval <= 0) {
-      const val = prompt('GP cleanup interval (steps).\n'
-        + 'For serpentine-ouroboros-w99: 69840\n'
-        + '(= 90 cycles × 388 steps × 2 IPs)', '69840');
-      if (val) gpCleanupInterval = parseInt(val, 10) || 0;
-    }
   } else {
     btn.classList.remove('active');
     stats.style.display = 'none';
   }
-  await api('gp_cleanup', {
+  await api('waste_cleanup', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ enabled: gpCleanupEnabled, interval: gpCleanupInterval })
+    body: JSON.stringify({ enabled: gpCleanupEnabled })
   });
 }
 
 function updateGpCleanupStats(st) {
   if (!st) return;
   const el = document.getElementById('gpCleanupStats');
-  if (el && st.gp_cleanup_count !== undefined && st.gp_cleanup_enabled) {
-    const ivl = st.gp_cleanup_interval ? ` (every ${st.gp_cleanup_interval})` : '';
-    el.textContent = `${st.gp_cleanup_count} cleanups${ivl}`;
+  if (el && st.waste_cleanup_enabled) {
+    el.textContent = `${st.waste_pool_swaps || 0} swaps (ptr ${st.waste_pool_pointer || 0})`;
+    el.style.display = '';
+  } else if (el) {
+    el.style.display = 'none';
   }
-  if (st.gp_cleanup_interval !== undefined) {
-    gpCleanupInterval = st.gp_cleanup_interval;
-  }
-  if (st.gp_cleanup_enabled !== undefined && st.gp_cleanup_enabled !== gpCleanupEnabled) {
-    gpCleanupEnabled = st.gp_cleanup_enabled;
+  if (st.waste_cleanup_enabled !== undefined && st.waste_cleanup_enabled !== gpCleanupEnabled) {
+    gpCleanupEnabled = st.waste_cleanup_enabled;
     const btn = document.getElementById('btnGpCleanup');
-    const stats = document.getElementById('gpCleanupStats');
     if (gpCleanupEnabled) {
       btn.classList.add('active');
-      stats.style.display = '';
     } else {
       btn.classList.remove('active');
-      stats.style.display = 'none';
     }
   }
 }
@@ -1807,6 +1802,7 @@ document.getElementById('btnSave').addEventListener('click', doSave);
 document.getElementById('btnNoise').addEventListener('click', toggleNoise);
 document.getElementById('noiseRate').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
 document.getElementById('noiseType').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
+document.getElementById('noiseSeed').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
 
 document.getElementById('btnGpCleanup').addEventListener('click', toggleGpCleanup);
 

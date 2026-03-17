@@ -3,12 +3,11 @@
 
 import os
 import json
-import math
-import random
 from flask import Flask, jsonify, request, send_file, abort
 from fb2d import (FB2DSimulator, OPCODE_TO_CHAR, OPCODES, hamming_encode,
                   cell_to_payload, encode_opcode, OPCODE_PAYLOADS,
                   _PAYLOAD_TO_OPCODE)
+from pools import WastePool, NoisePool
 
 PROGRAMS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'programs')
 
@@ -16,118 +15,122 @@ app = Flask(__name__)
 sim = FB2DSimulator()
 current_file = ''  # Track which file is currently loaded
 
-# ── Noise injection state ──────────────────────────────────────
-PARITY_BITS = [0, 1, 2, 4, 8]
-DATA_BITS = [3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]
+# ── Reversible pools ──────────────────────────────────────────
+#
+# WastePool: virtual infinite zeros. Swaps dirty working-area cells
+#   for clean zeros. Reversible: swap back on step_back.
+#
+# NoisePool: deterministic bit-flip sequence from a seed.
+#   Forward: XOR target cell. Backward: XOR again (self-inverse).
+#   Rate-tunable: only entries whose coin < rate actually fire.
+
+waste_pool = WastePool()
+noise_pool = NoisePool(seed=42, flips_per_1M=0.0)
 
 noise_enabled = False
-noise_rate = 1.0         # errors per H2 sweep (Poisson lambda)
-noise_type = 'any'      # 'any', 'parity', 'data'
-noise_step_counter = 0  # steps since last injection
-noise_rng = random.Random(42)
-noise_total_injected = 0
+waste_cleanup_enabled = False
 
-# ── GP cleanup cheat ─────────────────────────────────────────
-gp_cleanup_enabled = False  # auto-zero GP rows when GP wraps
-gp_cleanup_count = 0        # how many times cleanup has fired
+# Track which step_all count we're on (for pool indexing).
+# This is separate from sim.step_count which counts per-IP steps.
+_step_all_count = 0
 
 
-def _poisson_sample(lam):
-    """Poisson variate via Knuth's algorithm. Fine for small lambda."""
-    if lam <= 0:
-        return 0
-    L = math.exp(-lam)
-    k, p = 0, 1.0
-    while True:
-        k += 1
-        p *= noise_rng.random()
-        if p < L:
-            return k - 1
-
-
-noise_cycle_count = 0  # total cycles completed with noise enabled
-
-
-def _inject_noise_now():
-    """Inject noise: Poisson(noise_rate/cols) bit flips per IP cycle.
-
-    noise_rate is errors per H2 sweep (= sim.cols IP cycles).
-    Each call is one IP cycle, so lambda_per_cycle = noise_rate / sim.cols.
-    """
-    global noise_total_injected, noise_cycle_count
-    noise_cycle_count += 1
-    lam_per_cycle = noise_rate / sim.cols
-    n_errors = _poisson_sample(lam_per_cycle)
-    sweeps = noise_cycle_count / sim.cols
-    if n_errors == 0:
-        if noise_cycle_count % (sim.cols // 2) == 0:
-            print(f'[noise] sweep {sweeps:.1f}: 0 errors '
-                  f'(total: {noise_total_injected}, rate={noise_rate}/sweep)')
-        return
-    # Auto-detect code rows from IP positions
+def _get_code_rows():
+    """Auto-detect code rows from IP positions."""
     sim._save_active()
-    code_rows = list(set(ip['ip_row'] for ip in sim.ips))
-    for _ in range(n_errors):
-        row = noise_rng.choice(code_rows)
-        col = noise_rng.randint(0, sim.cols - 1)
-        if noise_type == 'parity':
-            bit = noise_rng.choice(PARITY_BITS)
-        elif noise_type == 'data':
-            bit = noise_rng.choice(DATA_BITS)
-        else:  # 'any'
-            bit = noise_rng.randint(0, 15)
-        sim.grid[sim._to_flat(row, col)] ^= (1 << bit)
-    noise_total_injected += n_errors
-    print(f'[noise] sweep {sweeps:.1f}: injected {n_errors} '
-          f'(total: {noise_total_injected})')
+    return list(set(ip['ip_row'] for ip in sim.ips))
 
 
-def _noise_after_step():
-    """Called after each step_all(). Injects noise at cycle boundaries."""
-    global noise_step_counter
+def _apply_noise_forward(step):
+    """Apply noise for this step_all (forward). Returns action or None."""
+    if not noise_enabled or noise_pool.rate <= 0:
+        return None
+    code_rows = _get_code_rows()
+    return noise_pool.apply_forward(step, sim.grid, sim._to_flat, code_rows)
+
+
+def _undo_noise(step):
+    """Undo noise for this step_all (backward)."""
     if not noise_enabled:
-        return
-    noise_step_counter += 1
-    if noise_step_counter >= sim.cols:
-        noise_step_counter = 0
-        _inject_noise_now()
+        return None
+    code_rows = _get_code_rows()
+    return noise_pool.undo_at(step, sim.grid, sim._to_flat, code_rows)
 
 
-# ── GP cleanup cheat ─────────────────────────────────────────
-gp_cleanup_interval = 0      # 0 = disabled; >0 = clean every N step_count units
+# Per-step records for waste cleanup reversal.
+# Maps step_all_count -> list of (flat_addr, dirty_value) for cells
+# cleaned after that round's step_all.
+_waste_cleanup_log = {}
 
 
-def _gp_cleanup_after_step():
-    """Called after each step_all().  Zeros all GP rows every N steps.
-
-    The interval is in step_count units (= n_ips * step_all_calls).
-    For serpentine-ouroboros-w99 with 2 IPs:
-      90 cycles × 388 steps/cycle × 2 IPs = 69840.
-
-    The interval is device-specific and set via the /api/gp_cleanup
-    endpoint or the GUI prompt.
-    """
-    global gp_cleanup_count
-    if not gp_cleanup_enabled or gp_cleanup_interval <= 0:
-        return
-    # Use the simulator's own step_count for timing
-    if sim.step_count == 0 or sim.step_count % gp_cleanup_interval != 0:
-        return
-
-    # Zero ALL GP rows
+def _get_working_rows():
+    """Auto-detect working-area rows from GP head positions."""
     sim._save_active()
     W = sim.cols
-    gp_rows_cleaned = set()
+    rows = set()
     for ip in sim.ips:
-        gp_row = ip['gp'] // W
-        if gp_row not in gp_rows_cleaned:
-            base = gp_row * W
-            for c in range(W):
-                sim.grid[base + c] = 0
-            gp_rows_cleaned.add(gp_row)
-    gp_cleanup_count += 1
-    print(f'[gp-cleanup] step {sim.step_count}: zeroed rows '
-          f'{sorted(gp_rows_cleaned)} (cleanup #{gp_cleanup_count})')
+        rows.add(ip['gp'] // W)
+    return sorted(rows)
+
+
+def _apply_waste_cleanup_forward(step):
+    """Zero all non-zero cells on working rows. Runs after step_all.
+
+    Every dirty cell is swapped into the waste pool (value stored,
+    cell zeroed). This maintains the invariant that working rows are
+    clean at the start of each round — all heads (H0, H1, CL, GP)
+    find zeros when they need scratch space.
+
+    Fully reversible: _undo_waste_cleanup restores dirty values.
+    """
+    if not waste_cleanup_enabled:
+        return 0
+
+    W = sim.cols
+    working_rows = _get_working_rows()
+    cleaned = []
+    for row in working_rows:
+        base = row * W
+        for c in range(W):
+            flat = base + c
+            val = sim.grid[flat]
+            if val != 0:
+                cleaned.append((flat, val))
+                sim.grid[flat] = waste_pool.consume(val)
+    if cleaned:
+        _waste_cleanup_log[step] = cleaned
+    return len(cleaned)
+
+
+def _undo_waste_cleanup(step):
+    """Restore dirty cells cleaned at this step (LIFO order)."""
+    cleaned = _waste_cleanup_log.pop(step, None)
+    if not cleaned:
+        return 0
+    for flat, _val in reversed(cleaned):
+        sim.grid[flat] = waste_pool.unconsume()
+    return len(cleaned)
+
+
+def _step_all_forward():
+    """One forward round with reversible noise + waste cleanup.
+
+    Order: step all IPs, then apply noise, then clean working rows.
+    """
+    global _step_all_count
+    sim.step_all()
+    _apply_noise_forward(_step_all_count)
+    _apply_waste_cleanup_forward(_step_all_count)
+    _step_all_count += 1
+
+
+def _step_all_backward():
+    """Reverse one round: undo waste, undo noise, undo steps."""
+    global _step_all_count
+    _step_all_count -= 1
+    _undo_waste_cleanup(_step_all_count)
+    _undo_noise(_step_all_count)
+    sim.step_back_all()
 
 
 def serialize_state():
@@ -148,20 +151,23 @@ def serialize_state():
         'h2': sim.h2,
         'gp': sim.gp,
         'step_count': sim.step_count,
+        'step_all_count': _step_all_count,
         'current_file': current_file,
         # Multi-IP fields
         'n_ips': sim.n_ips,
         'active_ip': sim.active_ip,
         'ips': sim.ips,
-        # Noise injection state
+        # Noise pool state
         'noise_enabled': noise_enabled,
-        'noise_rate': noise_rate,
-        'noise_type': noise_type,
-        'noise_total_injected': noise_total_injected,
-        # GP cleanup state
-        'gp_cleanup_enabled': gp_cleanup_enabled,
-        'gp_cleanup_interval': gp_cleanup_interval,
-        'gp_cleanup_count': gp_cleanup_count,
+        'noise_rate': noise_pool.flips_per_1M,       # user-facing: flips/1M steps
+        'noise_rate_per_step': noise_pool.rate,       # internal: prob/step
+        'noise_type': noise_pool.noise_type,
+        'noise_total_injected': noise_pool.total_injected,
+        'noise_seed': noise_pool._seed,
+        # Waste pool state
+        'waste_cleanup_enabled': waste_cleanup_enabled,
+        'waste_pool_pointer': waste_pool.pointer,
+        'waste_pool_swaps': waste_pool.total_swaps,
     }
     return result
 
@@ -178,8 +184,7 @@ def get_state():
 
 @app.route('/api/load', methods=['POST'])
 def load_file():
-    global current_file, noise_step_counter, noise_total_injected, noise_cycle_count
-    global gp_cleanup_count, gp_cleanup_enabled, gp_cleanup_interval
+    global current_file, _step_all_count, waste_cleanup_enabled
     data = request.get_json(force=True)
     filename = data.get('filename', '')
     # Sanitize: only allow filenames, no path traversal
@@ -190,23 +195,20 @@ def load_file():
         abort(404, f'File not found: {filename}')
     sim.load_state(path)
     current_file = filename
-    # Reset noise counters (keep enabled/rate/type settings)
-    noise_step_counter = 0
-    noise_total_injected = 0
-    noise_cycle_count = 0
-    # Reset GP cleanup fully on load (interval was persisting across loads)
-    _gp_step_counter = 0
-    gp_cleanup_count = 0
-    gp_cleanup_enabled = False
-    gp_cleanup_interval = 0
+    _step_all_count = 0
+    # Reset pools (keep enabled/rate/type settings)
+    noise_pool.reset()
+    noise_pool.configure(n_code_rows=sim.rows, grid_cols=sim.cols)
+    waste_pool.reset()
+    _waste_cleanup_log.clear()
+    waste_cleanup_enabled = False
     return jsonify(serialize_state())
 
 
 @app.route('/api/reset', methods=['POST'])
 def reset_state():
     """Reload the current file to reset back to step 0."""
-    global noise_step_counter, noise_total_injected, noise_cycle_count
-    global gp_cleanup_count, gp_cleanup_enabled, gp_cleanup_interval
+    global _step_all_count, waste_cleanup_enabled
     data = request.get_json(force=True) if request.data else {}
     filename = data.get('filename', '') or current_file
     if not filename:
@@ -217,15 +219,13 @@ def reset_state():
     if not os.path.isfile(path):
         abort(404, f'File not found: {filename}')
     sim.load_state(path)
-    # Reset noise counters (keep enabled/rate/type settings)
-    noise_step_counter = 0
-    noise_total_injected = 0
-    noise_cycle_count = 0
-    # Reset GP cleanup fully on reset
-    _gp_step_counter = 0
-    gp_cleanup_count = 0
-    gp_cleanup_enabled = False
-    gp_cleanup_interval = 0
+    _step_all_count = 0
+    # Reset pools (keep enabled/rate/type settings)
+    noise_pool.reset()
+    noise_pool.configure(n_code_rows=sim.rows, grid_cols=sim.cols)
+    waste_pool.reset()
+    _waste_cleanup_log.clear()
+    waste_cleanup_enabled = False
     return jsonify(serialize_state())
 
 
@@ -234,9 +234,7 @@ def step_forward():
     n = min(int(request.args.get('n', 1)), 10000)
     try:
         for _ in range(n):
-            sim.step_all()
-            _noise_after_step()
-            _gp_cleanup_after_step()
+            _step_all_forward()
     except Exception as e:
         print(f'[step] error after {n} steps: {e}')
         # Return current state even on error so GUI can display it
@@ -248,7 +246,9 @@ def step_backward():
     n = min(int(request.args.get('n', 1)), 10000)
     try:
         for _ in range(n):
-            sim.step_back_all()
+            if _step_all_count <= 0:
+                break
+            _step_all_backward()
     except Exception as e:
         print(f'[back] error after {n} steps: {e}')
     return jsonify(serialize_state())
@@ -453,67 +453,89 @@ def switch_ip():
     return jsonify(serialize_state())
 
 
-# ── Noise injection routes ─────────────────────────────────────
+# ── Reversible pool routes ─────────────────────────────────────
 
 
 @app.route('/api/noise', methods=['GET'])
 def get_noise():
     return jsonify({
         'enabled': noise_enabled,
-        'rate': noise_rate,
-        'type': noise_type,
-        'total_injected': noise_total_injected,
+        'flips_per_1M': noise_pool.flips_per_1M,
+        'rate_per_step': noise_pool.rate,
+        'type': noise_pool.noise_type,
+        'total_injected': noise_pool.total_injected,
+        'seed': noise_pool._seed,
+        # GUI sends/reads 'rate' as flips per 1M
+        'rate': noise_pool.flips_per_1M,
     })
 
 
 @app.route('/api/noise', methods=['POST'])
 def set_noise():
-    global noise_enabled, noise_rate, noise_type
-    global noise_step_counter, noise_total_injected, noise_cycle_count
+    global noise_enabled
     data = request.get_json(force=True)
     if 'enabled' in data:
         new_enabled = bool(data['enabled'])
         if new_enabled and not noise_enabled:
-            # Turning on: reset counters and re-seed RNG
-            noise_step_counter = 0
-            noise_total_injected = 0
-            noise_cycle_count = 0
-            noise_rng.seed()  # re-seed from system entropy
+            seed = data.get('seed', None)
+            noise_pool.reset(seed=seed)
+            noise_pool.configure(n_code_rows=len(_get_code_rows()),
+                                 grid_cols=sim.cols)
         noise_enabled = new_enabled
     if 'rate' in data:
-        noise_rate = max(0.0, float(data['rate']))
+        # 'rate' = flips per 1M step_alls
+        noise_pool.configure(flips_per_1M=max(0.0, float(data['rate'])))
     if 'type' in data:
         t = data['type']
         if t in ('any', 'parity', 'data'):
-            noise_type = t
-    print(f'[noise] config: enabled={noise_enabled} rate={noise_rate}/sweep '
-          f'type={noise_type} sweep={sim.cols} cycles')
+            noise_pool.configure(noise_type=t)
+    if 'seed' in data and noise_enabled:
+        new_seed = int(data['seed'])
+        if new_seed != noise_pool._seed:
+            if noise_pool.total_injected > 0:
+                print(f'[noise-pool] WARNING: seed change rejected — '
+                      f'{noise_pool.total_injected} flips outstanding. '
+                      f'Step back to 0 or reset first.')
+            else:
+                noise_pool.reset(seed=new_seed)
+    print(f'[noise-pool] config: enabled={noise_enabled} '
+          f'rate={noise_pool.flips_per_1M}/1M rounds '
+          f'({noise_pool.rate:.9f}/step) '
+          f'type={noise_pool.noise_type} seed={noise_pool._seed}')
     return jsonify({
         'enabled': noise_enabled,
-        'rate': noise_rate,
-        'type': noise_type,
-        'total_injected': noise_total_injected,
+        'flips_per_1M': noise_pool.flips_per_1M,
+        'rate_per_step': noise_pool.rate,
+        'type': noise_pool.noise_type,
+        'total_injected': noise_pool.total_injected,
+        'seed': noise_pool._seed,
+        'rate': noise_pool.flips_per_1M,
+    })
+
+
+@app.route('/api/waste_cleanup', methods=['POST'])
+def set_waste_cleanup():
+    global waste_cleanup_enabled
+    data = request.get_json(force=True)
+    if 'enabled' in data:
+        new_enabled = bool(data['enabled'])
+        if new_enabled and not waste_cleanup_enabled:
+            waste_pool.reset()
+            _waste_cleanup_log.clear()
+        waste_cleanup_enabled = new_enabled
+    print(f'[waste-pool] config: enabled={waste_cleanup_enabled}'
+          f' pool_ptr={waste_pool.pointer}')
+    return jsonify({
+        'enabled': waste_cleanup_enabled,
+        'pointer': waste_pool.pointer,
+        'total_swaps': waste_pool.total_swaps,
     })
 
 
 @app.route('/api/gp_cleanup', methods=['POST'])
 def set_gp_cleanup():
-    global gp_cleanup_enabled, gp_cleanup_count, gp_cleanup_interval
-    data = request.get_json(force=True)
-    if 'enabled' in data:
-        new_enabled = bool(data['enabled'])
-        if new_enabled and not gp_cleanup_enabled:
-            gp_cleanup_count = 0
-        gp_cleanup_enabled = new_enabled
-    if 'interval' in data:
-        gp_cleanup_interval = int(data['interval'])
-    print(f'[gp-cleanup] config: enabled={gp_cleanup_enabled}'
-          f' interval={gp_cleanup_interval} cleanups={gp_cleanup_count}')
-    return jsonify({
-        'enabled': gp_cleanup_enabled,
-        'interval': gp_cleanup_interval,
-        'count': gp_cleanup_count,
-    })
+    """Legacy endpoint — redirects to waste_cleanup."""
+    return set_waste_cleanup()
 
 
 if __name__ == '__main__':

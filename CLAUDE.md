@@ -44,6 +44,11 @@ fb2d is a 2D reversible esoteric language where:
 - **`ifbc.py`** — Compiler from "intermediate fuckbrain" (ifb) to fb2d
   grid files. Supports variables, arithmetic, nested while loops, swap,
   zero, stream I/O. Run tests: `python3 ifbc.py --test-all`
+- **`pools.py`** — Reversible virtual pools for waste cleanup and noise
+  injection. WastePool provides infinite clean zeros (consumed via swap
+  with dirty working-area cells). NoisePool provides deterministic,
+  seed-based noise (rate-tunable flips per 1M rounds). Both are fully
+  reversible for `step_back()`. Run tests: `python3 test_pools.py`
 - **`programs/`** — Example .fb2d state files and .ifb source files.
   `load`/`save` in fb2d.py defaults to this directory.
 
@@ -231,6 +236,9 @@ output x            // write to GP trail, zero var
 # Compiler tests (11 tests including factorial, nested loops, stream I/O):
 python3 ifbc.py --test-all
 
+# Reversible pool tests (waste cleanup + noise injection):
+python3 test_pools.py
+
 # Carry arithmetic demo (10 tests including multi-byte carry):
 python3 programs/carry-demo.py
 
@@ -339,23 +347,36 @@ range check using existing ops. For now, hardcode sweep ranges.
     (/ D O C : \) on handler row.  GP wrapping contamination still
     limits cycle count without cheat mode (~219 cycles for W=99).
 6. ~~Simulated noise: verify mutual correction under random bit flips.~~ ✓
-   GUI noise injection with per-sweep rate. d_min=4 opcode encoding
-   ensures single data-bit flips → NOP (not wrong opcodes).
-6b. ~~Infinite-zeros cheat for unbounded correction.~~ ✓
-    Zeros waste rows after every step_all(). Not reversible (destroys
-    breadcrumbs step_back needs). True reversibility needs a reversible
-    compressor or enough waste capacity to never wrap GP.
+   Deterministic noise via NoisePool (seed-based, rate in flips/1M rounds).
+   d_min=4 opcode encoding ensures single data-bit flips → NOP (not wrong
+   opcodes). Noise restricted to code+handler rows, columns 1–(W-2) to
+   avoid boundary columns.
+6b. ~~Reversible waste cleanup for unbounded correction.~~ ✓
+    WastePool provides virtual infinite zeros. Working-area rows are
+    cleaned every round by swapping dirty cells into the pool. Fully
+    reversible: `step_back()` restores dirty values from the pool (LIFO).
+    Replaces the old "infinite-zeros cheat" which destroyed breadcrumbs.
     Sweep length: ~864 cycles per full H2 down-up sweep at W=99.
 7. **[NEXT]** Cross-gadget consultation for 2+-bit errors: when SECDED
    detects an uncorrectable error (syndrome≠0, p_all=0), consult the
    partner gadget's corresponding cell. If the partner copy is clean
    (syndrome=0), XOR it in as the correction. Natural extension toward
    replication — consult all cells = spawn a replica.
-8. **[NEXT]** Fast-path syndrome skip: when a scanned cell has parity=0
-   (no error), skip the full 323-op correction. Parity-only check is
-   ~36 ops. At 95% clean cells: ~5× faster sweeps. Multi-row layout
-   where parity check is on main path, correction rows via conditional
-   mirror. May benefit from a special row width for clean wrap.
+8. **[RESEARCH]** Fast-path syndrome skip: preliminary research in
+   `programs/fastpath-demo.py`. Parity prefix (73 ops) checks overall
+   parity via Phase A+B+A' + `l l l` rotation (bit0→bit3 for DATA_MASK
+   visibility). GP-conditional `#` branches clean cells to BYPASS_ROW.
+   **Learnings**: (a) Branching works — `#` correctly distinguishes
+   clean vs dirty cells, all 16 error positions correct via slow path.
+   (b) NOT actually faster in-world: IP traverses the same number of
+   grid columns either way (NOPs cost 1 step same as ops). A real
+   speedup needs the IP to physically skip columns (shorter row or
+   jump). (c) Only useful in serpentine-boustrophedon bounded layout,
+   not torus-wrapping. (d) Multi-cell scanning requires IP return
+   mechanism (torus wrap collides with bypass entry mirror). (e) Key
+   technical discovery: GP-conditional mirrors test DATA_MASK=0xFEE8
+   which excludes bit positions 0,1,2,4,8; must rotate p_all to a
+   data-bit position. (f) `z` swaps bit0 of [H0] with [H1], not [GP].
 9. **[NEXT]** Compression: XOR-of-identical-pairs to replace infinite-
    zero reservoir with finite fuel. Two identical cells XOR to zero
    (fuel for GP). Reversible: the non-zero residual is waste.
