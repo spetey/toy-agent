@@ -23,11 +23,13 @@ in turn based on brainfuck. (fuckbrain = reversible brainfuck.)
   Hamming(16,11) SECDED codeword with 11 data bits and 5 parity bits.
   The IP reads the payload (data bits) as the opcode. Arithmetic ops
   automatically maintain the Hamming invariant.
-- **Self-correcting**: a Hamming correction gadget (323 opcodes) detects
-  and corrects single-bit errors in any cell via the H2 copy-down pattern.
-  Two gadgets can correct each other's code simultaneously (mutual
-  correction). With nearest-codeword decoding and GP cleanup, the mutual
-  correction demo sustains indefinitely at 1 random bit-flip per sweep.
+- **Self-correcting**: a Hamming correction gadget detects and corrects
+  single-bit errors in any cell via the H2 copy-down pattern. Two gadgets
+  can correct each other's code simultaneously (mutual correction). The
+  probe-bypass architecture adds a fast path: clean cells (parity=0) skip
+  the full barrel-shifter correction, reducing per-cell cost. NOP filler
+  cells use payload 1017 (the 64th codeword of the [11,6,4] code), which
+  is immune to both 1-bit and 2-bit data errors.
 
 ## Quick Start
 
@@ -48,6 +50,9 @@ python3 ifbc.py programs/factorial.ifb programs/factorial-out.fb2d
 # Run compiler tests
 python3 ifbc.py --test-all
 
+# Run probe-bypass demo (★ start here — dual gadgets with fast-path bypass)
+python3 programs/probe-bypass-demo.py --width 99
+
 # Run carry arithmetic demo
 python3 programs/carry-demo.py
 
@@ -60,10 +65,8 @@ python3 programs/boustrophedon-ouroboros-demo.py --width 99
 # Run mutual correction demo (two gadgets correcting each other)
 python3 programs/mutual-correction-demo.py
 
-# Run H2 copy-down correction gadget tests
+# Run Hamming correction gadget tests
 python3 programs/dual-gadget-demo.py
-
-# Run Hamming correction gadget tests (barrel-shifter algorithm)
 python3 programs/hamming-gadget-demo.py
 ```
 
@@ -106,7 +109,7 @@ Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
 
 #### d_min=4 Opcode Encoding
 
-The 57 opcodes are mapped to 11-bit payloads using an [11,6,4] linear
+The 62 opcodes are mapped to 11-bit payloads using an [11,6,4] linear
 code with minimum Hamming distance 4 between any pair of codewords.
 This provides two layers of protection:
 
@@ -119,7 +122,7 @@ This provides two layers of protection:
 
 ### Hamming Correction Gadget
 
-The H2 copy-down correction gadget (318 ops) corrects single-bit errors:
+The H2 copy-down correction gadget corrects single-bit errors:
 
 1. `m` copies a remote codeword to local GP scratch (via H2 scan head)
 2. Compute overall parity and syndrome via Y (fused rotate-XOR)
@@ -130,6 +133,13 @@ The H2 copy-down correction gadget (318 ops) corrects single-bit errors:
 Only H2 touches remote data; all other heads stay local. This enables
 **mutual correction**: two gadgets on separate IPs, each correcting the
 other's code via H2.
+
+The **probe-bypass** variant adds a fast path: before running the full
+barrel-shifter, a parity probe (`m`, Phase A+B `:` increments, `l l l`
+rotation, GP-conditional `#` branch) tests whether the cell has any
+error at all. Clean cells (overall parity = 0) branch to a bypass row
+that undoes the probe and skips correction entirely. Only dirty cells
+pay the full correction cost.
 
 See `docs/barrel-shifter-correction.md` for algorithm details.
 
@@ -208,6 +218,8 @@ fb2d_server.py                   Flask server for browser GUI
 fb2d_gui.html                    Browser-based GUI simulator
 ifbc.py                          ifb-to-fb2d compiler
 programs/                        Example programs and analysis scripts
+  probe-bypass-demo.py           Probe-bypass dual gadgets + tests (★ MWE)
+  probe-bypass-w99.fb2d          Loadable state file for probe-bypass demo
   serpentine-ouroboros-demo.py    Serpentine dual ouroboros with H2 momentum (★)
   boustrophedon-ouroboros-demo.py Diagonal-scan dual ouroboros + tests (★)
   mutual-correction-demo.py      Two gadgets correcting each other (★)
@@ -235,6 +247,14 @@ CLAUDE.md                        Detailed project context for AI assistants
 This is active research software. The language design is at v1.12
 (62 opcodes). Recent milestones:
 
+- **Probe-bypass fast-path correction** (v1.12): the main MWE. Dual
+  self-correcting gadgets where clean cells skip the full barrel-shifter
+  via a parity probe + GP-conditional branch. NOP filler uses payload
+  1017 (the 64th codeword of the [11,6,4] code), which is immune to
+  both 1-bit AND 2-bit data errors — the most resilient filler possible.
+  Per-gadget layout: code row → handler row → bypass row → stomach
+  (working area) → waste (GP trail). Blank boundary rows separate the
+  two gadgets. Load `probe-bypass-w99` in the GUI.
 - **Serpentine ouroboros with vertical ping-pong** (v1.12): dual
   self-correcting gadgets with serpentine H2 scanning using horizontal
   momentum (`A`/`B`/`U`) and vertical momentum (`C`/`D`/`O`). H2
@@ -275,29 +295,33 @@ This is active research software. The language design is at v1.12
 
 | Program | Load in GUI | Description |
 |---------|-------------|-------------|
-| `serpentine-ouroboros-w99` | 2 IPs, 14×99 | **Start here.** Serpentine dual ouroboros — two gadgets correcting each other with row-by-row H2 scanning via momentum ops. H2 ping-pongs vertically (C/D/O). Set batch to 388, enable GP cleanup (`G`). |
+| `probe-bypass-w99` | 2 IPs, 14×99 | **Start here.** Probe-bypass dual gadgets — clean cells skip correction via parity probe. NOP filler `o` = payload 1017 (2-bit safe). Enable GP cleanup (`G`), noise (`N`). |
+| `serpentine-ouroboros-w99` | 2 IPs, 14×99 | Serpentine dual ouroboros — row-by-row H2 scanning via momentum ops. H2 ping-pongs vertically (C/D/O). Set batch to 388, enable GP cleanup (`G`). |
 | `boustrophedon-ouroboros-w99` | 2 IPs, 12×99 | Diagonal-scan dual ouroboros — same mutual correction with diagonal H2 pattern. |
 | `mutual-correction-demo` | 2 IPs, 4×325 | Original mutual correction demo. Enable noise (`N`) + GP cleanup (`G`), set batch to 325. |
 | `factorial-03` | 1 IP, 8×64 | Factorial computation (compiled from ifb) |
 
-### Recommended Demo: Serpentine Ouroboros
+### Recommended Demo: Probe-Bypass
 
 ```bash
 python3 fb2d_server.py
 # Open http://localhost:5001
-# 1. Load "serpentine-ouroboros-w99" from the dropdown
-# 2. Set Batch to 388 (one correction cycle per tick)
-# 3. Press G to enable GP cleanup (enter interval: 69840)
+# 1. Load "probe-bypass-w99" from the dropdown
+# 2. Press G to enable GP cleanup
+# 3. Press N to enable noise (try 1 error/sweep)
 # 4. Press Space to play
 # Watch: IP0 (red) corrects gadget B's code via H2 (blue arrow),
 #        IP1 (orange) corrects gadget A's code simultaneously.
-#        H2 sweeps east, hits boundary, drops to handler row,
-#        retreats, moves south, flips direction, sweeps west.
+#        Clean cells (NOP filler 'o') take the bypass row shortcut.
+#        Dirty cells (yellow = 1-bit error) get full barrel-shifter correction.
 ```
 
 ### Running Tests
 
 ```bash
+# Probe-bypass (★ main MWE — fast-path correction with parity probe)
+python3 programs/probe-bypass-demo.py --width 99
+
 # Serpentine ouroboros (H2 momentum boundary detection + correction)
 python3 programs/serpentine-ouroboros-demo.py --width 99
 
@@ -311,10 +335,10 @@ python3 programs/carry-demo.py
 ```
 
 Next steps: cross-gadget consultation for double-bit errors (consult the
-partner's clean copy), fast-path syndrome skip (skip correction when
-parity=0), fuel/compression for sustainable zero production (replacing GP
-cleanup cheat), reversible noise injection (multibaker-style deterministic
-bit swaps), adaptive sweep boundaries via H2 probe.
+partner's clean copy when SECDED detects an uncorrectable error),
+fuel/compression for sustainable zero production (replacing GP cleanup
+cheat), reversible noise injection (multibaker-style deterministic bit
+swaps), adaptive sweep boundaries via H2 probe.
 
 ## License
 
