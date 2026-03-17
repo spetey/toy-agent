@@ -356,7 +356,7 @@ const OPCODE_NAMES = {
   27:'[GP]++', 28:'[GP]--', 29:'GP East', 30:'GP West', 31:'GP South', 32:'GP North',
   33:'swap(CL,GP)', 34:'\\if[GP]!=0', 35:'\\if[GP]==0',
   36:'/if[GP]==0', 37:'/if[GP]!=0', 38:'swap([H0],[GP])',
-  39:'XOR', 40:'rot right', 41:'rot left', 42:'bit Fredkin', 43:'bit GP swap',
+  39:'XOR', 40:'rot right', 41:'rot left', 42:'bit Fredkin', 43:'bit H1 swap',
   44:'rot right by [CL]', 45:'rot left by [CL]', 46:'XOR rot (fused)',
   47:'[CL]++', 48:'[CL]--',
   49:'H2 North', 50:'H2 South', 51:'H2 East', 52:'H2 West',
@@ -914,9 +914,17 @@ function drawRulers(r0, r1, c0, c1) {
   }
 }
 
+// NOP filler: payload 1019 (cell 0x7ebd). Valid Hamming codeword in the
+// correction ball of opcode 0 — every single data-bit flip still decodes to NOP.
+// Displayed as 'o' to distinguish from zero-payload NOP (·).
+// Data-bit distance 9 from zero, distance 2 from 2047 (boundary marker).
+const NOP_FILLER_PAYLOAD = 1019;
+
 function cellChar(val) {
   const payload = cellToPayload(val);
   const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
+  // Show NOP filler as 'o' to distinguish from true NOP (payload 0)
+  if (opcode === 0 && payload === NOP_FILLER_PAYLOAD) return 'o';
   if (opcode in OPCODE_CHARS) return OPCODE_CHARS[opcode];
   return val.toString(16).padStart(4, '0');
 }
@@ -1158,7 +1166,8 @@ canvas.addEventListener('mousemove', (e) => {
     const ch = cellChar(val);
     const payload = cellToPayload(val);
     const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
-    const name = OPCODE_NAMES[opcode] || (opcode === 0 ? 'NOP' : `op${opcode}`);
+    const name = (opcode === 0 && payload === NOP_FILLER_PAYLOAD) ? 'NOP filler'
+               : OPCODE_NAMES[opcode] || (opcode === 0 ? 'NOP' : `op${opcode}`);
     const { syn, pAll } = hammingSyndrome(val);
     const synStr = syn === 0 && pAll === 0 ? 'ok' : `syn=${syn}${pAll ? '!' : ''}`;
     const bits = val.toString(2).padStart(16, '0');

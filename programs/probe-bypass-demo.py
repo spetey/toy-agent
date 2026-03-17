@@ -101,9 +101,12 @@ OP = OPCODES
 
 # NOP cell value: non-zero valid Hamming codeword, decodes to NOP (opcode 0).
 # Used to fill handler/bypass rows so H2 sees non-zero cells but IP passes through.
-# TODO: upgrade to payload 15 (data-bit dist 4 from zero) once bypass CL cleanup is fixed.
-# Payload 1 has data-bit distance 1 from zero — vulnerable to single-bit edge-test breakage.
-NOP_CELL = hamming_encode(1)  # 0x000f
+# Must be in the [11,6,4] opcode code's correction ball for opcode 0 — i.e.,
+# every single data-bit flip still decodes to NOP. Payload 15 (old value) was
+# NOT in the correction ball: 8/11 data-bit flips produced real opcodes (N,n,e,w).
+# Payload 1019 (cell 0x7ebd) is safe: 0 problems under all 16 single-bit flips,
+# data-bit distance 9 from zero, distance 2 from 2047 (future boundary marker).
+NOP_CELL = hamming_encode(1019)  # 0x7ebd, data-bit dist 9 from zero
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -161,6 +164,7 @@ def build_probe_bypass_gadget(last_row_dir):
     gb.emit('&')     # handler #2 / bounce merge gate
 
     # ── 4. Copy-in + Probe ──
+    copy_in_pos = gb.pos()   # mark for bypass CL-undo count
     gb.emit('m')     # [H0=CWL] ^= [H2] → CWL = remote codeword
 
     # Phase A: overall parity via Y
@@ -267,27 +271,42 @@ def build_probe_bypass_gadget(last_row_dir):
 
     main_ops = gb.ops
 
-    # ── Build bypass ops (executed on row 0 going West) ──
+    # ── Build bypass ops (executed on bypass row going West) ──
     # After probe fires (CL==0, clean cell), state is:
     #   H0 at EV(0), H1 at CWL(2), CL at ROT(8)
-    #   [EV] = 0 (T swapped p_all=0 to EV)
+    #   [EV] = 0 (T swapped p_all=0 to EV, which was rotated overall parity)
     #   [PA] = Phase A junk (bit0 cleared by z)
     #   [CWL] = remote codeword (from copy-in m)
     #   [ROT] = 0 (was p_all=0, now swapped to ROT via T)
+    #   BUT: CL was incremented 15 times by Phase A+B's : ops!
+    #         After T, those 15 increments are in [EV], not CL.
+    #         (T swapped CL↔EV at the probe point.)
     #
     # Bypass must:
-    #   1. Undo T (self-inverse, 0↔0 no-op for clean)
-    #   2. Undo z + head moves (both bit0s are 0, z is no-op)
-    #   3. Zero PA via Z swap to waste (faster than Phase A' uncompute)
-    #   4. Move H0 to CWL, undo copy-in (m)
-    #   5. CL signal (;) for merge gate — ; not :, because value 1
+    #   1. Undo T (self-inverse): puts Phase A+B accumulator back in CL
+    #   2. Undo l l l rotation (no-op for clean, EV=0)
+    #   3. Undo 15 : increments with 15 ; decrements
+    #   4. Undo z + head moves (both bit0s are 0, z is no-op)
+    #   5. Zero PA via Z swap to waste (faster than Phase A' uncompute)
+    #   6. Move H0 to CWL, undo copy-in (m)
+    #   7. CL signal (;) for merge gate — ; not :, because value 1
     #      (from :) has only bit 0 set, which is a parity position
     #      invisible to DATA_MASK.  ; decrements 0→0xFFFF, all bits set.
     # Note: NO H2 advance on bypass — H2 already advanced by A at
     # the beginning of the main code path. Next cycle's A advances H2.
+    #
+    # The 15+1=16 ; ops fit easily: bypass row has ~50 empty NOP cells
+    # between the last bypass op and the exit / at col 2.
+
+    # Count : ops between copy-in and probe to compute undo count
+    n_cl_increments = sum(1 for op in gb.ops[copy_in_pos:probe_branch_idx] if op == ':')
+
     bypass = [
-        'T',       # undo T: [CL=ROT] ↔ [H0=EV], 0↔0 no-op
-        'r', 'r', 'r',  # undo l l l rotation (bit3 → bit0; clean=0, no-op)
+        'T',               # undo T: CL ↔ EV (puts Phase A+B accum back in CL)
+        'r', 'r', 'r',    # undo l l l rotation (bit3 → bit0; clean=0, no-op)
+    ]
+    bypass += [';'] * n_cl_increments  # undo the 15 : increments from Phase A+B
+    bypass += [
         'w',       # H1: CWL(2) → PA(1)
         'z',       # undo z: swap bit0 EV ↔ PA (both 0, no-op)
         'e',       # H1: PA(1) → CWL(2)
@@ -737,9 +756,9 @@ def test_layout_info(width=99):
     bypass_len = len(layout['bypass_ops'])
     last_bypass_col = probe_col - 1 - (bypass_len - 1)
     print(f"    Bypass: cols {probe_col-1}..{last_bypass_col} "
-          f"({bypass_len} ops), exit / at col 1")
+          f"({bypass_len} ops), exit / at col 2")
 
-    ok = last_bypass_col >= 2
+    ok = last_bypass_col >= 3  # must leave col 2 for exit /
     if not ok:
         print(f"    FAIL: bypass extends past col 2 (last op at col {last_bypass_col})")
     return ok

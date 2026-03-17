@@ -109,7 +109,7 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `r` | 40 | [H0] rotate right 1 bit — inverse: `l` |
 | `l` | 41 | [H0] rotate left 1 bit — inverse: `r` |
 | `f` | 42 | if [CL]&1: swap([H0], [H1]) — bit-0 Fredkin |
-| `z` | 43 | swap(bit0 of [H0], bit0 of [GP]) |
+| `z` | 43 | swap(bit0 of [H0], bit0 of [H1]) |
 | `R` | 44 | [H0] rotate right by ([CL]&15) bits — inverse: `L` |
 | `L` | 45 | [H0] rotate left by ([CL]&15) bits — inverse: `R` |
 | `Y` | 46 | [H0] ^= ror([H1], [CL]&15) — fused rotate-XOR, self-inverse |
@@ -396,7 +396,7 @@ range check using existing ops. For now, hardcode sweep ranges.
 - **x -> X rename (v1.6)**: byte-level swap promoted to uppercase `X`.
   Lowercase `x` now means XOR. This frees lowercase letters for bit ops.
 - **Bit-level ops (v1.6)**: `x` (XOR), `r`/`l` (rotate), `f` (bit-0
-  Fredkin), `z` (bit-0 GP swap). Motivated by need for carry detection,
+  Fredkin), `z` (bit-0 H1 swap). Motivated by need for carry detection,
   LEB128 encoding, and future error correction.
 - **GP = garbage pointer**: records "breadcrumbs" for reversibility.
   Loops use `( P ... %` pattern. Nested loops use monotonic GP advance.
