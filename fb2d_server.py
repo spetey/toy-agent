@@ -35,6 +35,19 @@ waste_cleanup_enabled = False
 _step_all_count = 0
 
 
+def _read_state_hint(path, key):
+    """Read a boolean hint (key=1) from a .fb2d state file."""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f'{key}='):
+                    return line.split('=', 1)[1].strip() == '1'
+    except Exception:
+        pass
+    return False
+
+
 def _get_code_rows():
     """Auto-detect code rows from IP positions."""
     sim._save_active()
@@ -201,7 +214,8 @@ def load_file():
     noise_pool.configure(n_code_rows=sim.rows, grid_cols=sim.cols)
     waste_pool.reset()
     _waste_cleanup_log.clear()
-    waste_cleanup_enabled = False
+    # Read waste_cleanup hint from state file (default off)
+    waste_cleanup_enabled = _read_state_hint(path, 'waste_cleanup')
     return jsonify(serialize_state())
 
 
@@ -225,7 +239,7 @@ def reset_state():
     noise_pool.configure(n_code_rows=sim.rows, grid_cols=sim.cols)
     waste_pool.reset()
     _waste_cleanup_log.clear()
-    waste_cleanup_enabled = False
+    waste_cleanup_enabled = _read_state_hint(path, 'waste_cleanup')
     return jsonify(serialize_state())
 
 
