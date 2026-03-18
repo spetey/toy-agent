@@ -226,8 +226,8 @@ opcodes.</p>
 <td>Secondary data head</td>
 </tr>
 <tr>
-<td>H2</td>
-<td>Scan head — programmable head for cross-gadget correction</td>
+<td>IX</td>
+<td>Interoceptor — programmable head for cross-gadget correction</td>
 </tr>
 <tr>
 <td>CL</td>
@@ -235,8 +235,8 @@ opcodes.</p>
 rotation amounts</td>
 </tr>
 <tr>
-<td>GP</td>
-<td>Garbage pointer — breadcrumb trail for reversibility</td>
+<td>EX</td>
+<td>Exteroceptor — breadcrumb trail for reversibility</td>
 </tr>
 </tbody>
 </table>
@@ -371,42 +371,42 @@ X</li>
 <tr>
 <td><code>]</code></td>
 <td>29</td>
-<td>Move GP east</td>
+<td>Move EX east</td>
 </tr>
 <tr>
 <td><code>[</code></td>
 <td>30</td>
-<td>Move GP west</td>
+<td>Move EX west</td>
 </tr>
 <tr>
 <td><code>}</code></td>
 <td>31</td>
-<td>Move GP south</td>
+<td>Move EX south</td>
 </tr>
 <tr>
 <td><code>{</code></td>
 <td>32</td>
-<td>Move GP north</td>
+<td>Move EX north</td>
 </tr>
 <tr>
 <td><code>H</code></td>
 <td>49</td>
-<td>Move H2 north</td>
+<td>Move IX north</td>
 </tr>
 <tr>
 <td><code>h</code></td>
 <td>50</td>
-<td>Move H2 south</td>
+<td>Move IX south</td>
 </tr>
 <tr>
 <td><code>a</code></td>
 <td>51</td>
-<td>Move H2 east</td>
+<td>Move IX east</td>
 </tr>
 <tr>
 <td><code>d</code></td>
 <td>52</td>
-<td>Move H2 west</td>
+<td>Move IX west</td>
 </tr>
 </tbody>
 </table>
@@ -533,7 +533,7 @@ design, the correction gadget uses them to manipulate raw bits.</p>
 <tr>
 <td><code>z</code></td>
 <td>43</td>
-<td>swap(bit 0 of [H0], bit 0 of [GP])</td>
+<td>swap(bit 0 of [H0], bit 0 of [EX])</td>
 <td>self</td>
 </tr>
 <tr>
@@ -579,7 +579,7 @@ logic</li>
 the rotation amount from <code>payload([CL]) &amp; 15</code> (0-15
 positions, suitable for 16-bit cells)</li>
 <li><strong><code>z</code></strong> swaps raw bit 0 of [H0] with raw bit
-0 of [GP] — used to extract single syndrome/parity bits</li>
+0 of [EX] — used to extract single syndrome/parity bits</li>
 </ul>
 <h2 id="gp-garbage-pointer-ops-8-opcodes">GP (Garbage Pointer) Ops (8
 opcodes)</h2>
@@ -602,73 +602,73 @@ opcodes)</h2>
 <tr>
 <td><code>P</code></td>
 <td>27</td>
-<td>payload([GP])++ — leave breadcrumb</td>
+<td>payload([EX])++ — leave breadcrumb</td>
 <td><code>Q</code></td>
 </tr>
 <tr>
 <td><code>Q</code></td>
 <td>28</td>
-<td>payload([GP])– — erase breadcrumb</td>
+<td>payload([EX])– — erase breadcrumb</td>
 <td><code>P</code></td>
 </tr>
 <tr>
 <td><code>K</code></td>
 <td>33</td>
-<td>swap(CL register, GP register) — exchange head positions</td>
+<td>swap(CL register, EX register) — exchange head positions</td>
 <td>self</td>
 </tr>
 <tr>
 <td><code>(</code></td>
 <td>34</td>
-<td><code>\</code> reflect if payload([GP]) != 0</td>
+<td><code>\</code> reflect if payload([EX]) != 0</td>
 <td>—</td>
 </tr>
 <tr>
 <td><code>)</code></td>
 <td>35</td>
-<td><code>\</code> reflect if payload([GP]) == 0</td>
+<td><code>\</code> reflect if payload([EX]) == 0</td>
 <td>—</td>
 </tr>
 <tr>
 <td><code>#</code></td>
 <td>36</td>
-<td><code>/</code> reflect if payload([GP]) == 0</td>
+<td><code>/</code> reflect if payload([EX]) == 0</td>
 <td>—</td>
 </tr>
 <tr>
 <td><code>$</code></td>
 <td>37</td>
-<td><code>/</code> reflect if payload([GP]) != 0</td>
+<td><code>/</code> reflect if payload([EX]) != 0</td>
 <td>—</td>
 </tr>
 <tr>
 <td><code>Z</code></td>
 <td>38</td>
-<td>swap([H0], [GP]) — full 16-bit GP swap</td>
+<td>swap([H0], [EX]) — full 16-bit EX swap</td>
 <td>self</td>
 </tr>
 </tbody>
 </table>
-<p>GP mirrors test <code>payload([GP])</code> (data bits only, ignoring
+<p>EX mirrors test <code>payload([EX])</code> (data bits only, ignoring
 parity).</p>
 <p>The standard loop pattern is <code>( P ... %</code>:</p>
 <ol type="1">
-<li><code>(</code> tests [GP]: if payload != 0, reflect (skip loop
-body). On first entry [GP] is 0, so IP continues into the body.</li>
-<li><code>P</code> increments [GP], leaving a breadcrumb (makes [GP]
+<li><code>(</code> tests [EX]: if payload != 0, reflect (skip loop
+body). On first entry [EX] is 0, so IP continues into the body.</li>
+<li><code>P</code> increments [EX], leaving a breadcrumb (makes [EX]
 nonzero).</li>
 <li>Loop body executes.</li>
 <li><code>%</code> tests [CL]: if payload([CL]) != 0, reflect back
 toward <code>(</code>.</li>
 </ol>
-<p>On re-entry, <code>(</code> sees nonzero [GP] and reflects (exits).
+<p>On re-entry, <code>(</code> sees nonzero [EX] and reflects (exits).
 The reverse path uses <code>Q</code> to erase the breadcrumb, restoring
-[GP] to 0.</p>
-<h2 id="h2-scan-head-ops-4-opcodes">H2 Scan Head Ops (4 opcodes)</h2>
-<p>H2 is a programmable scan head for cross-gadget correction. In the
-dual-gadget architecture, each gadget’s H2 points at the other gadget’s
+[EX] to 0.</p>
+<h2 id="h2-scan-head-ops-4-opcodes">H2 Interoceptor Ops (4 opcodes)</h2>
+<p>IX is a programmable interoceptor for cross-gadget correction. In the
+dual-gadget architecture, each gadget’s IX points at the other gadget’s
 code cells. The copy-down pattern: <code>m</code> copies a remote
-codeword to a local GP cell, correction runs locally, then
+codeword to a local EX cell, correction runs locally, then
 <code>j</code> writes the correction mask back to the remote cell.</p>
 <table>
 <colgroup>
@@ -689,25 +689,25 @@ codeword to a local GP cell, correction runs locally, then
 <tr>
 <td><code>m</code></td>
 <td>53</td>
-<td>[H0] ^= [H2] — raw 16-bit XOR (copy-in / uncompute)</td>
+<td>[H0] ^= [IX] — raw 16-bit XOR (copy-in / uncompute)</td>
 <td>self</td>
 </tr>
 <tr>
 <td><code>M</code></td>
 <td>54</td>
-<td>payload([H0]) -= payload([H2]) (mod 2048, with parity fixup)</td>
+<td>payload([H0]) -= payload([IX]) (mod 2048, with parity fixup)</td>
 <td>—</td>
 </tr>
 <tr>
 <td><code>j</code></td>
 <td>55</td>
-<td>[H2] ^= [H0] — raw 16-bit write-back</td>
+<td>[IX] ^= [H0] — raw 16-bit write-back</td>
 <td>self</td>
 </tr>
 <tr>
 <td><code>V</code></td>
 <td>56</td>
-<td>swap([CL], [H2]) — test bridge (full 16-bit)</td>
+<td>swap([CL], [IX]) — test bridge (full 16-bit)</td>
 <td>self</td>
 </tr>
 </tbody>
@@ -718,21 +718,21 @@ the Hamming invariant (like byte-level arithmetic). <code>V</code> is a
 full 16-bit swap.</p>
 <p>The copy-down pattern for correcting a remote cell:</p>
 <ol type="1">
-<li><code>m</code> — copy remote codeword [H2] into local zero cell via
+<li><code>m</code> — copy remote codeword [IX] into local zero cell via
 XOR</li>
-<li>Run correction logic locally (H0, H1, CL, GP on the GP row)</li>
+<li>Run correction logic locally (H0, H1, CL, EX on the EX row)</li>
 <li><code>M</code> — uncompute local copy (payload subtract zeroes the
 payload, since the remote cell is still the original value)</li>
-<li><code>j</code> — write correction mask back: [H2] ^= [H0]</li>
+<li><code>j</code> — write correction mask back: [IX] ^= [H0]</li>
 </ol>
-<p>Only H2 touches remote rows; all other heads stay local.</p>
+<p>Only IX touches remote rows; all other heads stay local.</p>
 <p><code>V</code> (test bridge) enables boundary detection: swap [CL]
-with [H2] to test a remote cell’s value with conditional mirrors
+with [IX] to test a remote cell’s value with conditional mirrors
 (<code>?</code>/<code>%</code>), then <code>V</code> again to
 restore.</p>
 <h2 id="h2-momentum-ops-3-opcodes">H2 Momentum Ops (3 opcodes)</h2>
-<p>H2 momentum ops give H2 a persistent direction (<code>h2_dir</code>,
-per-IP, defaults to East). This enables serpentine scanning: H2 sweeps
+<p>IX momentum ops give IX a persistent direction (<code>ix_dir</code>,
+per-IP, defaults to East). This enables serpentine scanning: IX sweeps
 east across a row, detects a boundary via <code>V</code>, then retreats,
 moves south, flips direction, and sweeps west — systematic row-by-row
 coverage without coprimality constraints.</p>
@@ -749,30 +749,30 @@ coverage without coprimality constraints.</p>
 <tr>
 <td><code>A</code></td>
 <td>57</td>
-<td>Advance H2 one step in <code>h2_dir</code></td>
+<td>Advance IX one step in <code>ix_dir</code></td>
 <td><code>B</code></td>
 </tr>
 <tr>
 <td><code>B</code></td>
 <td>58</td>
-<td>Retreat H2 one step opposite <code>h2_dir</code></td>
+<td>Retreat IX one step opposite <code>ix_dir</code></td>
 <td><code>A</code></td>
 </tr>
 <tr>
 <td><code>U</code></td>
 <td>59</td>
-<td>Flip <code>h2_dir</code> via XOR 2 (E↔︎W, N↔︎S)</td>
+<td>Flip <code>ix_dir</code> via XOR 2 (E↔︎W, N↔︎S)</td>
 <td>self</td>
 </tr>
 </tbody>
 </table>
 <p>The serpentine boundary detection pattern:</p>
 <ol type="1">
-<li><code>A</code> — advance H2 in current direction</li>
-<li><code>V</code> — swap [CL]↔︎[H2] to test the new cell</li>
+<li><code>A</code> — advance IX in current direction</li>
+<li><code>V</code> — swap [CL]↔︎[IX] to test the new cell</li>
 <li><code>?</code> — if [CL]==0 (zero cell = boundary), redirect to
 handler</li>
-<li><code>V</code> — restore [CL]↔︎[H2]</li>
+<li><code>V</code> — restore [CL]↔︎[IX]</li>
 <li>Handler: <code>V B h U</code> — restore, retreat, move south, flip
 direction</li>
 </ol>
@@ -815,7 +815,7 @@ direction</li>
 <tr>
 <td><code>P</code></td>
 <td><code>Q</code></td>
-<td>GP breadcrumb / erase</td>
+<td>EX breadcrumb / erase</td>
 </tr>
 <tr>
 <td><code>N</code>/<code>S</code></td>
@@ -850,27 +850,27 @@ direction</li>
 <tr>
 <td><code>]</code>/<code>[</code></td>
 <td><code>[</code>/<code>]</code></td>
-<td>GP movement pairs</td>
+<td>EX movement pairs</td>
 </tr>
 <tr>
 <td><code>}</code>/<code>{</code></td>
 <td><code>{</code>/<code>}</code></td>
-<td>GP movement pairs</td>
+<td>EX movement pairs</td>
 </tr>
 <tr>
 <td><code>H</code>/<code>h</code></td>
 <td><code>h</code>/<code>H</code></td>
-<td>H2 movement pairs</td>
+<td>IX movement pairs</td>
 </tr>
 <tr>
 <td><code>a</code>/<code>d</code></td>
 <td><code>d</code>/<code>a</code></td>
-<td>H2 movement pairs</td>
+<td>IX movement pairs</td>
 </tr>
 <tr>
 <td><code>A</code>/<code>B</code></td>
 <td><code>B</code>/<code>A</code></td>
-<td>H2 momentum advance / retreat</td>
+<td>IX momentum advance / retreat</td>
 </tr>
 </tbody>
 </table>

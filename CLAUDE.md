@@ -368,7 +368,7 @@ range check using existing ops. For now, hardcode sweep ranges.
    using copy-down pattern (m/M/j ops via IX).~~ ✓
 5. ~~Add multiple IP support to the simulator.~~ ✓
    Interleaved round-robin: `step_all()` steps each IP in order.
-   Per-IP state: ip_row, ip_col, ip_dir, h0, h1, h2, cl, gp.
+   Per-IP state: ip_row, ip_col, ip_dir, h0, h1, ix, cl, ex.
    Grid is shared. REPL: `ip`, `addip`, `rmip` commands.
 5b. ~~IX vertical momentum (C/D/O) for ping-pong bounded scanning.~~ ✓
     IX ping-pongs between bypass row and last code row (inclusive).
