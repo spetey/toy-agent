@@ -12,7 +12,9 @@ in turn based on brainfuck. (fuckbrain = reversible brainfuck.)
 
 - **Reversible**: every state has a unique predecessor, inferred from the
   current state alone. The simulator can step backward as easily as
-  forward.
+  forward. NOP guards on all data ops prevent self-modification of the
+  IP's instruction cell and head-aliasing edge cases that would break
+  the bijection. See "Reversibility" below.
 - **Valid everywhere**: every cell value is either a known opcode or NOP.
   Any grid state is a valid program. There are no syntax errors. A d_min=4
   opcode encoding ensures single-bit data errors decode to the correct
@@ -21,8 +23,9 @@ in turn based on brainfuck. (fuckbrain = reversible brainfuck.)
   dispatch blocks. See `docs/tc_proof_sketch.md`.
 - **16-bit Hamming-protected cells**: each cell is a 16-bit
   Hamming(16,11) SECDED codeword with 11 data bits and 5 parity bits.
-  The IP reads the payload (data bits) as the opcode. Arithmetic ops
-  automatically maintain the Hamming invariant.
+  Corrects 1-bit errors, detects 2-bit errors. The IP reads the payload
+  (data bits) as the opcode. Arithmetic ops automatically maintain the
+  Hamming invariant.
 - **Self-correcting**: a Hamming correction gadget detects and corrects
   single-bit errors in any cell via the IX copy-down pattern. Two gadgets
   can correct each other's code simultaneously (mutual correction). The
@@ -33,41 +36,50 @@ in turn based on brainfuck. (fuckbrain = reversible brainfuck.)
 
 ## Quick Start
 
+### GUI (recommended)
+
 ```bash
-# Interactive simulator
+pip install flask          # one-time setup
+python3 fb2d_server.py     # starts on http://localhost:5001
+```
+
+1. Load **immunity-gadgets-v3-bypass-w99** from the dropdown
+2. Enable waste cleanup (click the "Waste" button or press `W`)
+3. Enable noise — press `N`, set rate to ~50 flips/1M rounds, seed 42
+4. Press Space to play
+
+Watch: IP0 (red) corrects gadget B's code via IX (blue), IP1 (orange)
+corrects gadget A simultaneously. Clean cells (NOP filler `o`) take the
+bypass shortcut. Dirty cells (yellow = 1-bit error) get full Hamming
+correction. Green cells on the waste row show consumed zeros.
+
+### Tests
+
+```bash
+# Immunity gadgets v3 — probe-bypass dual correction (★ start here)
+python3 programs/immunity-gadgets-v3-bypass.py
+
+# Compiler tests (16 tests: factorial, nested loops, stream I/O, reversal)
+python3 ifbc.py --test-all
+
+# Carry arithmetic demo (multi-byte increment with carry propagation)
+python3 programs/carry-demo.py
+
+# Reversible pool tests (waste cleanup + noise injection)
+python3 test_pools.py
+```
+
+### CLI REPL
+
+```bash
 python3 fb2d.py
 
 # Inside the simulator:
-#   load factorial        — load a program from programs/
-#   run 1000              — run 1000 steps forward
-#   back 1000             — run 1000 steps backward (perfectly reversed)
-#   show                  — display the grid
-#   help                  — full command reference
-
-# Compile an ifb program to fb2d
-python3 ifbc.py programs/factorial.ifb programs/factorial-out.fb2d
-
-# Run compiler tests
-python3 ifbc.py --test-all
-
-# Run probe-bypass demo (★ start here — dual gadgets with fast-path bypass)
-python3 programs/probe-bypass-demo.py --width 99
-
-# Run carry arithmetic demo
-python3 programs/carry-demo.py
-
-# Run serpentine ouroboros demo (dual self-correcting gadgets with IX momentum)
-python3 programs/serpentine-ouroboros-demo.py --width 99
-
-# Run boustrophedon ouroboros demo (dual self-correcting gadgets, diagonal IX)
-python3 programs/boustrophedon-ouroboros-demo.py --width 99
-
-# Run mutual correction demo (two gadgets correcting each other)
-python3 programs/mutual-correction-demo.py
-
-# Run Hamming correction gadget tests
-python3 programs/dual-gadget-demo.py
-python3 programs/hamming-gadget-demo.py
+#   load immunity-gadgets-v3-bypass-w99   — load the main demo
+#   run 1000    — run 1000 steps forward
+#   back 1000   — run 1000 steps backward (perfectly reversed)
+#   show        — display the grid
+#   help        — full command reference
 ```
 
 ## Architecture
@@ -80,14 +92,14 @@ change each IP's direction. Each IP has five independent heads:
 |------|---------|
 | H0 | Primary data head |
 | H1 | Secondary data head |
-| IX | Interoceptor (for cross-gadget correction via copy-down pattern) |
-| CL | Condition latch (used by conditional mirrors and rotation amounts) |
-| EX | Exteroceptor (breadcrumb trail for reversibility) |
+| IX | Interoceptor — scans remote cells for cross-gadget error correction via copy-down pattern |
+| CL | Condition latch — tested by conditional mirrors, also controls rotation amounts |
+| EX | Exteroceptor — the metabolism head. Roams the waste row consuming clean zeros to fuel computation. Also leaves breadcrumb trails that record the execution history for reversibility |
 
 Code and data share the same surface (von Neumann architecture). The
 ISA has 62 opcodes (byte-level arithmetic, bit-level operations, head
-movement, mirrors, garbage-pointer operations, IX scan ops, and IX
-momentum ops for serpentine scanning with vertical ping-pong). See
+movement, mirrors, EX operations, IX scan ops, and IX momentum ops
+for serpentine scanning with vertical ping-pong). See
 [`docs/isa.md`](docs/isa.md) for the full ISA reference.
 
 ### 16-Bit Cells
@@ -107,18 +119,12 @@ Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
   equals the position number (0-15) of the flipped bit, enabling
   direct correction.
 
-#### d_min=4 Opcode Encoding
+#### Error Protection (two layers)
 
-The 62 opcodes are mapped to 11-bit payloads using an [11,6,4] linear
-code with minimum Hamming distance 4 between any pair of codewords.
-This provides two layers of protection:
-
-1. **Nearest-codeword decoding**: each opcode "owns" all payloads within
-   Hamming distance 1 (12 payloads per opcode: 1 center + 11 single-bit
-   neighbors). A single data-bit error executes the *correct* opcode,
-   not NOP. 672 of 2048 payloads decode to valid opcodes.
-2. **Safety guarantee**: 2-bit data errors always decode to NOP
-   (guaranteed by d_min=4). Only 3+ bit errors can cause a wrong opcode.
+| Layer | Code | Corrects | Detects |
+|-------|------|----------|---------|
+| Cell level | Hamming(16,11) SECDED, d_min=3 | 1-bit errors in the 16-bit cell | 2-bit errors |
+| Opcode level | [11,6,4] linear code, d_min=4 | 1 data-bit error in opcode identity | 2 data-bit errors (→ NOP) |
 
 ### Hamming Correction Gadget
 
@@ -135,13 +141,44 @@ Only IX touches remote data; all other heads stay local. This enables
 other's code via IX.
 
 The **probe-bypass** variant adds a fast path: before running the full
-barrel-shifter, a parity probe (`m`, Phase A+B `:` increments, `l l l`
-rotation, EX-conditional `#` branch) tests whether the cell has any
-error at all. Clean cells (overall parity = 0) branch to a bypass row
-that undoes the probe and skips correction entirely. Only dirty cells
-pay the full correction cost.
+barrel-shifter, a parity probe tests whether the cell has any error at
+all. Clean cells (overall parity = 0) branch to a bypass row that undoes
+the probe and skips correction entirely. Only dirty cells pay the full
+correction cost (~65% step savings).
 
 See `docs/barrel-shifter-correction.md` for algorithm details.
+
+### Reversibility
+
+fb2d is reversible: `step_back()` reconstructs the previous state from
+the current state alone, with no history log. It looks behind the IP to
+read the opcode that was just executed, then undoes its effect.
+
+This works only if certain invariants hold. Three classes of NOP guard
+protect them:
+
+- **Head-overlap guards**: when two heads alias the same cell, some
+  operations become non-bijective (e.g., XOR of a cell with itself
+  always gives zero). These ops are NOP when heads alias.
+- **IP-cell write guard** (v1.13): if a data op would write to the grid
+  cell the IP is sitting on, it's NOP. Otherwise it would change the
+  opcode that step_back later reads, causing it to undo the wrong thing.
+- **G value guard** (v1.13): the G opcode (indirect H1 addressing) is
+  NOP when the cell value exceeds the grid size, preventing a lossy
+  modulo clamp.
+
+**Payload arithmetic is bijective on all 65536 cell values** — not just
+valid codewords. The Δp operations (+, -, etc.) extract the raw data
+bits directly from fixed bit positions, not via nearest-codeword
+guessing. The XOR flip pattern changes both data and parity bits
+together, so any error pattern in the parity bits is preserved through
+arithmetic. Forward then backward always restores the original cell
+value, even on corrupted cells with multi-bit errors.
+
+**Multi-IP reversibility**: `step_back_all()` undoes IPs in reverse
+order (last first). Each IP's undo sees the grid state that existed
+right after its forward step, because all later IPs have already been
+undone.
 
 ## Browser GUI
 
@@ -159,33 +196,29 @@ python3 fb2d_server.py
   H0 (cyan), H1 (green), IX (blue), CL (purple), EX (gold)
 - **Syndrome cell coloring**: yellow background = 1-bit error (correctable),
   red = 2-bit error (detected), green = non-zero EX row data (correction
-  breadcrumbs). Makes error correction visually legible in real time.
+  waste). Makes error correction visually legible in real time.
 - **Multi-IP support**: add/remove IPs, per-IP visibility toggles (click
   IP labels in the status bar)
 - **Stepping**: forward/back by 1 step or by batch size, play/pause with
   separate batch and delay controls, reset to step 0
-- **Noise injection** (`N`): Poisson-distributed random bit flips on code
-  rows with configurable rate (errors per sweep), type (any/parity/data),
-  and live stats. Enables testing error correction under realistic noise.
-- **EX cleanup** (`G`): auto-zeros EX rows when the exteroceptor wraps,
-  enabling indefinite correction sweeps without metabolism. A temporary
-  cheat until fuel/compression is implemented.
+- **Noise injection** (`N`): random bit flips on code rows with
+  configurable rate (flips per 1M rounds), type (any/parity/data), seed,
+  and live stats
+- **Waste cleanup** (`W`): reversible waste pool — zeros stomach cells
+  after each round, storing dirty values for step_back. Enables
+  indefinite correction sweeps.
 - **Navigation**: drag to pan, scroll wheel to zoom, fit-to-grid, follow-IP
   modes (center, edge, off)
-- **Cell tooltips**: hover any cell to see its payload (decoded from the
-  16-bit SECDED codeword), Hamming syndrome status, and opcode name
+- **Cell tooltips**: hover any cell to see its payload, Hamming syndrome
+  status, and opcode name
 - **Edit mode** (`E`): click a cell to open the opcode picker (grouped by
   category), drag to select regions, copy/cut/paste/delete, save to file.
   Raw 16-bit values can also be set directly.
 - **Annotations**: right-click a cell to add a note (shown with an orange
   dot); shift+drag to label a rectangular region
 - **Keyboard shortcuts**: arrow keys (step), Shift+arrows (step by batch),
-  Space (play/pause), `R` (reset), `N` (noise), `G` (EX cleanup), `F`
+  Space (play/pause), `R` (reset), `N` (noise), `W` (waste cleanup), `F`
   (fit), `+`/`-` (zoom), `E` (edit mode), `?` (help overlay)
-
-The server wraps the same `FB2DSimulator` used by the CLI REPL, so both
-interfaces operate on the same engine. Load any `.fb2d` file from the
-dropdown to explore it visually.
 
 ## ifb (intermediate fuckbrain)
 
@@ -217,25 +250,22 @@ fb2d.py                          Simulator (interactive REPL, 16-bit cells)
 fb2d_server.py                   Flask server for browser GUI
 fb2d_gui.html                    Browser-based GUI simulator
 ifbc.py                          ifb-to-fb2d compiler
-programs/                        Example programs and analysis scripts
-  probe-bypass-demo.py           Probe-bypass dual gadgets + tests (★ MWE)
-  probe-bypass-w99.fb2d          Loadable state file for probe-bypass demo
-  serpentine-ouroboros-demo.py    Serpentine dual ouroboros with IX momentum (★)
-  boustrophedon-ouroboros-demo.py Diagonal-scan dual ouroboros + tests (★)
-  mutual-correction-demo.py      Two gadgets correcting each other (★)
-  dual-gadget-demo.py            IX copy-down correction gadget + tests
-  hamming-gadget-demo.py         Hamming(16,11) barrel-shifter gadget + tests
-  noise-injection-experiment.py  Programmatic noise resilience testing
-  hamming-distance-d4-search.py  Search for d_min=4 opcode encodings
-  hamming-distance-analysis.py   Analyze code properties and sphere packing
-  cl-ordering-optimize.py        Exhaustive CL adjustment optimization
-  make-hamming16.py              Generate .fb2d files for Hamming demos
-  hamming.py                     Hamming(16,11) encode/decode/inject library
-  carry-demo.py                  Multi-cell carry arithmetic demo
-  *.fb2d                         State files (loadable in simulator)
-  *.ifb                          ifb source files
+pools.py                         Reversible waste pool + noise pool
+test_pools.py                    Pool tests (waste, noise, integration)
+programs/                        Example programs and demos
+  immunity-gadgets-v3-bypass.py      Probe-bypass dual gadgets + tests (★ MWE)
+  immunity-gadgets-v3-bypass-w99.fb2d  Loadable state file for v3 demo
+  immunity-gadgets-v2-serpentine.py   Serpentine dual gadgets with IX momentum
+  immunity-gadgets-v2-serpentine-w99.fb2d
+  immunity-gadget-v1.py              Original mutual correction demo
+  dual-gadget-demo.py               IX copy-down correction gadget + tests
+  hamming-gadget-demo.py             Hamming(16,11) barrel-shifter gadget + tests
+  hamming.py                         Hamming(16,11) encode/decode/inject library
+  carry-demo.py                      Multi-cell carry arithmetic demo
+  factorial.ifb / factorial.fb2d     Factorial (compiled from ifb)
+  fibonacci.ifb / fibonacci.fb2d     Fibonacci (compiled from ifb)
 docs/                            Design documents
-  isa.md                         ISA reference (62 opcodes, v1.12)
+  isa.md                         ISA reference (62 opcodes, v1.13)
   barrel-shifter-correction.md   Barrel-shifter correction algorithm walkthrough
   tc_proof_sketch.md             Turing completeness proof sketch
   nested-loops-notes.md          Nested loop implementation notes
@@ -244,101 +274,34 @@ CLAUDE.md                        Detailed project context for AI assistants
 
 ## Status
 
-This is active research software. The language design is at v1.12
-(62 opcodes). Recent milestones:
+This is active research software. The language design is at v1.13
+(62 opcodes + NOP). Recent milestones:
 
-- **Probe-bypass fast-path correction** (v1.12): the main MWE. Dual
+- **Reversibility NOP guards** (v1.13): IP-cell write guard and G value
+  guard close the remaining reversibility holes. Data ops that would
+  write to the IP's instruction cell are NOP; G is NOP when the cell
+  value exceeds grid size. Confirmed that payload arithmetic was already
+  bijective on all 65536 cell values (corrupted or not).
+- **Probe-bypass fast-path correction**: the main MWE. Dual
   self-correcting gadgets where clean cells skip the full barrel-shifter
-  via a parity probe + EX-conditional branch. NOP filler uses payload
-  1017 (the 64th codeword of the [11,6,4] code), which is immune to
-  both 1-bit AND 2-bit data errors — the most resilient filler possible.
-  Per-gadget layout: code row → handler row → bypass row → stomach
-  (working area) → waste (EX trail). Blank boundary rows separate the
-  two gadgets. Load `probe-bypass-w99` in the GUI.
-- **Serpentine ouroboros with vertical ping-pong** (v1.12): dual
-  self-correcting gadgets with serpentine IX scanning using horizontal
-  momentum (`A`/`B`/`U`) and vertical momentum (`C`/`D`/`O`). IX
-  ping-pongs between the first code row and handler row, covering all
-  code + handler rows without entering stomach/waste. ~864 cycles per
-  full down-up sweep at W=99. Infinite-zeros cheat enables correction
-  at any cycle count; raw reversibility verified to 200 cycles.
-  Load `serpentine-ouroboros-w99` in the GUI.
-- **IX vertical momentum ops** (v1.12): 3 new opcodes — `C` (advance
-  IX in `ix_vdir`), `D` (retreat), `O` (flip N↔S). Enables bounded
-  ping-pong scanning without hardcoded vertical movement.
-- **Boustrophedon ouroboros**: dual self-correcting gadgets with
-  diagonal IX scanning. Each IP's IX scans the other gadget's code
-  in boustrophedon layout, correcting single-bit errors via the
-  barrel-shifter algorithm. All tests pass including random multi-error
-  correction. Load `boustrophedon-ouroboros-w99` in the GUI.
-- **IX horizontal momentum ops** (v1.10): 3 opcodes — `A` (advance IX
-  in persistent direction), `B` (retreat), `U` (flip direction). Enables
-  serpentine scanning without coprimality constraints.
-- **Configurable EX cleanup**: interval-based EX row zeroing (cheat
-  button in the GUI). Infinite-zeros mode zeros waste every step for
-  unbounded correction (not reversible; true reversibility requires
-  a reversible compressor).
-- **Noise resilience demonstrated**: with d_min=4 opcode encoding,
-  nearest-codeword decoding, and EX cleanup, the mutual correction
-  demo sustains indefinitely at 1 random bit-flip per sweep (~325
-  columns). Tested stable for 28+ sweeps.
+  via a parity probe + EX-conditional branch. Per-gadget layout:
+  blank → bypass → handler → code rows → blank → stomach → waste.
+  NOP filler uses payload 1017 (2-bit data-error safe).
+- **Reversible waste cleanup**: WastePool provides virtual infinite
+  clean zeros via LIFO swap. Fully reversible — step_back restores
+  dirty values from the pool.
+- **IX momentum scanning** (v1.10-v1.12): horizontal (`A`/`B`/`U`) and
+  vertical (`C`/`D`/`O`) momentum ops enable serpentine ping-pong
+  scanning without hardcoded movement.
 - **d_min=4 opcode encoding**: [11,6,4] linear code maps all 62 opcodes
   to payloads with minimum Hamming distance 4. Single data-bit errors
   execute the *correct* opcode — not NOP, not a wrong opcode.
-- **Mutual correction**: two identical Hamming gadgets on separate IPs,
-  each correcting the other's code via IX copy-down.
-- **Multi-IP support**: interleaved round-robin execution with independent
-  heads per IP, full reversibility.
-- **16-bit Hamming-protected cells** with automatic parity maintenance.
+- **Multi-IP support**: interleaved round-robin execution with
+  independent heads per IP, full reversibility.
 
-### Key Programs to Explore
-
-| Program | Load in GUI | Description |
-|---------|-------------|-------------|
-| `probe-bypass-w99` | 2 IPs, 14×99 | **Start here.** Probe-bypass dual gadgets — clean cells skip correction via parity probe. NOP filler `o` = payload 1017 (2-bit safe). Enable EX cleanup (`G`), noise (`N`). |
-| `serpentine-ouroboros-w99` | 2 IPs, 14×99 | Serpentine dual ouroboros — row-by-row IX scanning via momentum ops. IX ping-pongs vertically (C/D/O). Set batch to 388, enable EX cleanup (`G`). |
-| `boustrophedon-ouroboros-w99` | 2 IPs, 12×99 | Diagonal-scan dual ouroboros — same mutual correction with diagonal IX pattern. |
-| `mutual-correction-demo` | 2 IPs, 4×325 | Original mutual correction demo. Enable noise (`N`) + EX cleanup (`G`), set batch to 325. |
-| `factorial-03` | 1 IP, 8×64 | Factorial computation (compiled from ifb) |
-
-### Recommended Demo: Probe-Bypass
-
-```bash
-python3 fb2d_server.py
-# Open http://localhost:5001
-# 1. Load "probe-bypass-w99" from the dropdown
-# 2. Press G to enable EX cleanup
-# 3. Press N to enable noise (try 1 error/sweep)
-# 4. Press Space to play
-# Watch: IP0 (red) corrects gadget B's code via IX (blue arrow),
-#        IP1 (orange) corrects gadget A's code simultaneously.
-#        Clean cells (NOP filler 'o') take the bypass row shortcut.
-#        Dirty cells (yellow = 1-bit error) get full barrel-shifter correction.
-```
-
-### Running Tests
-
-```bash
-# Probe-bypass (★ main MWE — fast-path correction with parity probe)
-python3 programs/probe-bypass-demo.py --width 99
-
-# Serpentine ouroboros (IX momentum boundary detection + correction)
-python3 programs/serpentine-ouroboros-demo.py --width 99
-
-# Boustrophedon ouroboros (diagonal IX scan + correction)
-python3 programs/boustrophedon-ouroboros-demo.py --width 99
-
-# All other tests
-python3 programs/dual-gadget-demo.py
-python3 ifbc.py --test-all
-python3 programs/carry-demo.py
-```
-
-Next steps: cross-gadget consultation for double-bit errors (consult the
-partner's clean copy when SECDED detects an uncorrectable error),
-fuel/compression for sustainable zero production (replacing EX cleanup
-cheat), reversible noise injection (multibaker-style deterministic bit
-swaps), adaptive sweep boundaries via IX probe.
+Next steps: cross-gadget consultation for double-bit errors, reversible
+fuel/compression (replacing the EX cleanup cheat), adaptive sweep
+boundaries via IX probe.
 
 ## License
 

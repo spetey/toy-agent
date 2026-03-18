@@ -201,6 +201,52 @@ handler row without ever entering stomach/waste rows.
 - `N`/`S`, `E`/`W`, etc. are inverses (all head movement pairs)
 - `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`, `j`, `V`, `U`, `O` are self-inverse
 
+### Reversibility Invariants and NOP Guards (v1.13)
+
+fb2d claims every state has a unique predecessor, inferred from state
+alone (no history). `step_back()` is purely deductive: it looks behind
+the IP to read the opcode, then undoes it. This works only if the grid
+cell at the IP's previous position still contains the opcode that was
+actually executed. Two classes of NOP guard protect this invariant:
+
+**Head-overlap guards** (pre-v1.13): when two heads alias the same cell,
+some operations become non-bijective (e.g., `[H0] ^= [H1]` with H0==H1
+always gives 0, losing the original value). These are NOP when the
+aliasing occurs:
+- `x`, `.`, `,`, `Y`: NOP when H0 == H1
+- `m`, `M`: NOP when H0 == IX
+- `j`: NOP when IX == H0
+- `F`: NOP when CL == H0 or CL == H1
+- `f`: NOP when CL == H0 or CL == H1
+
+**IP-cell write guard** (v1.13): if a data op writes to the grid cell
+the IP is currently sitting on, it changes the opcode that `step_back()`
+will later read. step_back would then undo the wrong operation. Guard:
+any grid write whose target address == the IP's flat position is NOP.
+This applies to all data ops that modify grid cells (+, -, ., ,, X, F,
+G, T, P, Q, Z, x, r, l, f, z, R, L, Y, :, ;, m, M, j, V). Head
+movement ops and mirrors don't write to the grid, so they need no guard.
+
+**G value guard** (v1.13): `G` (swap H1 register with grid[H0]) is NOP
+when `grid[H0] >= grid_size`. Without this, the modulo clamp
+`h1 % grid_size` loses information, making the swap irreversible.
+
+**Why payload arithmetic is already bijective**: the Δp operations
+(+, -, ., ,, :, ;, P, Q, M) work by extracting data bits directly from
+fixed bit positions (DATA_MASK), NOT by guessing the nearest valid
+codeword. The XOR flip pattern changes both the data bits and the
+matching parity bits. Any error pattern in the parity bits is carried
+through unchanged. This means `+` then `-` always restores the original
+cell value — even on corrupted cells with multi-bit errors. Nearest-
+codeword decoding is only used for opcode dispatch (which instruction
+to execute), never for arithmetic.
+
+**Multi-IP reversibility**: `step_back_all()` undoes IPs in reverse
+order (last IP first). This ensures each IP's undo sees the grid state
+that existed immediately after that IP's forward step — because all
+later IPs have already been undone. The ordering is correct; cross-IP
+head interference does not break reversibility.
+
 ## ifb Language (intermediate fuckbrain)
 
 A Janus-like imperative language that compiles to fb2d:
@@ -386,12 +432,26 @@ range check using existing ops. For now, hardcode sweep ranges.
     reversible: `step_back()` restores dirty values from the pool (LIFO).
     Replaces the old "infinite-zeros cheat" which destroyed breadcrumbs.
     Sweep length: ~864 cycles per full IX down-up sweep at W=99.
-7. **[NEXT]** Cross-gadget consultation for 2+-bit errors: when SECDED
+7. ~~G opcode modulo clamp: NOP when `grid[H0] >= grid_size`.~~ ✓
+   Removes the lossy `h1 % grid_size` clamp. G is now NOP when the cell
+   value is too large to be a valid flat index, preserving reversibility.
+   Same guard in step_back. Only used by ifbc compiler, not immunity gadgets.
+7b. ~~IP-cell write guard: data ops NOP when write target == IP cell.~~ ✓
+   Same principle as existing head-overlap NOP guards (H0==H1 → NOP):
+   writing to the IP's instruction cell destroys info needed by step_back.
+   Guard added to all grid-writing ops in both step() and step_back().
+   Not triggered in normal gadget operation (heads on stomach, IP on code
+   rows), but prevents irreversibility during cascading failures.
+   Note: Δp operations (+, -, ., ,, :, ;, P, Q, M) were confirmed to be
+   already bijective on ALL 65536 cell values because `_CELL_TO_PAYLOAD`
+   extracts raw data bits (not nearest-codeword payloads). The error
+   syndrome is preserved through arithmetic — no fix was needed.
+8. **[NEXT]** Cross-gadget consultation for 2+-bit errors: when SECDED
    detects an uncorrectable error (syndrome≠0, p_all=0), consult the
    partner gadget's corresponding cell. If the partner copy is clean
    (syndrome=0), XOR it in as the correction. Natural extension toward
    replication — consult all cells = spawn a replica.
-8. ~~Probe-bypass parity skip for clean-cell fast path.~~ ✓
+9. ~~Probe-bypass parity skip for clean-cell fast path.~~ ✓
    `programs/probe-bypass-demo.py`. Checks overall parity before full
    correction. Clean cells (syndrome=0) branch to a 28-op bypass row;
    dirty cells get full 358-op Hamming correction. 65% step savings.
@@ -405,19 +465,19 @@ range check using existing ops. For now, hardcode sweep ranges.
    1-bit and 2-bit data-error safe (all decode to NOP). Payload 15 was
    unsafe (8/11 single-bit flips → real opcodes N/n/e/w).
    (e) `z` swaps bit0 of [H0] with [H1], not [EX] (ISA doc corrected).
-9. **[NEXT]** Compression: XOR-of-identical-pairs to replace infinite-
+10. **[NEXT]** Compression: XOR-of-identical-pairs to replace infinite-
    zero reservoir with finite fuel. Two identical cells XOR to zero
    (fuel for EX). Reversible: the non-zero residual is waste.
-10. Reversible noise injection (multibaker-map style): a stored iid
+11. Reversible noise injection (multibaker-map style): a stored iid
     string determines when to swap two random bits on the grid.
     Deterministic at micro-level (reversible), stochastic-looking at
     macro-level. Same mechanism could serve as reversible waste sink.
-11. Non-zero boundary cells: payload 2047 (0xFFFF) as boundary marker.
+12. Non-zero boundary cells: payload 2047 (0xFFFF) as boundary marker.
     Not a valid opcode (NOP). Testable with `+ ? -` (3 ops). Enables
     agents in non-zero soup where zero ≠ empty. Replaces zero-testing
     for adaptive boundary detection.
-12. Adaptive sweep boundaries via IX + boundary cell probe.
-13. Non-zero background: agents metabolize compressible data for energy.
+13. Adaptive sweep boundaries via IX + boundary cell probe.
+14. Non-zero background: agents metabolize compressible data for energy.
 
 ## Design Decisions Log
 
@@ -472,3 +532,13 @@ range check using existing ops. For now, hardcode sweep ranges.
   head that scans for and corrects errors. Both are two-character names
   matching H0, H1, CL convention. The biological metaphor: perception
   (EX) vs interoception (IX). Opcode chars unchanged.
+- **NOP guards for reversibility (v1.13)**: two new guard classes added.
+  (1) IP-cell write guard: data ops that write to the IP's own
+  instruction cell are NOP, preventing step_back from reading a modified
+  opcode. Same principle as existing head-overlap guards. (2) G value
+  guard: G is NOP when grid[H0] ≥ grid_size, removing the lossy modulo
+  clamp. Also confirmed that Δp arithmetic (payload increment etc.) was
+  already bijective on all 65536 cell values — it extracts raw data bits,
+  not nearest-codeword payloads, so error patterns are preserved through
+  arithmetic. The initial suspicion that Δp ops broke on corrupted cells
+  was wrong.

@@ -476,43 +476,52 @@ class FB2DSimulator:
             dirs = {11: DIR_N, 12: DIR_S, 13: DIR_E, 14: DIR_W}
             self.h1 = self._move_head(self.h1, dirs[opcode])
 
+        # ── Write guard: data ops that write to grid[ip_cell] are NOP ──
+        # (Same principle as existing head-overlap NOP guards: writing to
+        # the IP's instruction cell destroys info needed by step_back.)
+
         elif opcode == 15:   # + payload(H0)++ with Δp parity fixup
-            self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
+            if self.h0 != flat_ip:
+                self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
         elif opcode == 16:   # - payload(H0)-- with Δp parity fixup
-            self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
+            if self.h0 != flat_ip:
+                self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
         elif opcode == 17:   # . payload(H0) += payload(H1) with Δp
-            if self.h0 != self.h1:  # NOP under head overlap (non-bijective)
+            if self.h0 != self.h1 and self.h0 != flat_ip:
                 _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
                 _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 18:   # , payload(H0) -= payload(H1) with Δp
-            if self.h0 != self.h1:  # NOP under head overlap (non-bijective)
+            if self.h0 != self.h1 and self.h0 != flat_ip:
                 _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
                 _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 19:   # X swap([H0], [H1])
-            self.grid[self.h0], self.grid[self.h1] = \
-                self.grid[self.h1], self.grid[self.h0]
+            if self.h0 != flat_ip and self.h1 != flat_ip:
+                self.grid[self.h0], self.grid[self.h1] = \
+                    self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 20:   # F Fredkin: if payload(CL)!=0: swap([H0], [H1])
-            if self.cl != self.h0 and self.cl != self.h1:  # NOP under head overlap (non-bijective)
+            if self.cl != self.h0 and self.cl != self.h1 \
+                    and self.h0 != flat_ip and self.h1 != flat_ip:
                 if self.grid[self.cl] & DATA_MASK:
                     self.grid[self.h0], self.grid[self.h1] = \
                         self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 21:   # G swap(H1_register, grid[H0])
-            self.h1, self.grid[self.h0] = self.grid[self.h0], self.h1
-            self.h1 = self.h1 % self.grid_size  # clamp to valid index
+            if self.h0 != flat_ip and self.grid[self.h0] < self.grid_size:
+                self.h1, self.grid[self.h0] = self.grid[self.h0], self.h1
 
         elif opcode == 22:   # T swap(grid[CL], grid[H0])
-            self.grid[self.cl], self.grid[self.h0] = \
-                self.grid[self.h0], self.grid[self.cl]
+            if self.cl != flat_ip and self.h0 != flat_ip:
+                self.grid[self.cl], self.grid[self.h0] = \
+                    self.grid[self.h0], self.grid[self.cl]
 
         elif opcode == 23:   # > CL East
             self.cl = self._move_head(self.cl, DIR_E)
@@ -528,10 +537,12 @@ class FB2DSimulator:
 
         # ── EX (exteroceptor) operations ──
         elif opcode == 27:   # P payload(EX)++ with Δp parity fixup
-            self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
+            if self.ex != flat_ip:
+                self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
 
         elif opcode == 28:   # Q payload(EX)-- with Δp parity fixup
-            self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
+            if self.ex != flat_ip:
+                self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
 
         elif opcode == 29:   # ] EX East
             self.ex = self._move_head(self.ex, DIR_E)
@@ -566,60 +577,69 @@ class FB2DSimulator:
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
         elif opcode == 38:   # Z swap([H0], [EX])
-            self.grid[self.h0], self.grid[self.ex] = \
-                self.grid[self.ex], self.grid[self.h0]
+            if self.h0 != flat_ip and self.ex != flat_ip:
+                self.grid[self.h0], self.grid[self.ex] = \
+                    self.grid[self.ex], self.grid[self.h0]
 
         # ── Bit-level operations (v1.6) ──
         elif opcode == 39:   # x  [H0] ^= [H1]  (XOR, self-inverse)
-            if self.h0 != self.h1:  # NOP under head overlap (non-bijective)
+            if self.h0 != self.h1 and self.h0 != flat_ip:
                 self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
 
         elif opcode == 40:   # r  [H0] rotate right 1 bit (raw 16-bit)
-            v = self.grid[self.h0]
-            self.grid[self.h0] = ((v >> 1) | ((v & 1) << 15)) & CELL_MASK
+            if self.h0 != flat_ip:
+                v = self.grid[self.h0]
+                self.grid[self.h0] = ((v >> 1) | ((v & 1) << 15)) & CELL_MASK
 
         elif opcode == 41:   # l  [H0] rotate left 1 bit (raw 16-bit)
-            v = self.grid[self.h0]
-            self.grid[self.h0] = (((v << 1) & CELL_MASK) | (v >> 15)) & CELL_MASK
+            if self.h0 != flat_ip:
+                v = self.grid[self.h0]
+                self.grid[self.h0] = (((v << 1) & CELL_MASK) | (v >> 15)) & CELL_MASK
 
         elif opcode == 42:   # f  if [CL]&1: swap([H0], [H1])  (bit-0 Fredkin)
-            if self.cl != self.h0 and self.cl != self.h1:  # NOP under head overlap (non-bijective)
+            if self.cl != self.h0 and self.cl != self.h1 \
+                    and self.h0 != flat_ip and self.h1 != flat_ip:
                 if self.grid[self.cl] & 1:
                     self.grid[self.h0], self.grid[self.h1] = \
                         self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 43:   # z  swap bit0 of [H0] with bit0 of [H1] (raw 16-bit)
-            a = self.grid[self.h0]
-            b = self.grid[self.h1]
-            a_bit = a & 1
-            b_bit = b & 1
-            self.grid[self.h0] = (a & 0xFFFE) | b_bit
-            self.grid[self.h1] = (b & 0xFFFE) | a_bit
+            if self.h0 != flat_ip and self.h1 != flat_ip:
+                a = self.grid[self.h0]
+                b = self.grid[self.h1]
+                a_bit = a & 1
+                b_bit = b & 1
+                self.grid[self.h0] = (a & 0xFFFE) | b_bit
+                self.grid[self.h1] = (b & 0xFFFE) | a_bit
 
         elif opcode == 44:   # R  [H0] ror by (payload([CL]) & 15) bits (raw 16-bit)
-            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
-            if n:
-                v = self.grid[self.h0]
-                self.grid[self.h0] = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK
+            if self.h0 != flat_ip:
+                n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
+                if n:
+                    v = self.grid[self.h0]
+                    self.grid[self.h0] = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 45:   # L  [H0] rol by (payload([CL]) & 15) bits (raw 16-bit)
-            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
-            if n:
-                v = self.grid[self.h0]
-                self.grid[self.h0] = ((v << n) & CELL_MASK | (v >> (CELL_BITS - n))) & CELL_MASK
+            if self.h0 != flat_ip:
+                n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
+                if n:
+                    v = self.grid[self.h0]
+                    self.grid[self.h0] = ((v << n) & CELL_MASK | (v >> (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 46:   # Y  [H0] ^= ror([H1], payload([CL]) & 15)  (raw 16-bit, self-inverse)
-            if self.h0 != self.h1:  # NOP under head overlap (non-bijective when n!=0)
+            if self.h0 != self.h1 and self.h0 != flat_ip:
                 n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
                 v = self.grid[self.h1]
                 rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v
                 self.grid[self.h0] = self.grid[self.h0] ^ rotated
 
         elif opcode == 47:   # :  payload(CL)++ with Δp parity fixup
-            self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
+            if self.cl != flat_ip:
+                self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
         elif opcode == 48:   # ;  payload(CL)-- with Δp parity fixup
-            self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
+            if self.cl != flat_ip:
+                self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
         # ── IX (interoceptor) operations (v1.9) ──
         elif opcode in (49, 50, 51, 52):    # IX movement H/h/a/d
@@ -627,23 +647,24 @@ class FB2DSimulator:
             self.ix = self._move_head(self.ix, dirs[opcode])
 
         elif opcode == 53:   # m [H0] ^= [IX]  (raw 16-bit XOR, self-inverse)
-            if self.h0 != self.ix:  # NOP under head overlap (non-bijective)
+            if self.h0 != self.ix and self.h0 != flat_ip:
                 self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.ix]
 
         elif opcode == 54:   # M payload(H0) -= payload(IX) with Δp (uncompute)
-            if self.h0 != self.ix:  # NOP under head overlap (non-bijective)
+            if self.h0 != self.ix and self.h0 != flat_ip:
                 _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
                 _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.ix]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 55:   # j [IX] ^= [H0]  (raw 16-bit write-back, self-inverse)
-            if self.ix != self.h0:  # NOP under head overlap (non-bijective)
+            if self.ix != self.h0 and self.ix != flat_ip:
                 self.grid[self.ix] = self.grid[self.ix] ^ self.grid[self.h0]
 
         elif opcode == 56:   # V swap([CL], [IX])  (test bridge, self-inverse)
-            self.grid[self.cl], self.grid[self.ix] = \
-                self.grid[self.ix], self.grid[self.cl]
+            if self.cl != flat_ip and self.ix != flat_ip:
+                self.grid[self.cl], self.grid[self.ix] = \
+                    self.grid[self.ix], self.grid[self.cl]
 
         # ── IX momentum operations (v1.10) ──
         elif opcode == 57:   # A advance IX in ix_dir
@@ -716,6 +737,7 @@ class FB2DSimulator:
             prev_dir = self.ip_dir
 
         # ── Undo instruction effect ──
+        # (Write guard: same as step() — NOP if write target == prev_flat)
         if opcode in (7, 8, 9, 10):    # H0 was moved, undo
             self.h0 = self._move_head(self.h0, HEAD_MOVE_INVERSE[opcode])
 
@@ -723,42 +745,47 @@ class FB2DSimulator:
             self.h1 = self._move_head(self.h1, HEAD_MOVE_INVERSE[opcode])
 
         elif opcode == 15:   # was ++, undo -- (Δp dec)
-            self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
+            if self.h0 != prev_flat:
+                self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
         elif opcode == 16:   # was --, undo ++ (Δp inc)
-            self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
+            if self.h0 != prev_flat:
+                self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
 
         elif opcode == 17:   # was +=, undo -= (Δp sub)
-            if self.h0 != self.h1:  # NOP under head overlap
+            if self.h0 != self.h1 and self.h0 != prev_flat:
                 _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
                 _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 18:   # was -=, undo += (Δp add)
-            if self.h0 != self.h1:  # NOP under head overlap
+            if self.h0 != self.h1 and self.h0 != prev_flat:
                 _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
                 _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
-        elif opcode == 19:   # x is self-inverse
-            self.grid[self.h0], self.grid[self.h1] = \
-                self.grid[self.h1], self.grid[self.h0]
+        elif opcode == 19:   # X is self-inverse
+            if self.h0 != prev_flat and self.h1 != prev_flat:
+                self.grid[self.h0], self.grid[self.h1] = \
+                    self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 20:   # F is self-inverse (payload test)
-            if self.cl != self.h0 and self.cl != self.h1:  # NOP under head overlap
+            if self.cl != self.h0 and self.cl != self.h1 \
+                    and self.h0 != prev_flat and self.h1 != prev_flat:
                 if self.grid[self.cl] & DATA_MASK:
                     self.grid[self.h0], self.grid[self.h1] = \
                         self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 21:   # G is self-inverse
-            self.h1, self.grid[self.h0] = self.grid[self.h0], self.h1
-            self.h1 = self.h1 % self.grid_size  # clamp to valid index
+            if self.h0 != prev_flat and self.grid[self.h0] < self.grid_size:
+                self.h1, self.grid[self.h0] = self.grid[self.h0], self.h1
 
         elif opcode == 22:   # T is self-inverse
-            self.grid[self.cl], self.grid[self.h0] = \
-                self.grid[self.h0], self.grid[self.cl]
+            if self.cl != prev_flat and self.h0 != prev_flat:
+                self.grid[self.cl], self.grid[self.h0] = \
+                    self.grid[self.h0], self.grid[self.cl]
 
         elif opcode == 23:   # was CL East, undo West
             self.cl = self._move_head(self.cl, DIR_W)
@@ -774,10 +801,12 @@ class FB2DSimulator:
 
         # ── EX (exteroceptor) undo operations ──
         elif opcode == 27:   # P was ++, undo -- (Δp dec)
-            self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
+            if self.ex != prev_flat:
+                self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
 
         elif opcode == 28:   # Q was --, undo ++ (Δp inc)
-            self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
+            if self.ex != prev_flat:
+                self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
 
         elif opcode in (29, 30, 31, 32):  # EX movement, undo
             self.ex = self._move_head(self.ex, HEAD_MOVE_INVERSE[opcode])
@@ -786,83 +815,93 @@ class FB2DSimulator:
             self.cl, self.ex = self.ex, self.cl
 
         elif opcode == 38:   # Z is self-inverse
-            self.grid[self.h0], self.grid[self.ex] = \
-                self.grid[self.ex], self.grid[self.h0]
+            if self.h0 != prev_flat and self.ex != prev_flat:
+                self.grid[self.h0], self.grid[self.ex] = \
+                    self.grid[self.ex], self.grid[self.h0]
 
         # ── Bit-level undo (v1.6) ──
         elif opcode == 39:   # x XOR is self-inverse
-            if self.h0 != self.h1:  # NOP under head overlap
+            if self.h0 != self.h1 and self.h0 != prev_flat:
                 self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h1]
 
         elif opcode == 40:   # r was ror-1, undo with rol-1 (raw 16-bit)
-            v = self.grid[self.h0]
-            self.grid[self.h0] = (((v << 1) & CELL_MASK) | (v >> 15)) & CELL_MASK
+            if self.h0 != prev_flat:
+                v = self.grid[self.h0]
+                self.grid[self.h0] = (((v << 1) & CELL_MASK) | (v >> 15)) & CELL_MASK
 
         elif opcode == 41:   # l was rol-1, undo with ror-1 (raw 16-bit)
-            v = self.grid[self.h0]
-            self.grid[self.h0] = ((v >> 1) | ((v & 1) << 15)) & CELL_MASK
+            if self.h0 != prev_flat:
+                v = self.grid[self.h0]
+                self.grid[self.h0] = ((v >> 1) | ((v & 1) << 15)) & CELL_MASK
 
         elif opcode == 42:   # f bit-0 Fredkin is self-inverse
-            if self.cl != self.h0 and self.cl != self.h1:  # NOP under head overlap
+            if self.cl != self.h0 and self.cl != self.h1 \
+                    and self.h0 != prev_flat and self.h1 != prev_flat:
                 if self.grid[self.cl] & 1:
                     self.grid[self.h0], self.grid[self.h1] = \
                         self.grid[self.h1], self.grid[self.h0]
 
         elif opcode == 43:   # z bit-0 swap is self-inverse (raw 16-bit)
-            a = self.grid[self.h0]
-            b = self.grid[self.h1]
-            a_bit = a & 1
-            b_bit = b & 1
-            self.grid[self.h0] = (a & 0xFFFE) | b_bit
-            self.grid[self.h1] = (b & 0xFFFE) | a_bit
+            if self.h0 != prev_flat and self.h1 != prev_flat:
+                a = self.grid[self.h0]
+                b = self.grid[self.h1]
+                a_bit = a & 1
+                b_bit = b & 1
+                self.grid[self.h0] = (a & 0xFFFE) | b_bit
+                self.grid[self.h1] = (b & 0xFFFE) | a_bit
 
         elif opcode == 44:   # R was ror-by-CL, undo with rol-by-CL (payload 16-bit)
-            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
-            if n:
-                v = self.grid[self.h0]
-                self.grid[self.h0] = ((v << n) & CELL_MASK | (v >> (CELL_BITS - n))) & CELL_MASK
+            if self.h0 != prev_flat:
+                n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
+                if n:
+                    v = self.grid[self.h0]
+                    self.grid[self.h0] = ((v << n) & CELL_MASK | (v >> (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 45:   # L was rol-by-CL, undo with ror-by-CL (payload 16-bit)
-            n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
-            if n:
-                v = self.grid[self.h0]
-                self.grid[self.h0] = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK
+            if self.h0 != prev_flat:
+                n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
+                if n:
+                    v = self.grid[self.h0]
+                    self.grid[self.h0] = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 46:   # Y is self-inverse (payload 16-bit)
-            if self.h0 != self.h1:  # NOP under head overlap
+            if self.h0 != self.h1 and self.h0 != prev_flat:
                 n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
                 v = self.grid[self.h1]
                 rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v
                 self.grid[self.h0] = self.grid[self.h0] ^ rotated
 
         elif opcode == 47:   # : was [CL]++, undo -- (Δp dec)
-            self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
+            if self.cl != prev_flat:
+                self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
         elif opcode == 48:   # ; was [CL]--, undo ++ (Δp inc)
-            self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
+            if self.cl != prev_flat:
+                self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
         # ── IX (interoceptor) undo (v1.9) ──
         elif opcode in (49, 50, 51, 52):    # IX was moved, undo
             self.ix = self._move_head(self.ix, HEAD_MOVE_INVERSE[opcode])
 
         elif opcode == 53:   # m XOR is self-inverse
-            if self.h0 != self.ix:  # NOP under head overlap
+            if self.h0 != self.ix and self.h0 != prev_flat:
                 self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.ix]
 
         elif opcode == 54:   # M was -=, undo += (Δp add)
-            if self.h0 != self.ix:  # NOP under head overlap
+            if self.h0 != self.ix and self.h0 != prev_flat:
                 _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
                 _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.ix]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 55:   # j XOR is self-inverse
-            if self.ix != self.h0:  # NOP under head overlap
+            if self.ix != self.h0 and self.ix != prev_flat:
                 self.grid[self.ix] = self.grid[self.ix] ^ self.grid[self.h0]
 
         elif opcode == 56:   # V swap is self-inverse
-            self.grid[self.cl], self.grid[self.ix] = \
-                self.grid[self.ix], self.grid[self.cl]
+            if self.cl != prev_flat and self.ix != prev_flat:
+                self.grid[self.cl], self.grid[self.ix] = \
+                    self.grid[self.ix], self.grid[self.cl]
 
         # ── IX momentum undo (v1.10) ──
         elif opcode == 57:   # A was advance, undo = retreat
