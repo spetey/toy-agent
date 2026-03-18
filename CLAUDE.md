@@ -23,15 +23,15 @@ based on brainfuck. ("fuckbrain" = reversible brainfuck.)
 fb2d is a 2D reversible esoteric language where:
 - Multiple instruction pointers (IPs) move on a toroidal grid, interleaved
   round-robin (IP0 steps, IP1 steps, IP0, ...). Each IP has independent
-  heads (H0, H1, H2, CL, GP); the grid is shared.
+  heads (H0, H1, IX, CL, EX); the grid is shared.
 - Mirrors (`/`, `\`) and conditional mirrors change IP direction
-- Multiple heads (H0, H1, H2, CL, GP) per IP point into the grid for data access
+- Multiple heads (H0, H1, IX, CL, EX) per IP point into the grid for data access
 - Code and data share the same surface (von Neumann architecture)
 
 ## Notation Convention
 
-- `H0`, `H1`, `H2`, `CL`, `GP` = head *positions* (addresses)
-- `[H0]`, `[H1]`, `[H2]`, `[CL]`, `[GP]` = *values* at those positions
+- `H0`, `H1`, `IX`, `CL`, `EX` = head *positions* (addresses)
+- `[H0]`, `[H1]`, `[IX]`, `[CL]`, `[EX]` = *values* at those positions
 - `H0++` = move head (e.g., East)
 - `[H0]++` = increment cell value
 
@@ -60,7 +60,7 @@ fb2d is a 2D reversible esoteric language where:
 - **`docs/tc_proof_sketch.md`** — Turing completeness proof sketch via
   counter machine simulation using Fredkin dispatch blocks.
 - **`docs/nested-loops-notes.md`** — How nested loops work with monotonic
-  GP consumption ("burning zeroes").
+  EX consumption ("burning zeroes").
 - **`docs/sams-ir-idea.text`** — Sam Eisenstat's instruction register idea
   for resolving ambiguity in the 1D predecessor.
 
@@ -81,7 +81,7 @@ python3 fb2d_server.py
 # Enable noise (seed 42, 50 flips/1M), watch corrections in real-time
 ```
 
-Each gadget's H2 scans the other's code+handler+bypass rows. Clean cells
+Each gadget's IX scans the other's code+handler+bypass rows. Clean cells
 (~95%) take a 28-op bypass; dirty cells get full 358-op Hamming correction.
 Waste cleanup is auto-enabled. NOP filler (payload 1017, shown as `o` in
 GUI) is 2-bit-error safe — the 64th codeword of the [11,6,4] opcode code.
@@ -107,9 +107,9 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 |----|------|---------|
 | `N/S/E/W` | 7-10 | H0 move North/South/East/West |
 | `n/s/e/w` | 11-14 | H1 move North/South/East/West |
-| `H/h/a/d` | 49-52 | H2 move North/South/East/West |
+| `H/h/a/d` | 49-52 | IX move North/South/East/West |
 | `^/v/>/< ` | 25-26,23-24 | CL move N/S/E/W |
-| `{/}/]/[` | 32,31,29,30 | GP move N/S/E/W |
+| `{/}/]/[` | 32,31,29,30 | EX move N/S/E/W |
 
 ### Byte-Level Data
 | Op | Code | Meaning |
@@ -137,55 +137,55 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `:` | 47 | [CL]++ — inverse: `;` |
 | `;` | 48 | [CL]-- — inverse: `:` |
 
-### GP (Garbage Pointer) Ops
+### EX (Exteroceptor) Ops
 | Op | Code | Meaning |
 |----|------|---------|
-| `P` | 27 | [GP]++ — leave breadcrumb |
-| `Q` | 28 | [GP]-- — erase breadcrumb |
-| `(` | 34 | \ reflect if [GP] != 0 |
-| `)` | 35 | \ reflect if [GP] == 0 |
-| `$` | 37 | / reflect if [GP] != 0 |
-| `#` | 36 | / reflect if [GP] == 0 |
+| `P` | 27 | [EX]++ — leave breadcrumb |
+| `Q` | 28 | [EX]-- — erase breadcrumb |
+| `(` | 34 | \ reflect if [EX] != 0 |
+| `)` | 35 | \ reflect if [EX] == 0 |
+| `$` | 37 | / reflect if [EX] != 0 |
+| `#` | 36 | / reflect if [EX] == 0 |
 | `K` | 33 | swap(CL_register, GP_register) |
-| `Z` | 38 | swap([H0], [GP]) — byte-level GP swap |
+| `Z` | 38 | swap([H0], [EX]) — byte-level EX swap |
 
-### H2 (Scan Head) Ops (v1.9)
+### IX (Interoceptor) Ops (v1.9)
 | Op | Code | Meaning |
 |----|------|---------|
-| `m` | 53 | [H0] ^= [H2] — raw 16-bit XOR (self-inverse, copy-in/uncompute) |
-| `M` | 54 | payload(H0) -= payload(H2) — Δp payload subtract |
-| `j` | 55 | [H2] ^= [H0] — write-back (raw 16-bit, self-inverse) |
-| `V` | 56 | swap([CL], [H2]) — test bridge (self-inverse) |
+| `m` | 53 | [H0] ^= [IX] — raw 16-bit XOR (self-inverse, copy-in/uncompute) |
+| `M` | 54 | payload(H0) -= payload(IX) — Δp payload subtract |
+| `j` | 55 | [IX] ^= [H0] — write-back (raw 16-bit, self-inverse) |
+| `V` | 56 | swap([CL], [IX]) — test bridge (self-inverse) |
 
-H2 is a programmable scan head for cross-gadget correction.
-In the dual-gadget architecture, each gadget's H2 points at the
+IX is a programmable interoceptor for cross-gadget correction.
+In the dual-gadget architecture, each gadget's IX points at the
 other gadget's code cells. The copy-down pattern: `m` copies a
-remote codeword to a local GP cell, correction runs locally,
+remote codeword to a local EX cell, correction runs locally,
 then `j` writes the correction mask back to the remote cell.
 
-### H2 Horizontal Momentum Ops (v1.10)
+### IX Horizontal Momentum Ops (v1.10)
 | Op | Code | Meaning |
 |----|------|---------|
-| `A` | 57 | Advance H2 in `h2_dir` — inverse: `B` |
-| `B` | 58 | Retreat H2 opposite `h2_dir` — inverse: `A` |
-| `U` | 59 | Flip `h2_dir` via XOR 2 (E↔W, N↔S) — self-inverse |
+| `A` | 57 | Advance IX in `ix_dir` — inverse: `B` |
+| `B` | 58 | Retreat IX opposite `ix_dir` — inverse: `A` |
+| `U` | 59 | Flip `ix_dir` via XOR 2 (E↔W, N↔S) — self-inverse |
 
-Per-IP field `h2_dir` (defaults to `DIR_E`). Enables serpentine
-scanning: H2 sweeps east, detects boundary via `m T ? T m` (local-only
+Per-IP field `ix_dir` (defaults to `DIR_E`). Enables serpentine
+scanning: IX sweeps east, detects boundary via `m T ? T m` (local-only
 test), retreats (`B`), advances vertically (`C`), flips direction (`U`).
 
-### H2 Vertical Momentum Ops (v1.12)
+### IX Vertical Momentum Ops (v1.12)
 | Op | Code | Meaning |
 |----|------|---------|
-| `C` | 60 | Advance H2 in `h2_vdir` — inverse: `D` |
-| `D` | 61 | Retreat H2 opposite `h2_vdir` — inverse: `C` |
-| `O` | 62 | Flip `h2_vdir` via XOR 2 (N↔S, E↔W) — self-inverse |
+| `C` | 60 | Advance IX in `ix_vdir` — inverse: `D` |
+| `D` | 61 | Retreat IX opposite `ix_vdir` — inverse: `C` |
+| `O` | 62 | Flip `ix_vdir` via XOR 2 (N↔S, E↔W) — self-inverse |
 
-Per-IP field `h2_vdir` (defaults to `DIR_S`). Enables ping-pong
-bounded scanning: after horizontal boundary, `C` advances H2 vertically.
-A vertical boundary test (`m T ? T m` on code row) detects when H2
+Per-IP field `ix_vdir` (defaults to `DIR_S`). Enables ping-pong
+bounded scanning: after horizontal boundary, `C` advances IX vertically.
+A vertical boundary test (`m T ? T m` on code row) detects when IX
 leaves the code+handler area. If boundary: `D O C` (retreat, flip, re-
-advance) bounces H2 back. H2 ping-pongs between first code row and
+advance) bounces IX back. IX ping-pongs between first code row and
 handler row without ever entering stomach/waste rows.
 
 ### Reversibility Pairs
@@ -195,9 +195,9 @@ handler row without ever entering stomach/waste rows.
 - `r` / `l` are inverses
 - `R` / `L` are inverses
 - `:` / `;` are inverses
-- `A` / `B` are inverses (H2 horizontal momentum advance/retreat)
-- `C` / `D` are inverses (H2 vertical momentum advance/retreat)
-- `H`/`h`, `a`/`d` are inverses (H2 head movement)
+- `A` / `B` are inverses (IX horizontal momentum advance/retreat)
+- `C` / `D` are inverses (IX vertical momentum advance/retreat)
+- `H`/`h`, `a`/`d` are inverses (IX head movement)
 - `N`/`S`, `E`/`W`, etc. are inverses (all head movement pairs)
 - `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`, `j`, `V`, `U`, `O` are self-inverse
 
@@ -213,7 +213,7 @@ x -= 1              // subtract constant
 x += y              // add variable
 x -= y              // subtract variable
 swap x y            // byte swap
-zero x              // zero a variable (via GP swap)
+zero x              // zero a variable (via EX swap)
 while x do          // loop while x != 0
     ...
 end
@@ -221,7 +221,7 @@ end
 input 10 13 11      // declare input byte sequence
 read x              // [H0] += [H1] from stream
 advance             // move stream pointer east
-output x            // write to GP trail, zero var
+output x            // write to EX trail, zero var
 ```
 
 ## Current Limitations / Open Problems
@@ -229,9 +229,9 @@ output x            // write to GP trail, zero var
 1. **8-bit cell values**: all arithmetic is mod 256. Variables > 255 wrap.
    This makes the system an LBA, not truly TC.
 
-2. **Unbounded loops**: the GP breadcrumb (`P`) wraps at 256 iterations,
+2. **Unbounded loops**: the EX breadcrumb (`P`) wraps at 256 iterations,
    causing the loop entry check `(` to misfire. Nested loops mitigate this
-   via monotonic GP advance, but single loops are still bounded.
+   via monotonic EX advance, but single loops are still bounded.
 
 3. **Carry arithmetic**: a spatial "carry corridor" pattern demonstrates
    unbounded increment using zero-terminated LE base-256 numbers
@@ -247,7 +247,7 @@ output x            // write to GP trail, zero var
    no halting condition. Loops must be designed so that re-sweeping
    already-corrected data is harmless. The Hamming gadget is a no-op on
    correct codewords (syndrome=0, no correction applied), but the dirty
-   GP trail (PA, SYND cells) from previous passes must not pollute future
+   EX trail (PA, SYND cells) from previous passes must not pollute future
    passes' scratch space. This is the central design constraint for the
    self-correcting sweep architecture.
 
@@ -278,25 +278,25 @@ by noise. The architecture has several layers:
 ### Grid Layout (Probe-Bypass, per gadget)
 
 ```
-Row 0:        BLANK (zeros — top H2 boundary, future -1 border cells)
+Row 0:        BLANK (zeros — top IX boundary, future -1 border cells)
 Row 1:        BYPASS ROW (NOP filler, bypass ops going West)
 Row 2:        HANDLER ROW (NOP filler, boundary handlers going East)
 Rows 3..R+2:  CODE ROWS (boustrophedon, correction gadget)
-Row R+3:      BLANK (zeros — bottom H2 boundary, future -1 border cells)
+Row R+3:      BLANK (zeros — bottom IX boundary, future -1 border cells)
 Row R+4:      STOMACH (working area: 9 fixed cells for H0, H1, CL)
-Row R+5:      WASTE ROW (GP roams East, eats zeros, deposits waste)
+Row R+5:      WASTE ROW (EX roams East, eats zeros, deposits waste)
 ```
 
 Two gadgets (A and B) stacked vertically. Each IP runs its own gadget's
-code; each IP's H2 scans the other gadget's bypass+handler+code rows.
+code; each IP's IX scans the other gadget's bypass+handler+code rows.
 The agent corrects single-bit errors via Hamming(16,11) SECDED.
 Each correction consumes ~2 clean waste cells (PA, signal).
 
 ### Fuel → Zeros → Corrections
 
-- Clean zeros are the fundamental resource. They power GP-based computation.
+- Clean zeros are the fundamental resource. They power EX-based computation.
 - A "compressor" gadget converts compressible fuel into clean zeros.
-- Those zeros are swapped into the GP row ahead of the correction gadget.
+- Those zeros are swapped into the EX row ahead of the correction gadget.
 - A reservoir of pre-made zeros IS already-compressed fuel — same thing.
 - The system is viable as long as zero production rate ≥ consumption rate.
 
@@ -326,30 +326,30 @@ Cells are 16-bit with systematic Hamming(16,11) SECDED:
 - Arithmetic ops (+, -, ., ,, :, ;) preserve the Hamming invariant via
   Δp parity fixup. Bijective on all 65536 values, not just valid codewords.
 
-### H2 Scan Head and Copy-Down Architecture (v1.9)
+### IX Interoceptor and Copy-Down Architecture (v1.9)
 
 For mutual correction, each gadget needs to read/correct the other's
-code. Problem: H0 shuttles between the GP row and the data row 6 times
+code. Problem: H0 shuttles between the EX row and the data row 6 times
 per cycle in the existing gadget — this doesn't scale when the target
 code is on distant rows in a boustrophedon layout.
 
-Solution: **copy-down pattern** using the H2 scan head.
-- H2 is a programmable head that each gadget steers through the other's
+Solution: **copy-down pattern** using the IX interoceptor.
+- IX is a programmable head that each gadget steers through the other's
   code cells (eventually with adaptive boundary detection).
-- `m` copies [H2] to a local GP-row cell (since it's zero).
-- All correction logic runs locally on the GP row (H0, H1, CL, GP).
+- `m` copies [IX] to a local EX-row cell (since it's zero).
+- All correction logic runs locally on the EX row (H0, H1, CL, EX).
 - `M` uncomputes the local copy (before writing back, so remote is still
   original and the subtraction cleanly zeroes).
-- `j` writes the correction mask back: [H2] ^= [H0].
-- `V` enables boundary detection: swap [CL] ↔ [H2] to test remote cells
+- `j` writes the correction mask back: [IX] ^= [H0].
+- `V` enables boundary detection: swap [CL] ↔ [IX] to test remote cells
   with conditional mirrors.
 
-This means only H2 touches remote rows; all other heads stay local.
+This means only IX touches remote rows; all other heads stay local.
 
 ### Adaptive Sweep Boundaries (Future)
 
 Instead of hardcoding which rows each gadget sweeps, detect agent
-boundaries adaptively by testing for N consecutive NOPs. H2 probes ahead,
+boundaries adaptively by testing for N consecutive NOPs. IX probes ahead,
 `V` swaps the cell value into CL for testing with `?`/`%`, then `V`
 restores. Nest N deep for "N consecutive NOPs = boundary."
 
@@ -363,15 +363,15 @@ range check using existing ops. For now, hardcode sweep ranges.
 
 1. ~~Upgrade to 16-bit cells with systematic Hamming(16,11) SECDED.~~ ✓
 2. ~~Build Hamming(16,11) correction gadget (sliding-window).~~ ✓
-3. ~~Add H2 scan head for cross-gadget correction.~~ ✓
+3. ~~Add IX interoceptor for cross-gadget correction.~~ ✓
 4. ~~Two gadgets correcting each other with hardcoded layout,
-   using copy-down pattern (m/M/j ops via H2).~~ ✓
+   using copy-down pattern (m/M/j ops via IX).~~ ✓
 5. ~~Add multiple IP support to the simulator.~~ ✓
    Interleaved round-robin: `step_all()` steps each IP in order.
    Per-IP state: ip_row, ip_col, ip_dir, h0, h1, h2, cl, gp.
    Grid is shared. REPL: `ip`, `addip`, `rmip` commands.
-5b. ~~H2 vertical momentum (C/D/O) for ping-pong bounded scanning.~~ ✓
-    H2 ping-pongs between bypass row and last code row (inclusive).
+5b. ~~IX vertical momentum (C/D/O) for ping-pong bounded scanning.~~ ✓
+    IX ping-pongs between bypass row and last code row (inclusive).
     Blank (zero) rows above bypass and below code serve as boundaries.
     Vertical boundary test (m T ? T m on code row) + bounce handler
     (/ D O ; X \) on handler row. Uses ; (not :) for & merge visibility.
@@ -385,7 +385,7 @@ range check using existing ops. For now, hardcode sweep ranges.
     cleaned every round by swapping dirty cells into the pool. Fully
     reversible: `step_back()` restores dirty values from the pool (LIFO).
     Replaces the old "infinite-zeros cheat" which destroyed breadcrumbs.
-    Sweep length: ~864 cycles per full H2 down-up sweep at W=99.
+    Sweep length: ~864 cycles per full IX down-up sweep at W=99.
 7. **[NEXT]** Cross-gadget consultation for 2+-bit errors: when SECDED
    detects an uncorrectable error (syndrome≠0, p_all=0), consult the
    partner gadget's corresponding cell. If the partner copy is clean
@@ -404,10 +404,10 @@ range check using existing ops. For now, hardcode sweep ranges.
    (d) NOP filler payload 1017: 64th codeword of [11,6,4] code, both
    1-bit and 2-bit data-error safe (all decode to NOP). Payload 15 was
    unsafe (8/11 single-bit flips → real opcodes N/n/e/w).
-   (e) `z` swaps bit0 of [H0] with [H1], not [GP] (ISA doc corrected).
+   (e) `z` swaps bit0 of [H0] with [H1], not [EX] (ISA doc corrected).
 9. **[NEXT]** Compression: XOR-of-identical-pairs to replace infinite-
    zero reservoir with finite fuel. Two identical cells XOR to zero
-   (fuel for GP). Reversible: the non-zero residual is waste.
+   (fuel for EX). Reversible: the non-zero residual is waste.
 10. Reversible noise injection (multibaker-map style): a stored iid
     string determines when to swap two random bits on the grid.
     Deterministic at micro-level (reversible), stochastic-looking at
@@ -416,7 +416,7 @@ range check using existing ops. For now, hardcode sweep ranges.
     Not a valid opcode (NOP). Testable with `+ ? -` (3 ops). Enables
     agents in non-zero soup where zero ≠ empty. Replaces zero-testing
     for adaptive boundary detection.
-12. Adaptive sweep boundaries via H2 + boundary cell probe.
+12. Adaptive sweep boundaries via IX + boundary cell probe.
 13. Non-zero background: agents metabolize compressible data for energy.
 
 ## Design Decisions Log
@@ -426,16 +426,16 @@ range check using existing ops. For now, hardcode sweep ranges.
 - **Bit-level ops (v1.6)**: `x` (XOR), `r`/`l` (rotate), `f` (bit-0
   Fredkin), `z` (bit-0 H1 swap). Motivated by need for carry detection,
   LEB128 encoding, and future error correction.
-- **GP = garbage pointer**: records "breadcrumbs" for reversibility.
-  Loops use `( P ... %` pattern. Nested loops use monotonic GP advance.
+- **EX = exteroceptor**: records "breadcrumbs" for reversibility.
+  Loops use `( P ... %` pattern. Nested loops use monotonic EX advance.
 - **Zero-terminated LE base-256**: the chosen multi-cell integer encoding.
   The zero terminator doubles as a growth digit on carry overflow.
-- **H2 scan head (v1.9)**: programmable head for cross-gadget correction.
+- **IX interoceptor (v1.9)**: programmable head for cross-gadget correction.
   Chosen over auto-boustrophedon head because: (a) on large grids, the
   scanning pattern should be in gadget code, not hardware; (b) agents need
   to detect boundaries adaptively, not assume a fixed sweep topology;
-  (c) programmable H2 + `V` test bridge enables future boundary detection.
-  Key insight: copy-down pattern (`m`/`M`/`j`) means only H2 touches
+  (c) programmable IX + `V` test bridge enables future boundary detection.
+  Key insight: copy-down pattern (`m`/`M`/`j`) means only IX touches
   remote rows, eliminating the H0 shuttle problem entirely.
 - **Nearest-codeword payload decoding**: the d_min=4 opcode encoding
   ([11,6,4] linear code) is now used as an error-CORRECTING code, not
@@ -462,7 +462,7 @@ range check using existing ops. For now, hardcode sweep ranges.
   Hamming correction. Clean cells (95%+) take a short bypass path.
   The bypass must undo all CL increments from Phase A+B (15 `;` ops)
   plus one more `;` for merge-gate signaling. The "stomach" (working
-  area) has 9 fixed cells; GP ("the mouth") roams the waste row.
+  area) has 9 fixed cells; EX ("the mouth") roams the waste row.
 - **Blank boundary rows**: zero-filled rows above bypass and below code
-  serve as H2 vertical boundaries. Future: -1 border cells (payload
+  serve as IX vertical boundaries. Future: -1 border cells (payload
   2047) for adaptive boundary detection in non-zero environments.

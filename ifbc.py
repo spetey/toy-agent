@@ -15,7 +15,7 @@ Grid layout (extends v0.1 with 2 rows per nesting level):
   Row 0: variables (one per column)
   Row 1: level-0 body row (opcodes going West)
   Row 2: level-0 code row (IP goes East; ( P % here)
-  Row 3: GP trail (zeros, GP starts at left end)
+  Row 3: EX trail (zeros, EX starts at left end)
   Row 4: level-1 body row (going West)
   Row 5: level-1 code row (going East; inner ( P % here)
   Row 6: level-2 body row ...
@@ -23,10 +23,10 @@ Grid layout (extends v0.1 with 2 rows per nesting level):
   ...
 
 Nested loop strategy:
-  - Every loop uses ( P ... % with GP breadcrumbs.
-  - GP advances monotonically (] before each inner (, ] on each exit).
-  - Fresh GP cells (value 0) are consumed by P — "burning zeroes."
-  - Outer ( relies on inner P leaving grid[GP]!=0 for re-entry detection.
+  - Every loop uses ( P ... % with EX breadcrumbs.
+  - EX advances monotonically (] before each inner (, ] on each exit).
+  - Fresh EX cells (value 0) are consumed by P — "burning zeroes."
+  - Outer ( relies on inner P leaving grid[EX]!=0 for re-entry detection.
   - Each nesting level uses its own pair of rows for body/code.
   - Transitions between levels use / \\ mirror pairs.
 """
@@ -56,7 +56,7 @@ OPCODE_TO_CHAR = {v: k for k, v in OP.items()}
 
 # Layout constants
 DATA_ROW = 0
-GP_ROW   = 3
+EX_ROW   = 3
 
 def body_row(level):
     """Row for loop body at given nesting level."""
@@ -144,7 +144,7 @@ class Advance:
         return "Advance()"
 
 class OutputVar:
-    """output x — write to GP trail, zero var"""
+    """output x — write to EX trail, zero var"""
     def __init__(self, var):
         self.var = var
     def __repr__(self):
@@ -348,8 +348,8 @@ class Compiler:
             self._compile_stmt(stmt, level=0)
 
         # Determine grid size
-        # Need enough rows for all nesting levels plus GP row
-        min_rows = max(GP_ROW + 1, code_row(self.max_level) + 1)
+        # Need enough rows for all nesting levels plus EX row
+        min_rows = max(EX_ROW + 1, code_row(self.max_level) + 1)
         cols = max(self.max_col + 2, num_vars + 1, 8)
         rows = max(min_rows, 4)
 
@@ -366,7 +366,7 @@ class Compiler:
                 grid_flat[r * cols + c] = val
 
         # Header info
-        gp_flat = GP_ROW * cols + 0
+        ex_flat = EX_ROW * cols + 0
         header = {
             'rows': rows,
             'cols': cols,
@@ -376,7 +376,7 @@ class Compiler:
             'cl': DATA_ROW * cols + 0,
             'h0': DATA_ROW * cols + 0,
             'h1': DATA_ROW * cols + 0,
-            'gp': gp_flat,
+            'ex': ex_flat,
             'step': 0,
         }
 
@@ -573,7 +573,7 @@ class Compiler:
 
         The body executes going West on body_row(level).
         For inner while loops, we:
-          1. Emit ']' to advance GP to a fresh column
+          1. Emit ']' to advance EX to a fresh column
           2. Emit transition opcodes (drop to level+1, run inner loop, return)
           3. The transition is: \\ on body_row to go S, inner code on code_row(level+1),
              / on body_row to return going W.
@@ -594,7 +594,7 @@ class Compiler:
         The IP is going W on body_row(level). To go down:
         - / mirror: W→S. IP goes S to body_row(level)+1 = code_row(level).
           But code_row(level) might have outer loop opcodes. Skip.
-          Keep going S to GP_ROW, then to body_row(level+1)... messy.
+          Keep going S to EX_ROW, then to body_row(level+1)... messy.
 
         Better approach: use the body_row as the lane, and for inner loops,
         drop through empty rows using vertical mirror columns.
@@ -627,17 +627,17 @@ class Compiler:
         The gap between body_row(level) and code_row(level+1) is:
           code_row(level+1) - body_row(level) = (4+level*2) - (1+level*2) = 3
 
-        So there are 2 rows in between: code_row(level) and GP_ROW/body_row(level+1).
+        So there are 2 rows in between: code_row(level) and EX_ROW/body_row(level+1).
 
         Wait, for level=0:
           body_row(0) = 1
           code_row(0) = 2
-          GP_ROW = 3
-          body_row(1) = 3  ← COLLISION with GP_ROW!
+          EX_ROW = 3
+          body_row(1) = 3  ← COLLISION with EX_ROW!
 
-        This is a problem. GP_ROW=3 conflicts with body_row(1)=3.
+        This is a problem. EX_ROW=3 conflicts with body_row(1)=3.
 
-        Fix: put GP_ROW AFTER all the code/body rows, or interleave differently.
+        Fix: put EX_ROW AFTER all the code/body rows, or interleave differently.
 
         New layout strategy:
           Row 0: DATA
@@ -648,12 +648,12 @@ class Compiler:
           ...
           Row 2*max_level+1: deepest body
           Row 2*max_level+2: deepest code
-          Last row: GP trail
+          Last row: EX trail
 
         With this layout:
           body_row(L) = 1 + 2*L
           code_row(L) = 2 + 2*L
-          GP row = dynamically placed after all levels
+          EX row = dynamically placed after all levels
 
         The distance from body_row(level) to code_row(level+1) is:
           code_row(level+1) - body_row(level) = (2 + 2*(level+1)) - (1 + 2*level)
@@ -756,7 +756,7 @@ class Compiler:
                 # ── Compile inner while loop ──
                 # The inner loop will be placed at level+1, starting at
                 # the current code_col. We need to:
-                # 1. Emit ] to advance GP (in the body opcode stream)
+                # 1. Emit ] to advance EX (in the body opcode stream)
                 # 2. Record where the descent happens
                 # 3. Compile the inner loop at level+1
                 # 4. Record where the ascent happens
@@ -766,7 +766,7 @@ class Compiler:
                 # First, canonical reset before the inner loop
                 self._canonical_reset(body_emit)
 
-                # Emit ] in the body stream to advance GP for the inner loop
+                # Emit ] in the body stream to advance EX for the inner loop
                 body_emit(']')
 
                 # Mark descent: this will become a / on the body row
@@ -882,7 +882,7 @@ class Compiler:
             f.write(f"cl={header['cl']}\n")
             f.write(f"h0={header['h0']}\n")
             f.write(f"h1={header['h1']}\n")
-            f.write(f"gp={header['gp']}\n")
+            f.write(f"ex={header['ex']}\n")
             f.write(f"step={header['step']}\n")
             f.write(f"grid={','.join(str(v) for v in grid_flat)}\n")
 
@@ -902,7 +902,7 @@ class CompilerV2:
 
       When % reflects E→N, IP rises to corridor_row where \\ reflects
       N→W. IP goes W to /, which reflects W→S. IP drops back to
-      CODE_ROW where ( catches S→E (GP!=0 on re-entry).
+      CODE_ROW where ( catches S→E (EX!=0 on re-entry).
 
       Deeper corridors are on higher-numbered rows (closer to CODE_ROW),
       so inner loop reflections hit their corridor before reaching outer
@@ -916,7 +916,7 @@ class CompilerV2:
       ...
       Row max_depth: Corridor for deepest level
       Row max_depth+1: CODE_ROW (all code, going E)
-      Row max_depth+2: GP trail
+      Row max_depth+2: EX trail
     """
 
     def __init__(self):
@@ -932,7 +932,7 @@ class CompilerV2:
         self.max_col = 0
         self.max_depth = 0  # max nesting depth of while loops
         self.code_r = 2     # will be set after max_depth is known
-        self.gp_row = 3     # will be set after max_depth is known
+        self.ex_row = 3     # will be set after max_depth is known
 
         # Input data
         self.input_start_col = None
@@ -980,7 +980,7 @@ class CompilerV2:
         self.max_depth = self._max_depth(program.stmts)
         # CODE_ROW is after all corridor rows
         self.code_r = 1 + max(self.max_depth, 1)  # at least row 2
-        self.gp_row = self.code_r + 1
+        self.ex_row = self.code_r + 1
 
         # Pass 2: compile all statements onto CODE_ROW
         cursor = 0
@@ -989,7 +989,7 @@ class CompilerV2:
         # Determine grid size
         input_end = (self.input_start_col + len(self.input_bytes)
                      if self.input_bytes else 0)
-        rows = max(self.gp_row + 1, 4)
+        rows = max(self.ex_row + 1, 4)
         cols = max(self.max_col + 2, num_vars + 1, input_end + 1, 8)
 
         grid_flat = [0] * (rows * cols)
@@ -1001,7 +1001,7 @@ class CompilerV2:
             if 0 <= r < rows and 0 <= c < cols:
                 grid_flat[r * cols + c] = val  # already Hamming-encoded by _emit
 
-        gp_flat = self.gp_row * cols + 0
+        ex_flat = self.ex_row * cols + 0
 
         # H1 initial position: input start if declared, else (0,0)
         if self.input_start_col is not None:
@@ -1018,7 +1018,7 @@ class CompilerV2:
             'cl': DATA_ROW * cols + 0,
             'h0': DATA_ROW * cols + 0,
             'h1': h1_flat,
-            'gp': gp_flat,
+            'ex': ex_flat,
             'step': 0,
         }
 
@@ -1171,8 +1171,8 @@ class CompilerV2:
         elif isinstance(stmt, ZeroVar):
             col = self._var_col(stmt.var)
             self._move_h0_to(DATA_ROW, col, emit_here)
-            emit_here(']')   # advance GP to fresh cell (value 0)
-            emit_here('Z')   # swap(grid[H0], grid[GP]) — zeros the var
+            emit_here(']')   # advance EX to fresh cell (value 0)
+            emit_here('Z')   # swap(grid[H0], grid[EX]) — zeros the var
         elif isinstance(stmt, ReadVar):
             # read x — grid[H0] += grid[H1], reading from stream position
             col = self._var_col(stmt.var)
@@ -1207,12 +1207,12 @@ class CompilerV2:
             else:
                 self.h1 = (self.h1[0], self.h1[1] + 1)
         elif isinstance(stmt, OutputVar):
-            # output x — write variable to GP trail, zeroing it
+            # output x — write variable to EX trail, zeroing it
             # Identical to ZeroVar: ] Z
             col = self._var_col(stmt.var)
             self._move_h0_to(DATA_ROW, col, emit_here)
-            emit_here(']')   # advance GP to fresh cell (value 0)
-            emit_here('Z')   # swap(grid[H0], grid[GP]) — value goes to GP trail
+            emit_here(']')   # advance EX to fresh cell (value 0)
+            emit_here('Z')   # swap(grid[H0], grid[EX]) — value goes to EX trail
         elif isinstance(stmt, While):
             cursor = self._compile_while(stmt, level, cursor)
         else:
@@ -1255,12 +1255,12 @@ class CompilerV2:
           CL is already at var_col on both sides, so zero CL corridor ops.
 
         Flow:
-          First entry: IP going E hits (. GP points to 0, passes through.
+          First entry: IP going E hits (. EX points to 0, passes through.
             P increments. Body executes. CL moves to var_col. % checks.
             If CL!=0, reflects E→N. Rises to corridor \\ at col_R: N→W.
             H0/H1 reset ops execute going W. Hits / at col_L: W→S.
-            Drops to CODE_ROW, hits (: GP!=0, reflects S→E. Re-enters.
-          Exit: %: CL=0, passes E. ] advances GP. Continue E.
+            Drops to CODE_ROW, hits (: EX!=0, reflects S→E. Re-enters.
+          Exit: %: CL=0, passes E. ] advances EX. Continue E.
         """
         var_col = self._var_col(stmt.var)
         code_r = self.code_r
@@ -1286,9 +1286,9 @@ class CompilerV2:
         if has_advance and self.h1_stream is not None:
             self._move_h1_to(*self.h1_stream, emit_here)
 
-        # ── ] to ensure GP is on a fresh zero cell ──
+        # ── ] to ensure EX is on a fresh zero cell ──
         # This is needed because prior code (output, zero) may have left
-        # grid[GP] non-zero. Without this, ( would reflect on first entry.
+        # grid[EX] non-zero. Without this, ( would reflect on first entry.
         emit_here(']')
 
         col_L = cursor  # ( goes here
@@ -1305,11 +1305,11 @@ class CompilerV2:
         for i, s in enumerate(stmt.body):
             if isinstance(s, While):
                 # Inner while — _compile_while emits its own ] before (
-                # to ensure GP is on a fresh zero cell for first entry.
+                # to ensure EX is on a fresh zero cell for first entry.
                 cursor = self._compile_while(s, level + 1, cursor)
-                # After inner loop exit: GP points to the inner loop's
+                # After inner loop exit: EX points to the inner loop's
                 # P-written breadcrumb cell (non-zero). This is exactly
-                # what the outer ( needs on re-entry (grid[GP]!=0).
+                # what the outer ( needs on re-entry (grid[EX]!=0).
             else:
                 cursor = self._compile_one(s, level, cursor)
         self.in_streaming_loop = prev_streaming
@@ -1338,7 +1338,7 @@ class CompilerV2:
 
         # ── % (no ] here — see below) ──
         # The ] after % is NOT emitted here. Instead, the CALLER is
-        # responsible for advancing GP after this loop exits:
+        # responsible for advancing EX after this loop exits:
         # - For inner loops: the outer loop's next ] (before the next
         #   inner while) or the outer %+] handles it.
         # - For the outermost loop: a ] is emitted after % below.
@@ -1412,7 +1412,7 @@ class CompilerV2:
             f.write(f"cl={header['cl']}\n")
             f.write(f"h0={header['h0']}\n")
             f.write(f"h1={header['h1']}\n")
-            f.write(f"gp={header['gp']}\n")
+            f.write(f"ex={header['ex']}\n")
             f.write(f"step={header['step']}\n")
             f.write(f"grid={','.join(str(v) for v in grid_flat)}\n")
 
@@ -1630,7 +1630,7 @@ end
     'delta': {
         'source': """\
 // delta-encode: transforms input bytes to deltas
-// Double-read avoids 'zero' inside loop (which pollutes GP trail).
+// Double-read avoids 'zero' inside loop (which pollutes EX trail).
 var n = 8
 var curr = 0
 var prev = 0
@@ -1657,7 +1657,7 @@ while n do
 end
 """,
         'expected': {'n': 0, 'curr': 0, 'prev': 12, 'delta': 0},
-        # GP trail: first output at col 1, then breadcrumb at col 2,
+        # EX trail: first output at col 1, then breadcrumb at col 2,
         # then pairs (delta, old_prev) at cols 3-4, 5-6, etc.
         # Output deltas are at positions: col 1, 3, 5, 7, 9, 11, 13, 15
         'expected_gp_trail_positions': {
@@ -1707,7 +1707,7 @@ def run_test(name, verbose=False):
     sim.cl = header['cl']
     sim.h0 = header['h0']
     sim.h1 = header['h1']
-    sim.gp = header['gp']
+    sim.ex = header['ex']
     sim.step_count = 0
 
     # Find rightmost code
@@ -1742,20 +1742,20 @@ def run_test(name, verbose=False):
             ok = False
         print(f"  {vname}: expected={exp_val}, got={got} {status}")
 
-    # Check GP trail output at specific positions if expected
+    # Check EX trail output at specific positions if expected
     expected_positions = test.get('expected_gp_trail_positions')
     if expected_positions is not None:
-        gp_row = compiler.gp_row
+        ex_row = compiler.ex_row
         trail_ok = True
         for gp_col, exp_val in sorted(expected_positions.items()):
-            got = cell_to_payload(sim.grid[gp_row * cols + gp_col])
+            got = cell_to_payload(sim.grid[ex_row * cols + gp_col])
             if got != exp_val:
                 trail_ok = False
-                print(f"  GP trail[{gp_col}]: expected={exp_val}, got={got} FAIL")
+                print(f"  EX trail[{gp_col}]: expected={exp_val}, got={got} FAIL")
         if trail_ok:
             # Show just the output values in order
             vals = [expected_positions[k] for k in sorted(expected_positions)]
-            print(f"  GP trail outputs: {vals} ok")
+            print(f"  EX trail outputs: {vals} ok")
         else:
             ok = False
 
@@ -1785,13 +1785,13 @@ def run_test(name, verbose=False):
                 reverse_ok = False
                 print(f"  REVERSE FAIL: input[{i}]: expected={exp_encoded} (enc {exp_byte}), got={got}")
 
-    gp_start = compiler.gp_row * cols
+    gp_start = compiler.ex_row * cols
     gp_clean = all(sim.grid[gp_start + c] == 0 for c in range(cols))
 
     if reverse_ok and gp_clean:
-        print(f"  Reverse: ok (all restored, GP clean)")
+        print(f"  Reverse: ok (all restored, EX clean)")
     elif reverse_ok:
-        print(f"  Reverse: ok (vars restored, GP not fully clean)")
+        print(f"  Reverse: ok (vars restored, EX not fully clean)")
     else:
         print(f"  Reverse: FAIL")
 

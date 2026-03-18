@@ -2,16 +2,16 @@
 """
 dual-gadget-demo.py — Two Hamming(16,11) correction gadgets correcting each other.
 
-Uses the H2 scan head (v1.9) with the copy-down pattern:
-  m: copy remote codeword to local GP cell
+Uses the IX interoceptor (v1.9) with the copy-down pattern:
+  m: copy remote codeword to local EX cell
   M: uncompute local copy
   j: write correction mask back to remote cell
 
-ALL computation happens on the local GP row. Only H2 touches remote data.
+ALL computation happens on the local EX row. Only IX touches remote data.
 
-SLOT LAYOUT (relative to GP cycle-start position):
+SLOT LAYOUT (relative to EX cycle-start position):
 
-  GP row:  [EV]  PA  CWL  S0  S1  S2  S3  SCR  ROT
+  EX row:  [EV]  PA  CWL  S0  S1  S2  S3  SCR  ROT
   offset:    0    1    2    3   4   5   6    7    8
 
   EV  = evidence / waste (dirty after correction)
@@ -21,17 +21,17 @@ SLOT LAYOUT (relative to GP cycle-start position):
   SCR = barrel shifter scratch
   ROT = CL rotation counter
 
-PHASES (same algorithm as hamming-gadget-demo.py, but all on GP row):
+PHASES (same algorithm as hamming-gadget-demo.py, but all on EX row):
 
-  Copy-in:   m                    — [H0] += [H2] (CWL was 0, now = remote CW)
+  Copy-in:   m                    — [H0] += [IX] (CWL was 0, now = remote CW)
   Phase A:   Y parity (H0→PA, H1→CWL)
   Phase B:   z-extract PA.bit0 → EV
   Phase A':  Y-uncompute PA
   Phase C:   Y syndrome (H0 on S0-S3, H1 on CWL)
   Phase D:   Barrel shifter → EV has correction mask
   Phase C':  Y-uncompute S0-S3
-  Uncompute: M                    — [H0] -= [H2] (CWL = 0 again, H2 unchanged)
-  Write-back: j                   — [H2] ^= [H0] (remote gets mask XOR)
+  Uncompute: M                    — [H0] -= [IX] (CWL = 0 again, IX unchanged)
+  Write-back: j                   — [IX] ^= [H0] (remote gets mask XOR)
   Phase F:   z+x cleanup (EV and PA)
   Epilogue:  return heads to CWL
   Advance:   E e ] > a            — all 5 heads east by 1
@@ -50,7 +50,7 @@ OPCHAR = {v: k for k, v in OP.items()}
 
 from hamming import encode, inject_error, decode
 
-# ── Sliding slot offsets (H2 copy-down layout) ──
+# ── Sliding slot offsets (IX copy-down layout) ──
 DSL_EV   = 0   # evidence / waste
 DSL_PA   = 1   # overall parity
 DSL_CWL  = 2   # local copy of remote codeword
@@ -72,17 +72,17 @@ SYNDROME_POSITIONS = [
 ]
 
 # Row assignments for the single-gadget test torus
-REMOTE_ROW = 0   # where H2 scans (test codewords)
+REMOTE_ROW = 0   # where IX scans (test codewords)
 CODE_ROW   = 1   # gadget opcodes (IP walks east)
-GP_ROW     = 2   # scratch cells (all start zero)
+EX_ROW     = 2   # scratch cells (all start zero)
 N_ROWS     = 3
 
 
 class GadgetBuilder:
-    """Build an opcode sequence tracking head positions on GP row.
+    """Build an opcode sequence tracking head positions on EX row.
 
     Identical to hamming-gadget-demo.py GadgetBuilder but with no
-    row tracking needed (everything is on GP row).
+    row tracking needed (everything is on EX row).
     """
 
     def __init__(self, h0_col=DSL_CWL, h1_col=DSL_CWL,
@@ -148,26 +148,26 @@ class GadgetBuilder:
 
 
 def build_h2_correction_gadget():
-    """Build the H2-based sliding-slot Hamming(16,11) correction gadget.
+    """Build the IX-based sliding-slot Hamming(16,11) correction gadget.
 
-    All computation on the GP row. H2 points at remote code to correct.
-    Uses copy-down pattern: m copies [H2] to local CWL, correction runs
+    All computation on the EX row. IX points at remote code to correct.
+    Uses copy-down pattern: m copies [IX] to local CWL, correction runs
     locally, M uncomputes the copy, j writes the correction mask back.
 
     Initial head positions (relative to slot start):
-      H0 = (GP_ROW, CWL=2)   — worker head
-      H1 = (GP_ROW, CWL=2)   — reference head
-      H2 = (REMOTE_ROW, col)  — scan head on remote data
-      CL = (GP_ROW, ROT=8)   — rotation control
-      GP = (GP_ROW, EV=0)    — waste/evidence pointer
+      H0 = (EX_ROW, CWL=2)   — worker head
+      H1 = (EX_ROW, CWL=2)   — reference head
+      IX = (REMOTE_ROW, col)  — interoceptor on remote data
+      CL = (EX_ROW, ROT=8)   — rotation control
+      EX = (EX_ROW, EV=0)    — waste/evidence pointer
 
     Returns: list of opchar strings
     """
     gb = GadgetBuilder()
 
-    # ── Copy-in: m copies [H2] to [H0] at CWL ──
-    # H0 at CWL (=0), H2 at remote codeword.
-    # After: [H0] = payload(remote), H2 unchanged.
+    # ── Copy-in: m copies [IX] to [H0] at CWL ──
+    # H0 at CWL (=0), IX at remote codeword.
+    # After: [H0] = payload(remote), IX unchanged.
     gb.emit('m')
 
     # ── Phase A: Overall parity via Y ──
@@ -243,15 +243,15 @@ def build_h2_correction_gadget():
     gb.set_cl_payload(0)
 
     # ── Uncompute local copy ──
-    # H0 to CWL. m: [H0] ^= [H2] → CWL = cw ^ cw = 0 (XOR self-inverse).
-    # MUST happen before write-back (H2 still has original value).
+    # H0 to CWL. m: [H0] ^= [IX] → CWL = cw ^ cw = 0 (XOR self-inverse).
+    # MUST happen before write-back (IX still has original value).
     gb.move_h0_col(DSL_CWL)         # S0(3) → CWL(2): W×1
-    gb.emit('m')                     # [H0] ^= [H2] → CWL = 0
+    gb.emit('m')                     # [H0] ^= [IX] → CWL = 0
 
     # ── Write correction to remote ──
-    # H0 to EV (the correction mask). j: [H2] ^= [H0].
+    # H0 to EV (the correction mask). j: [IX] ^= [H0].
     gb.move_h0_col(DSL_EV)          # CWL(2) → EV(0): W×2
-    gb.emit('j')                     # [H2] ^= [H0] → remote corrected
+    gb.emit('j')                     # [IX] ^= [H0] → remote corrected
 
     # ── Phase F: Cleanup z+x ──
     # H0 at EV (already), H1 to PA. z+x merges residuals.
@@ -268,9 +268,9 @@ def build_h2_correction_gadget():
     # ── Head advance: all 5 heads east by 1 ──
     gb.emit('E')      # H0 east
     gb.emit('e')      # H1 east
-    gb.emit(']')      # GP east
+    gb.emit(']')      # EX east
     gb.emit('>')      # CL east
-    gb.emit('a')      # H2 east (next remote codeword)
+    gb.emit('a')      # IX east (next remote codeword)
 
     total_ops = gb.pos()
 
@@ -351,17 +351,17 @@ def place_boustrophedon(sim, op_values, left_col, right_col, start_row):
 
 def make_h2_boustrophedon_torus(cases, first_cw_col=2,
                                  grid_width=64, code_left=2, code_right=61):
-    """Build a boustrophedon torus for H2-based correction.
+    """Build a boustrophedon torus for IX-based correction.
 
     Layout:
-      Row 0:       REMOTE — codewords (H2 scans here)
+      Row 0:       REMOTE — codewords (IX scans here)
       Rows 1..R:   CODE   — boustrophedon in cols code_left..code_right
-      Row R+1:     GP     — scratch cells (all zero)
+      Row R+1:     EX     — scratch cells (all zero)
       Col 1:       return corridor (mirrors on first and last code rows)
 
     cases: list of (payload_11bit, error_bit_or_None)
 
-    Returns: (sim, expected_results, cycle_length, gp_start_col)
+    Returns: (sim, expected_results, cycle_length, ex_start_col)
     """
     code_ops = build_h2_correction_gadget()
     op_values = [OP[ch] for ch in code_ops]
@@ -379,14 +379,14 @@ def make_h2_boustrophedon_torus(cases, first_cw_col=2,
 
     first_code_row = 1
     last_code_row = first_code_row + code_rows - 1
-    gp_row = last_code_row + 1
-    n_rows = gp_row + 1
+    ex_row = last_code_row + 1
+    n_rows = ex_row + 1
 
-    # GP layout
-    gp_start_col = first_cw_col - DSL_CWL   # EV at col 0
-    max_gp_col = gp_start_col + n - 1 + DSL_ROT
+    # EX layout
+    ex_start_col = first_cw_col - DSL_CWL   # EV at col 0
+    max_gp_col = ex_start_col + n - 1 + DSL_ROT
     assert max_gp_col < grid_width, (
-        f"Too many codewords ({n}): GP scratch extends to col {max_gp_col}"
+        f"Too many codewords ({n}): EX scratch extends to col {max_gp_col}"
         f" but grid is only {grid_width} wide")
 
     sim = FB2DSimulator(rows=n_rows, cols=grid_width)
@@ -417,26 +417,26 @@ def make_h2_boustrophedon_torus(cases, first_cw_col=2,
     sim.ip_col = code_left
     sim.ip_dir = 1    # East
 
-    sim.h0 = sim._to_flat(gp_row, gp_start_col + DSL_CWL)
-    sim.h1 = sim._to_flat(gp_row, gp_start_col + DSL_CWL)
-    sim.h2 = sim._to_flat(REMOTE_ROW, first_cw_col)
-    sim.cl = sim._to_flat(gp_row, gp_start_col + DSL_ROT)
-    sim.gp = sim._to_flat(gp_row, gp_start_col + DSL_EV)
+    sim.h0 = sim._to_flat(ex_row, ex_start_col + DSL_CWL)
+    sim.h1 = sim._to_flat(ex_row, ex_start_col + DSL_CWL)
+    sim.ix = sim._to_flat(REMOTE_ROW, first_cw_col)
+    sim.cl = sim._to_flat(ex_row, ex_start_col + DSL_ROT)
+    sim.ex = sim._to_flat(ex_row, ex_start_col + DSL_EV)
 
     # Cycle length: rows_used * (code_width + 1)
     code_width = code_right - code_left + 1
     cycle_length = rows_used * (code_width + 1)
 
-    return sim, expected, cycle_length, gp_start_col
+    return sim, expected, cycle_length, ex_start_col
 
 
 def make_h2_test_torus(cases, first_cw_col=2):
-    """Build a linear torus to test H2-based correction.
+    """Build a linear torus to test IX-based correction.
 
     Layout:
-      Row 0: REMOTE — test codewords (H2 scans here)
+      Row 0: REMOTE — test codewords (IX scans here)
       Row 1: CODE   — gadget opcodes (IP goes east, linear)
-      Row 2: GP     — scratch cells (all zero)
+      Row 2: EX     — scratch cells (all zero)
 
     cases: list of (payload_11bit, error_bit_or_None)
 
@@ -448,9 +448,9 @@ def make_h2_test_torus(cases, first_cw_col=2):
     n = len(cases)
 
     # Grid width must fit the code AND the scratch cells
-    # GP scratch extends from first_cw_col - 1 (EV) to first_cw_col - 1 + n + DSL_ROT
-    gp_start_col = first_cw_col - DSL_CWL   # EV at col (first_cw_col - 2)
-    max_scratch_col = gp_start_col + n + DSL_ROT
+    # EX scratch extends from first_cw_col - 1 (EV) to first_cw_col - 1 + n + DSL_ROT
+    ex_start_col = first_cw_col - DSL_CWL   # EV at col (first_cw_col - 2)
+    max_scratch_col = ex_start_col + n + DSL_ROT
     cols = max(n_ops + 2, max_scratch_col + 2, first_cw_col + n + DSL_SLOT_WIDTH)
 
     sim = FB2DSimulator(rows=N_ROWS, cols=cols)
@@ -475,25 +475,25 @@ def make_h2_test_torus(cases, first_cw_col=2):
     sim.ip_col = 0
     sim.ip_dir = 1    # East
 
-    sim.h0 = sim._to_flat(GP_ROW, gp_start_col + DSL_CWL)
-    sim.h1 = sim._to_flat(GP_ROW, gp_start_col + DSL_CWL)
-    sim.h2 = sim._to_flat(REMOTE_ROW, first_cw_col)
-    sim.cl = sim._to_flat(GP_ROW, gp_start_col + DSL_ROT)
-    sim.gp = sim._to_flat(GP_ROW, gp_start_col + DSL_EV)
+    sim.h0 = sim._to_flat(EX_ROW, ex_start_col + DSL_CWL)
+    sim.h1 = sim._to_flat(EX_ROW, ex_start_col + DSL_CWL)
+    sim.ix = sim._to_flat(REMOTE_ROW, first_cw_col)
+    sim.cl = sim._to_flat(EX_ROW, ex_start_col + DSL_ROT)
+    sim.ex = sim._to_flat(EX_ROW, ex_start_col + DSL_EV)
 
     # Cycle length = cols (IP wraps around the torus)
     cycle_length = cols
 
-    return sim, expected, cycle_length, gp_start_col
+    return sim, expected, cycle_length, ex_start_col
 
 
 def run_h2_test(cases, verbose=True, check_reverse=True,
                 make_torus_fn=None):
-    """Test H2-based correction on remote codewords.
+    """Test IX-based correction on remote codewords.
 
     Args:
         make_torus_fn: optional torus builder function(cases, first_cw_col=2)
-            -> (sim, expected, cycle_length, gp_start_col).
+            -> (sim, expected, cycle_length, ex_start_col).
             Defaults to make_h2_test_torus (linear layout).
 
     Returns: bool (all tests passed)
@@ -502,11 +502,11 @@ def run_h2_test(cases, verbose=True, check_reverse=True,
         make_torus_fn = make_h2_test_torus
     n = len(cases)
     first_cw_col = 2
-    sim, expected, cycle_length, gp_start_col = make_torus_fn(
+    sim, expected, cycle_length, ex_start_col = make_torus_fn(
         cases, first_cw_col=first_cw_col)
 
-    # GP row is always the last row (works for both linear and boustrophedon)
-    gp_row = sim.rows - 1
+    # EX row is always the last row (works for both linear and boustrophedon)
+    ex_row = sim.rows - 1
 
     # Run N cycles
     total_steps = n * cycle_length
@@ -528,38 +528,38 @@ def run_h2_test(cases, verbose=True, check_reverse=True,
         all_ok &= ok
 
     # Check head positions
-    final_cw = gp_start_col + DSL_CWL + n
-    final_gp = gp_start_col + DSL_EV + n
-    final_rot = gp_start_col + DSL_ROT + n
+    final_cw = ex_start_col + DSL_CWL + n
+    final_gp = ex_start_col + DSL_EV + n
+    final_rot = ex_start_col + DSL_ROT + n
     final_h2 = first_cw_col + n
 
     heads_ok = True
-    h0_exp = sim._to_flat(gp_row, final_cw)
-    h1_exp = sim._to_flat(gp_row, final_cw)
-    gp_exp = sim._to_flat(gp_row, final_gp)
-    cl_exp = sim._to_flat(gp_row, final_rot)
+    h0_exp = sim._to_flat(ex_row, final_cw)
+    h1_exp = sim._to_flat(ex_row, final_cw)
+    gp_exp = sim._to_flat(ex_row, final_gp)
+    cl_exp = sim._to_flat(ex_row, final_rot)
     h2_exp = sim._to_flat(REMOTE_ROW, final_h2)
 
-    if sim.h0 != h0_exp or sim.h1 != h1_exp or sim.gp != gp_exp \
-            or sim.cl != cl_exp or sim.h2 != h2_exp:
+    if sim.h0 != h0_exp or sim.h1 != h1_exp or sim.ex != gp_exp \
+            or sim.cl != cl_exp or sim.ix != h2_exp:
         heads_ok = False
     if verbose or not heads_ok:
         print(f"    Final heads: H0={sim.h0 % sim.cols} H1={sim.h1 % sim.cols}"
-              f" GP={sim.gp % sim.cols} CL={sim.cl % sim.cols}"
-              f" H2=({sim.h2 // sim.cols},{sim.h2 % sim.cols})"
+              f" EX={sim.ex % sim.cols} CL={sim.cl % sim.cols}"
+              f" IX=({sim.ix // sim.cols},{sim.ix % sim.cols})"
               f" {'ok' if heads_ok else 'FAIL'}")
         if not heads_ok:
             print(f"      Expected: H0={final_cw} H1={final_cw}"
-                  f" GP={final_gp} CL={final_rot}"
-                  f" H2=(0,{final_h2})")
+                  f" EX={final_gp} CL={final_rot}"
+                  f" IX=(0,{final_h2})")
     all_ok &= heads_ok
 
-    # GP dirty trail
+    # EX dirty trail
     if verbose:
         dirty = 0
         for i in range(n):
-            ev_col = gp_start_col + DSL_EV + i
-            if sim.grid[sim._to_flat(gp_row, ev_col)] != 0:
+            ev_col = ex_start_col + DSL_EV + i
+            if sim.grid[sim._to_flat(ex_row, ev_col)] != 0:
                 dirty += 1
         print(f"    Dirty trail: {dirty}/{n} waste cells nonzero")
 
@@ -586,13 +586,13 @@ def run_h2_test(cases, verbose=True, check_reverse=True,
                     print(f"    [REVERSE] CW[{i}]: 0x{result:04x}"
                           f" != expected 0x{orig:04x}")
 
-        # Check GP row clean
+        # Check EX row clean
         for col in range(sim.cols):
-            v = sim.grid[sim._to_flat(gp_row, col)]
+            v = sim.grid[sim._to_flat(ex_row, col)]
             if v != 0:
                 reverse_ok = False
                 if verbose:
-                    print(f"    [REVERSE] GP col {col}: 0x{v:04x} != 0")
+                    print(f"    [REVERSE] EX col {col}: 0x{v:04x} != 0")
                 break
 
         if verbose:
@@ -607,8 +607,8 @@ def run_h2_test(cases, verbose=True, check_reverse=True,
 # ═══════════════════════════════════════════════════════════════════
 
 def test_h2_single_correction():
-    """Test: single codeword corrected via H2."""
-    print("=== H2 single correction ===")
+    """Test: single codeword corrected via IX."""
+    print("=== IX single correction ===")
     # payload=42, flip bit 3
     ok = run_h2_test([(42, 3)])
     print(f"  {'PASS' if ok else 'FAIL'}")
@@ -616,8 +616,8 @@ def test_h2_single_correction():
 
 
 def test_h2_no_error():
-    """Test: no error case (H2 should be no-op)."""
-    print("=== H2 no error ===")
+    """Test: no error case (IX should be no-op)."""
+    print("=== IX no error ===")
     ok = run_h2_test([(42, None)])
     print(f"  {'PASS' if ok else 'FAIL'}")
     return ok
@@ -625,7 +625,7 @@ def test_h2_no_error():
 
 def test_h2_bit0_error():
     """Test: bit-0 error (overall parity bit)."""
-    print("=== H2 bit-0 error ===")
+    print("=== IX bit-0 error ===")
     ok = run_h2_test([(42, 0)])
     print(f"  {'PASS' if ok else 'FAIL'}")
     return ok
@@ -633,7 +633,7 @@ def test_h2_bit0_error():
 
 def test_h2_multiple():
     """Test: multiple codewords with various errors."""
-    print("=== H2 multiple codewords ===")
+    print("=== IX multiple codewords ===")
     cases = [
         (1, 1),      # payload 1, flip bit 1
         (2, 2),      # payload 2, flip bit 2
@@ -649,7 +649,7 @@ def test_h2_multiple():
 
 def test_h2_all_error_positions():
     """Test: every possible single-bit error position (0-15)."""
-    print("=== H2 all 16 error positions ===")
+    print("=== IX all 16 error positions ===")
     cases = [(42, bit) for bit in range(16)]
     ok = run_h2_test(cases, verbose=False)
     if ok:
@@ -663,7 +663,7 @@ def test_h2_all_error_positions():
 
 def test_h2_random():
     """Test: random payloads and error positions."""
-    print("=== H2 random (20 codewords) ===")
+    print("=== IX random (20 codewords) ===")
     random.seed(42)
     cases = []
     for _ in range(20):
@@ -679,8 +679,8 @@ def test_h2_random():
 
 
 def test_h2_boustrophedon():
-    """Test: H2 correction with boustrophedon code layout."""
-    print("=== H2 boustrophedon layout ===")
+    """Test: IX correction with boustrophedon code layout."""
+    print("=== IX boustrophedon layout ===")
     cases = [
         (42, 3),     # standard error
         (100, 7),    # mid-range
@@ -694,7 +694,7 @@ def test_h2_boustrophedon():
 
 def test_h2_boustrophedon_all_positions():
     """Test: all 16 error positions in boustrophedon layout."""
-    print("=== H2 boustrophedon all 16 error positions ===")
+    print("=== IX boustrophedon all 16 error positions ===")
     cases = [(42, bit) for bit in range(16)]
     ok = run_h2_test(cases, verbose=False,
                      make_torus_fn=make_h2_boustrophedon_torus)
@@ -723,9 +723,9 @@ def save_demo(filename=None, payload=42, error_bit=3):
         > show
     """
     cases = [(payload, error_bit)]
-    sim, expected, cycle_length, gp_start_col = make_h2_boustrophedon_torus(
+    sim, expected, cycle_length, ex_start_col = make_h2_boustrophedon_torus(
         cases, first_cw_col=2)
-    gp_row = sim.rows - 1
+    ex_row = sim.rows - 1
 
     if filename is None:
         filename = os.path.join(
@@ -740,17 +740,17 @@ def save_demo(filename=None, payload=42, error_bit=3):
 
     print(f"Saved: {filename}")
     print(f"  Grid: {sim.rows}×{sim.cols}"
-          f" (row 0=REMOTE, rows 1-{gp_row-1}=CODE, row {gp_row}=GP)")
+          f" (row 0=REMOTE, rows 1-{ex_row-1}=CODE, row {ex_row}=EX)")
     print(f"  Codeword: payload={payload} (0x{cw:04x}), error={err_desc}"
           f" → 0x{bad:04x}")
     print(f"  Expected after 1 cycle ({cycle_length} steps): 0x{expected[0]:04x}")
     print(f"  Gadget: {len(build_h2_correction_gadget())} ops")
     print()
-    print(f"  H0,H1 at ({gp_row},{gp_start_col + DSL_CWL})"
-          f" on GP row (local CWL slot)")
-    print(f"  H2 at (0,2) on REMOTE row (corrupted codeword)")
-    print(f"  CL at ({gp_row},{gp_start_col + DSL_ROT}) on GP row (ROT slot)")
-    print(f"  GP at ({gp_row},{gp_start_col + DSL_EV}) on GP row (EV slot)")
+    print(f"  H0,H1 at ({ex_row},{ex_start_col + DSL_CWL})"
+          f" on EX row (local CWL slot)")
+    print(f"  IX at (0,2) on REMOTE row (corrupted codeword)")
+    print(f"  CL at ({ex_row},{ex_start_col + DSL_ROT}) on EX row (ROT slot)")
+    print(f"  EX at ({ex_row},{ex_start_col + DSL_EV}) on EX row (EV slot)")
     print()
     print(f"In the simulator:")
     print(f"  load h2-correction-demo")
@@ -793,7 +793,7 @@ if __name__ == '__main__':
 
     if all_ok:
         print("=" * 60)
-        print("ALL H2 CORRECTION TESTS PASSED")
+        print("ALL IX CORRECTION TESTS PASSED")
         print("=" * 60)
 
         # Also save a demo file

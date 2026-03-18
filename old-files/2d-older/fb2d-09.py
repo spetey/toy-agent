@@ -2,7 +2,7 @@
 """
 F***brain 2D Grid Simulator v1
 Authored or modified by Claude
-Version: 2026-02-14 v1.4 — added # $ (GP-conditional / mirrors)
+Version: 2026-02-14 v1.4 — added # $ (EX-conditional / mirrors)
 
 A 2D reversible programming model where the instruction pointer moves
 on a toroidal grid and bounces off mirrors for control flow.
@@ -19,14 +19,14 @@ State:
   CL                 — control locus (flat index into grid)
   H0                 — data head 0 (flat index)
   H1                 — data head 1 (flat index)
-  GP                 — garbage pointer (flat index) for reversible breadcrumb trails
+  EX                 — exteroceptor (flat index) for reversible breadcrumb trails
 
 Mirror reflection rules (standard optics):
   /  : (dr,dc) → (−dc,−dr)    E→N  N→E  W→S  S→W
   \\  : (dr,dc) → (dc,dr)      E→S  S→E  W→N  N→W
 
 Conditional mirrors reflect OR pass through based on grid[CL].
-GP-conditional mirrors reflect OR pass through based on grid[GP].
+EX-conditional mirrors reflect OR pass through based on grid[EX].
 """
 
 import sys
@@ -75,19 +75,19 @@ OPCODES = {
     '<':  24,  # CL West  (col-1)
     '^':  25,  # CL North (row-1)
     'v':  26,  # CL South (row+1)
-    # Garbage pointer (GP) ops for reversible breadcrumb trails
-    'P':  27,  # grid[GP]++  (leave breadcrumb)
-    'Q':  28,  # grid[GP]--  (erase breadcrumb)
-    ']':  29,  # GP East  (col+1)
-    '[':  30,  # GP West  (col-1)
-    '}':  31,  # GP South (row+1)
-    '{':  32,  # GP North (row-1)
-    # GP-conditional mirrors and CL/GP swap
+    # Exteroceptor (EX) ops for reversible breadcrumb trails
+    'P':  27,  # grid[EX]++  (leave breadcrumb)
+    'Q':  28,  # grid[EX]--  (erase breadcrumb)
+    ']':  29,  # EX East  (col+1)
+    '[':  30,  # EX West  (col-1)
+    '}':  31,  # EX South (row+1)
+    '{':  32,  # EX North (row-1)
+    # EX-conditional mirrors and CL/EX swap
     'K':  33,  # swap(CL_register, GP_register)
-    '(':  34,  # \ reflect if grid[GP] ≠ 0, else pass through
-    ')':  35,  # \ reflect if grid[GP] = 0, else pass through
-    '#':  36,  # / reflect if grid[GP] = 0, else pass through
-    '$':  37,  # / reflect if grid[GP] ≠ 0, else pass through
+    '(':  34,  # \ reflect if grid[EX] ≠ 0, else pass through
+    ')':  35,  # \ reflect if grid[EX] = 0, else pass through
+    '#':  36,  # / reflect if grid[EX] = 0, else pass through
+    '$':  37,  # / reflect if grid[EX] ≠ 0, else pass through
 }
 
 OPCODE_TO_CHAR = {v: k for k, v in OPCODES.items()}
@@ -97,7 +97,7 @@ OPCODE_TO_CHAR[0] = '·'   # NOP displayed as middle dot
 HEAD_MOVE_INVERSE = {
     7: DIR_S, 8: DIR_N, 9: DIR_W, 10: DIR_E,   # H0: N↔S, E↔W
     11: DIR_S, 12: DIR_N, 13: DIR_W, 14: DIR_E,  # H1: N↔S, E↔W
-    29: DIR_W, 30: DIR_E, 31: DIR_N, 32: DIR_S,  # GP: ]↔[, }↔{
+    29: DIR_W, 30: DIR_E, 31: DIR_N, 32: DIR_S,  # EX: ]↔[, }↔{
 }
 
 # ─── ANSI Color Codes ─────────────────────────────────────────────────
@@ -142,7 +142,7 @@ class FB2DSimulator:
         self.h0 = 0
         self.h1 = 0
         self.cl = 0
-        self.gp = 0  # Garbage pointer for breadcrumb trails
+        self.ex = 0  # Exteroceptor for breadcrumb trails
 
         self.step_count = 0
         self.use_color = True
@@ -251,43 +251,43 @@ class FB2DSimulator:
         elif opcode == 26:   # v CL South
             self.cl = self._move_head(self.cl, DIR_S)
 
-        # ── GP (garbage pointer) operations ──
-        elif opcode == 27:   # P grid[GP]++
-            self.grid[self.gp] = (self.grid[self.gp] + 1) & 0xFF
+        # ── EX (exteroceptor) operations ──
+        elif opcode == 27:   # P grid[EX]++
+            self.grid[self.ex] = (self.grid[self.ex] + 1) & 0xFF
 
-        elif opcode == 28:   # Q grid[GP]--
-            self.grid[self.gp] = (self.grid[self.gp] - 1) & 0xFF
+        elif opcode == 28:   # Q grid[EX]--
+            self.grid[self.ex] = (self.grid[self.ex] - 1) & 0xFF
 
-        elif opcode == 29:   # ] GP East
-            self.gp = self._move_head(self.gp, DIR_E)
+        elif opcode == 29:   # ] EX East
+            self.ex = self._move_head(self.ex, DIR_E)
 
-        elif opcode == 30:   # [ GP West
-            self.gp = self._move_head(self.gp, DIR_W)
+        elif opcode == 30:   # [ EX West
+            self.ex = self._move_head(self.ex, DIR_W)
 
-        elif opcode == 31:   # } GP South
-            self.gp = self._move_head(self.gp, DIR_S)
+        elif opcode == 31:   # } EX South
+            self.ex = self._move_head(self.ex, DIR_S)
 
-        elif opcode == 32:   # { GP North
-            self.gp = self._move_head(self.gp, DIR_N)
+        elif opcode == 32:   # { EX North
+            self.ex = self._move_head(self.ex, DIR_N)
 
-        # ── GP-conditional mirrors and CL/GP swap ──
+        # ── EX-conditional mirrors and CL/EX swap ──
         elif opcode == 33:   # K swap(CL_register, GP_register)
-            self.cl, self.gp = self.gp, self.cl
+            self.cl, self.ex = self.ex, self.cl
 
-        elif opcode == 34:   # ( \ reflect if grid[GP] ≠ 0
-            if self.grid[self.gp] != 0:
+        elif opcode == 34:   # ( \ reflect if grid[EX] ≠ 0
+            if self.grid[self.ex] != 0:
                 self.ip_dir = BACKSLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 35:   # ) \ reflect if grid[GP] = 0
-            if self.grid[self.gp] == 0:
+        elif opcode == 35:   # ) \ reflect if grid[EX] = 0
+            if self.grid[self.ex] == 0:
                 self.ip_dir = BACKSLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 36:   # # / reflect if grid[GP] = 0
-            if self.grid[self.gp] == 0:
+        elif opcode == 36:   # # / reflect if grid[EX] = 0
+            if self.grid[self.ex] == 0:
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 37:   # $ / reflect if grid[GP] ≠ 0
-            if self.grid[self.gp] != 0:
+        elif opcode == 37:   # $ / reflect if grid[EX] ≠ 0
+            if self.grid[self.ex] != 0:
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
         # else: NOP (0 or 38–255)
@@ -329,13 +329,13 @@ class FB2DSimulator:
             cond = (self.grid[self.cl] != 0) if opcode == 5 else \
                    (self.grid[self.cl] == 0)
             prev_dir = BACKSLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
-        elif opcode in (34, 35):  # conditional \ mirrors on grid[GP]
-            cond = (self.grid[self.gp] != 0) if opcode == 34 else \
-                   (self.grid[self.gp] == 0)
+        elif opcode in (34, 35):  # conditional \ mirrors on grid[EX]
+            cond = (self.grid[self.ex] != 0) if opcode == 34 else \
+                   (self.grid[self.ex] == 0)
             prev_dir = BACKSLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
-        elif opcode in (36, 37):  # conditional / mirrors on grid[GP]
-            cond = (self.grid[self.gp] == 0) if opcode == 36 else \
-                   (self.grid[self.gp] != 0)
+        elif opcode in (36, 37):  # conditional / mirrors on grid[EX]
+            cond = (self.grid[self.ex] == 0) if opcode == 36 else \
+                   (self.grid[self.ex] != 0)
             prev_dir = SLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
         else:
             prev_dir = self.ip_dir
@@ -387,18 +387,18 @@ class FB2DSimulator:
         elif opcode == 26:   # was CL South, undo North
             self.cl = self._move_head(self.cl, DIR_N)
 
-        # ── GP (garbage pointer) undo operations ──
+        # ── EX (exteroceptor) undo operations ──
         elif opcode == 27:   # P was ++, undo --
-            self.grid[self.gp] = (self.grid[self.gp] - 1) & 0xFF
+            self.grid[self.ex] = (self.grid[self.ex] - 1) & 0xFF
 
         elif opcode == 28:   # Q was --, undo ++
-            self.grid[self.gp] = (self.grid[self.gp] + 1) & 0xFF
+            self.grid[self.ex] = (self.grid[self.ex] + 1) & 0xFF
 
-        elif opcode in (29, 30, 31, 32):  # GP movement, undo
-            self.gp = self._move_head(self.gp, HEAD_MOVE_INVERSE[opcode])
+        elif opcode in (29, 30, 31, 32):  # EX movement, undo
+            self.ex = self._move_head(self.ex, HEAD_MOVE_INVERSE[opcode])
 
         elif opcode == 33:   # K is self-inverse
-            self.cl, self.gp = self.gp, self.cl
+            self.cl, self.ex = self.ex, self.cl
 
         # Mirrors (incl 34–37) and NOP: no data effect to undo (direction handled above)
 
@@ -426,7 +426,7 @@ class FB2DSimulator:
         self.h0 = 0
         self.h1 = 0
         self.cl = 0
-        self.gp = 0
+        self.ex = 0
         self.step_count = 0
 
         count = 0
@@ -476,7 +476,7 @@ class FB2DSimulator:
         cl_r, cl_c = self._to_rc(self.cl)
         h0_r, h0_c = self._to_rc(self.h0)
         h1_r, h1_c = self._to_rc(self.h1)
-        gp_r, gp_c = self._to_rc(self.gp)
+        ex_r, ex_c = self._to_rc(self.ex)
 
         # Header
         print(f"\n{'═' * 70}")
@@ -485,7 +485,7 @@ class FB2DSimulator:
               f"CL={self.cl}({cl_r},{cl_c})  "
               f"H0={self.h0}({h0_r},{h0_c})  "
               f"H1={self.h1}({h1_r},{h1_c})  "
-              f"GP={self.gp}({gp_r},{gp_c})")
+              f"EX={self.ex}({ex_r},{ex_c})")
         print(f"{'═' * 70}")
 
         # Column headers
@@ -507,7 +507,7 @@ class FB2DSimulator:
                 is_cl = (flat == self.cl)
                 is_h0 = (flat == self.h0)
                 is_h1 = (flat == self.h1)
-                is_gp = (flat == self.gp)
+                is_ex = (flat == self.ex)
                 is_sel = (self.selection is not None and
                           self.selection[0] <= r <= self.selection[2] and
                           self.selection[1] <= c <= self.selection[3])
@@ -516,13 +516,13 @@ class FB2DSimulator:
                 if is_ip:
                     display = dir_arrow
                     cell = self._color(f" {display} ", 'bold', 'red')
-                elif is_gp and is_cl and is_h0:
+                elif is_ex and is_cl and is_h0:
                     cell = self._color(f"⟨{ch}⟩", 'bold', 'yellow')
-                elif is_gp and is_cl:
+                elif is_ex and is_cl:
                     cell = self._color(f"⟨{ch}⟩", 'magenta')
-                elif is_gp and is_h0:
+                elif is_ex and is_h0:
                     cell = self._color(f"⟨{ch}⟩", 'cyan')
-                elif is_gp:
+                elif is_ex:
                     if val == 0:
                         cell = self._color(f" ○ ", 'yellow')
                     else:
@@ -568,19 +568,19 @@ class FB2DSimulator:
                   f"{self._color('CL', 'magenta')}  "
                   f"{self._color('H0', 'cyan')}  "
                   f"{self._color('H1', 'green')}  "
-                  f"{self._color('GP', 'yellow')}")
+                  f"{self._color('EX', 'yellow')}")
 
     def display_values(self):
         """Display raw byte values in a grid."""
         cl_r, cl_c = self._to_rc(self.cl)
         h0_r, h0_c = self._to_rc(self.h0)
         h1_r, h1_c = self._to_rc(self.h1)
-        gp_r, gp_c = self._to_rc(self.gp)
+        ex_r, ex_c = self._to_rc(self.ex)
 
         print(f"\n{'─' * 70}")
         print(f"  Values (decimal)   "
               f"IP=({self.ip_row},{self.ip_col})  "
-              f"CL={self.cl}  H0={self.h0}  H1={self.h1}  GP={self.gp}")
+              f"CL={self.cl}  H0={self.h0}  H1={self.h1}  EX={self.ex}")
         print(f"{'─' * 70}")
 
         # Column headers
@@ -617,7 +617,7 @@ class FB2DSimulator:
             f.write(f"rows={self.rows}\ncols={self.cols}\n")
             f.write(f"ip_row={self.ip_row}\nip_col={self.ip_col}\n")
             f.write(f"ip_dir={self.ip_dir}\n")
-            f.write(f"cl={self.cl}\nh0={self.h0}\nh1={self.h1}\ngp={self.gp}\n")
+            f.write(f"cl={self.cl}\nh0={self.h0}\nh1={self.h1}\ngp={self.ex}\n")
             f.write(f"step={self.step_count}\n")
             f.write(f"grid={','.join(str(v) for v in self.grid)}\n")
 
@@ -643,8 +643,8 @@ class FB2DSimulator:
                         self.h0 = int(v)
                     elif k == 'h1':
                         self.h1 = int(v)
-                    elif k == 'gp':
-                        self.gp = int(v)
+                    elif k == 'ex':
+                        self.ex = int(v)
                     elif k == 'step':
                         self.step_count = int(v)
                     elif k == 'grid':
@@ -723,7 +723,7 @@ def load_example(sim, name):
         #           \ at bot-left, / at bot-right
         sim.grid = [0] * sim.grid_size
         sim.ip_row, sim.ip_col, sim.ip_dir = 0, 1, DIR_E
-        sim.cl, sim.h0, sim.h1, sim.gp = 0, 0, 0, 0
+        sim.cl, sim.h0, sim.h1, sim.ex = 0, 0, 0, 0
         sim.step_count = 0
         # Top row corners
         sim.grid[sim._to_flat(0, 0)] = OPCODES['/']
@@ -760,7 +760,7 @@ def load_example(sim, name):
         sim.cl = counter_pos
         sim.h0 = counter_pos
         sim.h1 = 0
-        sim.gp = 0
+        sim.ex = 0
         print("Loaded 'loop': decrement loop, counter=5 at (7,0)")
         print("  /-·····\\    IP starts at (1,0)↑N")
         print("  ········    CL=H0=(7,0) [counter=5]")
@@ -781,7 +781,7 @@ def load_example(sim, name):
         sim.grid[sim._to_flat(2, 3)] = OPCODES['\\']
         sim.grid[sim._to_flat(2, 6)] = OPCODES['/']
         sim.ip_row, sim.ip_col, sim.ip_dir = 0, 0, DIR_E
-        sim.cl, sim.h0, sim.h1, sim.gp = 0, 0, 0, 0
+        sim.cl, sim.h0, sim.h1, sim.ex = 0, 0, 0, 0
         print("Loaded 'mirrors': zigzag path through 3 mirrors")
         print("  ···\\····    E→S at (0,3)")
         print("  ········")
@@ -823,7 +823,7 @@ def load_example(sim, name):
         sim.cl = cond_pos      # 112
         sim.h0 = result_pos    # 120
         sim.h1 = 0
-        sim.gp = 0
+        sim.ex = 0
         print("Loaded 'branch': if-then-else conditional")
         print("        / · + · \\         (then-path: result++)")
         print("  → · · % · - · & · →    (else-path: result--)")
@@ -877,7 +877,7 @@ def load_example(sim, name):
         sim.cl = b_pos       # (6,15)
         sim.h0 = result_pos  # (5,15)
         sim.h1 = a_pos       # (7,15)
-        sim.gp = 0
+        sim.ex = 0
 
         print(f"Loaded 'multiply': {a_val} × {b_val} via repeated addition")
         print("  / . S - N · · \\       (body: result+=a, H0→b, b--, H0→result)")
@@ -946,7 +946,7 @@ ISA ({opcount} opcodes + NOP):
     n (11)  North    s (12)  South    e (13)  East    w (14)  West
   CL movement:
     ^ (25)  North    v (26)  South    > (23)  East    < (24)  West
-  GP movement (garbage pointer):
+  EX movement (exteroceptor):
     { (32)  North    } (31)  South    ] (29)  East    [ (30)  West
   Data:
     + (15)  grid[H0]++                - (16)  grid[H0]--
@@ -955,13 +955,13 @@ ISA ({opcount} opcodes + NOP):
     F (20)  if grid[CL]!=0: swap (Fredkin)
   CL data:
     G (21)  swap(CL_reg, grid[H0])    T (22)  swap(grid[CL], grid[H0])
-  GP data (breadcrumbs):
-    P (27)  grid[GP]++  (leave breadcrumb)
-    Q (28)  grid[GP]--  (erase breadcrumb)
-  GP-conditional mirrors:
-    ( (34)  \\ if grid[GP]!=0            ) (35)  \\ if grid[GP]=0
-    $ (37)  /  if grid[GP]!=0            # (36)  /  if grid[GP]=0
-  CL/GP swap:
+  EX data (breadcrumbs):
+    P (27)  grid[EX]++  (leave breadcrumb)
+    Q (28)  grid[EX]--  (erase breadcrumb)
+  EX-conditional mirrors:
+    ( (34)  \\ if grid[EX]!=0            ) (35)  \\ if grid[EX]=0
+    $ (37)  /  if grid[EX]!=0            # (36)  /  if grid[EX]=0
+  CL/EX swap:
     K (33)  swap(CL_register, GP_register)
 
   / reflect: E<->N  S<->W     \\ reflect: E<->S  N<->W
@@ -978,7 +978,7 @@ Commands:
   cl [r c | flat]      Set/show CL
   h0 [r c | flat]      Set/show H0
   h1 [r c | flat]      Set/show H1
-  gp [r c | flat]      Set/show GP (garbage pointer)
+  gp [r c | flat]      Set/show EX (exteroceptor)
 
   step / s [n]         Forward n steps (default 1)
   back / b [n]         Reverse n steps (default 1)
@@ -1135,8 +1135,8 @@ def interactive_session():
                       f"{DIR_ARROWS[sim.ip_dir]}")
                 sim.display_grid()
 
-            # ── CL / H0 / H1 / GP ──
-            elif cmd in ('cl', 'h0', 'h1', 'gp'):
+            # ── CL / H0 / H1 / EX ──
+            elif cmd in ('cl', 'h0', 'h1', 'ex'):
                 if args:
                     pos, _ = parse_pos(sim, args)
                     if pos is not None:

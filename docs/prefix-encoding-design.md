@@ -86,7 +86,7 @@ Two bits are released: one from the prefix, one from the payload.
 
 ## Heads
 
-All heads (H0, H1, CL, GP) point to a *bit position*: `(cell, bit)`.
+All heads (H0, H1, CL, EX) point to a *bit position*: `(cell, bit)`.
 
 - **Integer reading**: from a head's position, read the prefix-encoded
   integer starting at that bit, extending in the head's associated
@@ -112,8 +112,8 @@ keeps the existing control flow machinery intact.
 - **INC**: increment the prefix-integer at H0.
   - Within a tier: binary increment of payload bits. No size change.
   - Across a tier boundary: integer grows by 2 bits. The 2 bits
-    being annexed are GP-swapped: their old values are written to
-    the GP trail, and GP advances 2 bits. This makes the operation
+    being annexed are EX-swapped: their old values are written to
+    the EX trail, and EX advances 2 bits. This makes the operation
     reversible.
   - Inverse: DEC
 
@@ -121,7 +121,7 @@ keeps the existing control flow machinery intact.
   - Within a tier: binary decrement of payload bits. No size change.
   - Across a tier boundary (n = 2^k → 2^k - 1): integer shrinks by
     2 bits. The 2 released bit positions get their values restored
-    from the GP trail (GP retreats 2 bits and swaps back).
+    from the EX trail (EX retreats 2 bits and swaps back).
   - Inverse: INC
   - Decrementing 0: TBD — could be an error, a no-op, or wrap.
     Probably should be a no-op or trap, since negative numbers aren't
@@ -130,7 +130,7 @@ keeps the existing control flow machinery intact.
 ### Zero test (for conditional mirrors)
 - **IS_ZERO(CL)**: check bit at CL position. If it's `0`, the integer
   at CL is zero. This is a 1-bit check — very cheap.
-- Same for GP-conditional mirrors: check bit at GP position.
+- Same for EX-conditional mirrors: check bit at EX position.
 
 ### Head movement
 - **Bit-step N/S/E/W**: move head one bit in a direction (within cell
@@ -141,7 +141,7 @@ keeps the existing control flow machinery intact.
 
 ### Existing ops that still work
 - Mirrors (`/`, `\`): unchanged
-- Conditional mirrors on CL/GP: now test the *bit* at CL/GP (which is
+- Conditional mirrors on CL/EX: now test the *bit* at CL/EX (which is
   the first bit of a prefix-integer, so 0 ↔ integer is zero)
 - IP movement: unchanged
 - Head movement N/S/E/W: now means bit-level movement
@@ -149,7 +149,7 @@ keeps the existing control flow machinery intact.
 ### Uncertain / TBD
 - **Swap, add, subtract between H0 and H1**: how do you swap two
   variable-length integers? If they're different lengths, this is a
-  non-trivial bit-shifting operation. Might need GP to track the
+  non-trivial bit-shifting operation. Might need EX to track the
   size difference.
 - **Fredkin gate**: conditional swap of two prefix-integers. Same
   length concern.
@@ -160,21 +160,21 @@ keeps the existing control flow machinery intact.
 ## Reversibility
 
 Every operation that changes the number of bits an integer occupies
-must GP-swap the displaced/released bits:
+must EX-swap the displaced/released bits:
 
 **Forward (growth):**
 1. Determine the 2 bit positions being annexed
-2. For each: swap that grid bit with the current GP bit
-3. Advance GP by 2 bits (in GP's movement direction)
+2. For each: swap that grid bit with the current EX bit
+3. Advance EX by 2 bits (in EX's movement direction)
 4. Write the new (larger) encoding
 
 **Backward (shrink, i.e., undo growth):**
-1. Retreat GP by 2 bits
-2. For each released position: swap the grid bit with the GP bit
+1. Retreat EX by 2 bits
+2. For each released position: swap the grid bit with the EX bit
    (restoring the original value that was there before growth)
 3. Write the new (smaller) encoding
 
-Within a tier, no bits are displaced, so no GP interaction needed —
+Within a tier, no bits are displaced, so no EX interaction needed —
 it's just flipping payload bits, which is self-evidently reversible
 (the inverse is decrement/increment).
 
@@ -193,7 +193,7 @@ it's just flipping payload bits, which is self-evidently reversible
 
 4. **Swap of different-width integers**: this is the hardest unsolved
    piece. May need to restrict swaps to same-tier integers, or use
-   a GP-tracked shift operation.
+   a EX-tracked shift operation.
 
 5. **Opcode encoding**: the current 43 opcodes fit in 8 bits with
    room to spare. New bit-level ops will need opcode slots. We have
@@ -206,6 +206,6 @@ it's just flipping payload bits, which is self-evidently reversible
 ## Next Steps
 
 1. Build a standalone prototype of the encoding: `encode(n) → bits`,
-   `decode(bits) → n`, `increment(bits) → bits`, with GP tracking.
+   `decode(bits) → n`, `increment(bits) → bits`, with EX tracking.
 2. Test tier-boundary crossings thoroughly.
 3. Once the encoding logic is solid, integrate into fb2d as new opcodes.

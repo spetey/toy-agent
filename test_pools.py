@@ -223,7 +223,7 @@ def test_callback_hook_reversibility():
 
     sim = FB2DSimulator()
     prog = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'programs', 'boustrophedon-ouroboros-w99.fb2d')
+                        'programs', 'immunity-gadgets-v2-serpentine-w99.fb2d')
     sim.load_state(prog)
 
     wp = WastePool()
@@ -245,7 +245,7 @@ def test_callback_hook_reversibility():
 
     def working_rows():
         sim._save_active()
-        return sorted(set(ip['gp'] // W for ip in sim.ips))
+        return sorted(set(ip['ex'] // W for ip in sim.ips))
 
     def step_forward():
         nonlocal step_all_count

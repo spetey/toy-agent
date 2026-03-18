@@ -77,12 +77,12 @@ _waste_cleanup_log = {}
 
 
 def _get_working_rows():
-    """Auto-detect working-area rows from GP head positions."""
+    """Auto-detect working-area rows from EX head positions."""
     sim._save_active()
     W = sim.cols
     rows = set()
     for ip in sim.ips:
-        rows.add(ip['gp'] // W)
+        rows.add(ip['ex'] // W)
     return sorted(rows)
 
 
@@ -91,7 +91,7 @@ def _apply_waste_cleanup_forward(step):
 
     Every dirty cell is swapped into the waste pool (value stored,
     cell zeroed). This maintains the invariant that working rows are
-    clean at the start of each round — all heads (H0, H1, CL, GP)
+    clean at the start of each round — all heads (H0, H1, CL, EX)
     find zeros when they need scratch space.
 
     Fully reversible: _undo_waste_cleanup restores dirty values.
@@ -161,8 +161,8 @@ def serialize_state():
         'cl': sim.cl,
         'h0': sim.h0,
         'h1': sim.h1,
-        'h2': sim.h2,
-        'gp': sim.gp,
+        'ix': sim.ix,
+        'ex': sim.ex,
         'step_count': sim.step_count,
         'step_all_count': _step_all_count,
         'current_file': current_file,
@@ -407,7 +407,7 @@ def resize_grid():
     for i, ipstate in enumerate(sim.ips):
         ipstate['ip_row'] = min(ipstate['ip_row'], new_rows - 1)
         ipstate['ip_col'] = min(ipstate['ip_col'], new_cols - 1)
-        for head in ('cl', 'h0', 'h1', 'h2', 'gp'):
+        for head in ('cl', 'h0', 'h1', 'ix', 'ex'):
             ipstate[head] = min(ipstate[head], sim.grid_size - 1)
     sim._load_active(sim.active_ip)
     sim.selection = None
@@ -426,12 +426,12 @@ def add_ip():
     ip_dir = int(data.get('ip_dir', 1))  # DIR_E = 1
     h0 = int(data.get('h0', 0))
     h1 = int(data.get('h1', 0))
-    h2 = int(data.get('h2', 0))
-    h2_dir = int(data.get('h2_dir', 1))  # DIR_E = 1
+    ix = int(data.get('ix', 0))
+    ix_dir = int(data.get('ix_dir', 1))  # DIR_E = 1
     cl = int(data.get('cl', 0))
-    gp = int(data.get('gp', 0))
+    ex = int(data.get('ex', 0))
     idx = sim.add_ip(ip_row=ip_row, ip_col=ip_col, ip_dir=ip_dir,
-                     h0=h0, h1=h1, h2=h2, h2_dir=h2_dir, cl=cl, gp=gp)
+                     h0=h0, h1=h1, ix=ix, ix_dir=ix_dir, cl=cl, ex=ex)
     result = serialize_state()
     result['added_ip'] = idx
     return jsonify(result)
@@ -546,7 +546,7 @@ def set_waste_cleanup():
     })
 
 
-@app.route('/api/gp_cleanup', methods=['POST'])
+@app.route('/api/ex_cleanup', methods=['POST'])
 def set_gp_cleanup():
     """Legacy endpoint — redirects to waste_cleanup."""
     return set_waste_cleanup()

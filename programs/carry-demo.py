@@ -218,7 +218,7 @@ def make_carry_demo(initial_value, num_digits=8, num_increments=1):
     sim.h0 = sim._to_flat(0, 0)
     sim.cl = sim._to_flat(0, 0)
     sim.h1 = 0
-    sim.gp = sim._to_flat(3, 0)  # GP on row 3
+    sim.ex = sim._to_flat(3, 0)  # EX on row 3
 
     expected = initial_value + num_increments
     return sim, expected

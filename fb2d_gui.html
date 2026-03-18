@@ -15,7 +15,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 #toolbar button:active { background: #9d4edd; }
 #toolbar button.active { background: #e94560; }
 #btnNoise.active { background: #e17055; }
-#btnGpCleanup.active { background: #00b894; }
+#btnExCleanup.active { background: #00b894; }
 #stepDisplay { font-size: 13px; min-width: 90px; text-align: center; color: #aaa; }
 #speedSlider { width: 80px; accent-color: #533483; }
 #speedLabel { font-size: 11px; color: #888; min-width: 50px; }
@@ -26,8 +26,8 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 .head-cl { color: #da70d6; }
 .head-h0 { color: #00ced1; }
 .head-h1 { color: #32cd32; }
-.head-h2 { color: #4da6ff; }
-.head-gp { color: #ffd700; }
+.head-ix { color: #4da6ff; }
+.head-ex { color: #ffd700; }
 
 #canvasWrap { flex: 1; position: relative; overflow: hidden; cursor: grab; }
 #canvasWrap.dragging { cursor: grabbing; }
@@ -156,8 +156,8 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
                   border-radius:3px; padding:1px 4px; font-size:12px; text-align:right;">
     <span id="noiseStats" style="color:#ff9f43; font-size:11px; margin-left:4px;">0 injected</span>
   </div>
-  <button id="btnGpCleanup" title="Reversible waste cleanup (clean cells GP leaves behind)">&#x267B; Waste</button>
-  <span id="gpCleanupStats" style="color:#55efc4; font-size:11px; display:none;"></span>
+  <button id="btnExCleanup" title="Reversible waste cleanup (clean cells EX leaves behind)">&#x267B; Waste</button>
+  <span id="exCleanupStats" style="color:#55efc4; font-size:11px; display:none;"></span>
   <span style="color:#555">|</span>
   <button id="btnHelp" title="Keyboard shortcuts (?)">?</button>
 </div>
@@ -353,23 +353,23 @@ const OPCODE_NAMES = {
   15:'[H0]++', 16:'[H0]--', 17:'[H0]+=[H1]', 18:'[H0]-=[H1]',
   19:'swap([H0],[H1])', 20:'Fredkin', 21:'indirect H1', 22:'bridge',
   23:'CL East', 24:'CL West', 25:'CL North', 26:'CL South',
-  27:'[GP]++', 28:'[GP]--', 29:'GP East', 30:'GP West', 31:'GP South', 32:'GP North',
-  33:'swap(CL,GP)', 34:'\\if[GP]!=0', 35:'\\if[GP]==0',
-  36:'/if[GP]==0', 37:'/if[GP]!=0', 38:'swap([H0],[GP])',
+  27:'[EX]++', 28:'[EX]--', 29:'EX East', 30:'EX West', 31:'EX South', 32:'EX North',
+  33:'swap(CL,EX)', 34:'\\if[EX]!=0', 35:'\\if[EX]==0',
+  36:'/if[EX]==0', 37:'/if[EX]!=0', 38:'swap([H0],[EX])',
   39:'XOR', 40:'rot right', 41:'rot left', 42:'bit Fredkin', 43:'bit H1 swap',
   44:'rot right by [CL]', 45:'rot left by [CL]', 46:'XOR rot (fused)',
   47:'[CL]++', 48:'[CL]--',
-  49:'H2 North', 50:'H2 South', 51:'H2 East', 52:'H2 West',
-  53:'[H0]^=[H2]', 54:'payload-=[H2]', 55:'[H2]^=[H0]', 56:'swap([CL],[H2])',
-  57:'H2 advance', 58:'H2 retreat', 59:'H2 flip dir',
-  60:'H2 v-advance', 61:'H2 v-retreat', 62:'H2 v-flip'
+  49:'IX North', 50:'IX South', 51:'IX East', 52:'IX West',
+  53:'[H0]^=[IX]', 54:'payload-=[IX]', 55:'[IX]^=[H0]', 56:'swap([CL],[IX])',
+  57:'IX advance', 58:'IX retreat', 59:'IX flip dir',
+  60:'IX v-advance', 61:'IX v-retreat', 62:'IX v-flip'
 };
 
 const COLORS = {
-  ip: '#ff6b6b', cl: '#da70d6', h0: '#00ced1', h1: '#32cd32', h2: '#4da6ff', gp: '#ffd700',
+  ip: '#ff6b6b', cl: '#da70d6', h0: '#00ced1', h1: '#32cd32', ix: '#4da6ff', ex: '#ffd700',
   ipBg: 'rgba(255,107,107,0.7)', clBg: 'rgba(218,112,214,0.35)',
   h0Bg: 'rgba(0,206,209,0.35)', h1Bg: 'rgba(50,205,50,0.35)',
-  h2Bg: 'rgba(77,166,255,0.35)', gpBg: 'rgba(255,215,0,0.3)',
+  ixBg: 'rgba(77,166,255,0.35)', exBg: 'rgba(255,215,0,0.3)',
   gridBg: '#1a1a2e', cellBg: '#1e1e3a', zeroBg: '#1a1a2e',
   gridLine: '#2a2a4a', text: '#c0c0c0', dimText: '#555',
   annDot: '#ff9f43', regionFill: 'rgba(68,136,255,0.15)', regionStroke: '#4488ff'
@@ -539,7 +539,7 @@ function updateStatus() {
   // Build status for all IPs
   const ips = state.ips || [{ ip_row: state.ip_row, ip_col: state.ip_col,
     ip_dir: state.ip_dir, cl: state.cl, h0: state.h0, h1: state.h1,
-    h2: state.h2, gp: state.gp }];
+    ix: state.ix, ex: state.ex }];
   const nIps = ips.length;
 
   let html = '';
@@ -559,9 +559,9 @@ function updateStatus() {
     html += `<span class="head-label head-cl" style="${dim}">CL:${rc(ip.cl)}</span> `;
     html += `<span class="head-label head-h0" style="${dim}">H0:${rc(ip.h0)}</span> `;
     html += `<span class="head-label head-h1" style="${dim}">H1:${rc(ip.h1)}</span> `;
-    const h2Arrow = DIR_ARROWS[ip.h2_dir !== undefined ? ip.h2_dir : 1];
-    html += `<span class="head-label head-h2" style="${dim}">H2:${rc(ip.h2)}${h2Arrow}</span> `;
-    html += `<span class="head-label head-gp" style="${dim}">GP:${rc(ip.gp)}</span>`;
+    const h2Arrow = DIR_ARROWS[ip.ix_dir !== undefined ? ip.ix_dir : 1];
+    html += `<span class="head-label head-ix" style="${dim}">IX:${rc(ip.ix)}${h2Arrow}</span> `;
+    html += `<span class="head-label head-ex" style="${dim}">EX:${rc(ip.ex)}</span>`;
     if (i < nIps - 1) html += ' <span style="color:#444">|</span> ';
   }
   document.getElementById('ipStatusAll').innerHTML = html;
@@ -681,7 +681,7 @@ function render() {
   // Head positions — multi-IP aware
   const ips = state.ips || [{ ip_row: state.ip_row, ip_col: state.ip_col,
     ip_dir: state.ip_dir, cl: state.cl, h0: state.h0, h1: state.h1,
-    h2: state.h2, gp: state.gp }];
+    ix: state.ix, ex: state.ex }];
   // Build lookup: "r,c" -> IP index for IP positions (only visible IPs)
   const ipPositions = {};
   for (let i = 0; i < ips.length; i++) {
@@ -691,13 +691,13 @@ function render() {
   }
 
   // Build lookup: "r,c" -> [{ipIdx, headType}] for visible IPs' heads
-  const HEAD_TYPES = ['cl', 'h0', 'h1', 'h2', 'gp'];
+  const HEAD_TYPES = ['cl', 'h0', 'h1', 'ix', 'ex'];
   const HEAD_COLORS = {
     cl: { fg: COLORS.cl, bg: COLORS.clBg },
     h0: { fg: COLORS.h0, bg: COLORS.h0Bg },
     h1: { fg: COLORS.h1, bg: COLORS.h1Bg },
-    h2: { fg: COLORS.h2, bg: COLORS.h2Bg },
-    gp: { fg: COLORS.gp, bg: COLORS.gpBg },
+    ix: { fg: COLORS.ix, bg: COLORS.ixBg },
+    ex: { fg: COLORS.ex, bg: COLORS.exBg },
   };
   const allHeads = {};  // "r,c" -> [{ipIdx, headType}]
   for (let i = 0; i < ips.length; i++) {
@@ -730,10 +730,10 @@ function render() {
     }
   }
 
-  // Build set of GP rows (from all IPs, visible or not — it's a structural property)
-  const gpRows = new Set();
+  // Build set of EX rows (from all IPs, visible or not — it's a structural property)
+  const exRows = new Set();
   for (let i = 0; i < ips.length; i++) {
-    gpRows.add(Math.floor(ips[i].gp / cols));
+    exRows.add(Math.floor(ips[i].ex / cols));
   }
 
   // Draw cells
@@ -757,7 +757,7 @@ function render() {
       const ipIdx = ipPositions[ipKey];
       const isIP = ipIdx !== undefined;
       const headEntries = allHeads[ipKey] || [];
-      const isGpRow = gpRows.has(r);
+      const isGpRow = exRows.has(r);
 
       // Syndrome-based background
       const { syn, pAll } = hammingSyndrome(val);
@@ -768,7 +768,7 @@ function render() {
       if (isIP) {
         ctx.fillStyle = IP_COLORS[ipIdx % IP_COLORS.length].bg;
       } else if (isGpRow && val !== 0) {
-        // GP row non-zero: green (correction breadcrumbs / scratch data)
+        // EX row non-zero: green (correction breadcrumbs / scratch data)
         ctx.fillStyle = hasError ? 'rgba(0,200,83,0.35)' : 'rgba(0,180,70,0.25)';
       } else if (isSingleBit) {
         ctx.fillStyle = 'rgba(255,255,0,0.35)';   // yellow warning
@@ -794,8 +794,8 @@ function render() {
           const headCol = HEAD_COLORS[entry.headType];
           // Each IP's heads get a different inset level so they nest visually
           const ipInset = entry.ipIdx * 2;
-          const baseInset = entry.headType === 'h1' || entry.headType === 'h2' ? 2 :
-                            entry.headType === 'gp' ? 3 : 1;
+          const baseInset = entry.headType === 'h1' || entry.headType === 'ix' ? 2 :
+                            entry.headType === 'ex' ? 3 : 1;
           const inset = baseInset + ipInset;
           const lw = entry.headType === 'cl' || entry.headType === 'h0' ? 2 : 1.5;
           ctx.strokeStyle = headCol.fg;
@@ -1482,16 +1482,16 @@ const OPCODE_GROUPS = [
   { label: 'H0 Move', ops: [[7,'N'], [8,'S'], [9,'E'], [10,'W']] },
   { label: 'H1 Move', ops: [[11,'n'], [12,'s'], [13,'e'], [14,'w']] },
   { label: 'CL Move', ops: [[25,'^'], [26,'v'], [23,'>'], [24,'<']] },
-  { label: 'GP Move', ops: [[32,'{'], [31,'}'], [29,']'], [30,'[']] },
+  { label: 'EX Move', ops: [[32,'{'], [31,'}'], [29,']'], [30,'[']] },
   { label: 'Byte Data', ops: [
     [15,'+'], [16,'-'], [17,'.'], [18,','], [19,'X'], [20,'F'], [21,'G'], [22,'T']
   ]},
   { label: 'Bit Data', ops: [[39,'x'], [40,'r'], [41,'l'], [42,'f'], [43,'z'], [44,'R'], [45,'L'], [46,'Y'], [47,':'], [48,';']] },
-  { label: 'GP Data', ops: [[27,'P'], [28,'Q'], [33,'K'], [38,'Z']] },
-  { label: 'GP Mirrors', ops: [[34,'('], [35,')'], [36,'#'], [37,'$']] },
-  { label: 'H2 Move', ops: [[49,'H'], [50,'h'], [51,'a'], [52,'d']] },
-  { label: 'H2 Data', ops: [[53,'m'], [54,'M'], [55,'j'], [56,'V']] },
-  { label: 'H2 Momentum', ops: [[57,'A'], [58,'B'], [59,'U']] },
+  { label: 'EX Data', ops: [[27,'P'], [28,'Q'], [33,'K'], [38,'Z']] },
+  { label: 'EX Mirrors', ops: [[34,'('], [35,')'], [36,'#'], [37,'$']] },
+  { label: 'IX Move', ops: [[49,'H'], [50,'h'], [51,'a'], [52,'d']] },
+  { label: 'IX Data', ops: [[53,'m'], [54,'M'], [55,'j'], [56,'V']] },
+  { label: 'IX Momentum', ops: [[57,'A'], [58,'B'], [59,'U']] },
 ];
 
 let pickerCell = null;
@@ -1697,13 +1697,13 @@ function updateNoiseStats(st) {
 }
 
 // ── Waste cleanup (reversible) ───────────────────────────────
-let gpCleanupEnabled = false;
+let exCleanupEnabled = false;
 
-async function toggleGpCleanup() {
-  gpCleanupEnabled = !gpCleanupEnabled;
-  const btn = document.getElementById('btnGpCleanup');
-  const stats = document.getElementById('gpCleanupStats');
-  if (gpCleanupEnabled) {
+async function toggleExCleanup() {
+  exCleanupEnabled = !exCleanupEnabled;
+  const btn = document.getElementById('btnExCleanup');
+  const stats = document.getElementById('exCleanupStats');
+  if (exCleanupEnabled) {
     btn.classList.add('active');
     stats.style.display = '';
   } else {
@@ -1713,23 +1713,23 @@ async function toggleGpCleanup() {
   await api('waste_cleanup', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ enabled: gpCleanupEnabled })
+    body: JSON.stringify({ enabled: exCleanupEnabled })
   });
 }
 
 function updateGpCleanupStats(st) {
   if (!st) return;
-  const el = document.getElementById('gpCleanupStats');
+  const el = document.getElementById('exCleanupStats');
   if (el && st.waste_cleanup_enabled) {
     el.textContent = `${st.waste_pool_swaps || 0} swaps (ptr ${st.waste_pool_pointer || 0})`;
     el.style.display = '';
   } else if (el) {
     el.style.display = 'none';
   }
-  if (st.waste_cleanup_enabled !== undefined && st.waste_cleanup_enabled !== gpCleanupEnabled) {
-    gpCleanupEnabled = st.waste_cleanup_enabled;
-    const btn = document.getElementById('btnGpCleanup');
-    if (gpCleanupEnabled) {
+  if (st.waste_cleanup_enabled !== undefined && st.waste_cleanup_enabled !== exCleanupEnabled) {
+    exCleanupEnabled = st.waste_cleanup_enabled;
+    const btn = document.getElementById('btnExCleanup');
+    if (exCleanupEnabled) {
       btn.classList.add('active');
     } else {
       btn.classList.remove('active');
@@ -1817,7 +1817,7 @@ document.getElementById('noiseRate').addEventListener('change', () => { if (nois
 document.getElementById('noiseType').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
 document.getElementById('noiseSeed').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
 
-document.getElementById('btnGpCleanup').addEventListener('click', toggleGpCleanup);
+document.getElementById('btnExCleanup').addEventListener('click', toggleExCleanup);
 
 document.getElementById('btnHelp').addEventListener('click', () => {
   document.getElementById('helpOverlay').classList.toggle('visible');
@@ -1848,7 +1848,7 @@ document.addEventListener('keydown', (e) => {
   if (editMode && (e.key === 'Delete' || e.key === 'Backspace')) { doDeleteSelection(); e.preventDefault(); return; }
 
   if (e.key === 'n' && !mod && !editMode) { toggleNoise(); e.preventDefault(); }
-  else if (e.key === 'g' && !mod && !editMode) { toggleGpCleanup(); e.preventDefault(); }
+  else if (e.key === 'g' && !mod && !editMode) { toggleExCleanup(); e.preventDefault(); }
   else if (e.key === 'e' && !mod) { toggleEditMode(); e.preventDefault(); }
   else if (e.key === 'r' && !mod && !editMode) { resetToStart(); e.preventDefault(); }
   else if (e.key === 'ArrowRight' && e.shiftKey) { stepForward(playStepsPerTick); e.preventDefault(); }

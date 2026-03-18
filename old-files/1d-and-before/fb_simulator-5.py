@@ -30,7 +30,7 @@ ISA:
 
 The G instruction enables indirect addressing for CL:
   - Load a computed address into CL by storing it in tape[H0], then G
-  - This is essential for loops that need a garbage pointer
+  - This is essential for loops that need a exteroceptor
 
 All operations are reversible. The tape IS the program.
 """

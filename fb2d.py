@@ -2,13 +2,13 @@
 """
 F***brain 2D Grid Simulator v1
 Authored or modified by Claude
-Version: 2026-03-16 v1.12 — H2 vertical momentum ops (C/D/O) for ping-pong scan
+Version: 2026-03-16 v1.12 — IX vertical momentum ops (C/D/O) for ping-pong scan
                             v1.11: head-overlap NOP guards for true reversibility
-                            v1.10: H2 momentum ops (A/B/U)
-                            v1.9: H2 scan head for cross-gadget correction
+                            v1.10: IX momentum ops (A/B/U)
+                            v1.9: IX interoceptor for cross-gadget correction
                             v1.8: [CL]++ and [CL]-- opcodes (: and ;)
                             v1.7: R/L rotate-by-[CL], Y fused rotate-XOR
-                            v1.6: bit-level ops (x=XOR, r/l rotate, f bit-Fredkin, z bit-GP-swap)
+                            v1.6: bit-level ops (x=XOR, r/l rotate, f bit-Fredkin, z bit-EX-swap)
 
 A 2D reversible programming model where the instruction pointer moves
 on a toroidal grid and bounces off mirrors for control flow.
@@ -25,15 +25,15 @@ State:
   CL                 — control locus (flat index into grid)
   H0                 — data head 0 (flat index)
   H1                 — data head 1 (flat index)
-  H2                 — scan head (flat index) for cross-gadget correction
-  GP                 — garbage pointer (flat index) for reversible breadcrumb trails
+  IX                 — interoceptor (flat index) for cross-gadget correction
+  EX                 — exteroceptor (flat index) for reversible breadcrumb trails
 
 Mirror reflection rules (standard optics):
   /  : (dr,dc) → (−dc,−dr)    E→N  N→E  W→S  S→W
   \\  : (dr,dc) → (dc,dr)      E→S  S→E  W→N  N→W
 
 Conditional mirrors reflect OR pass through based on grid[CL].
-GP-conditional mirrors reflect OR pass through based on grid[GP].
+EX-conditional mirrors reflect OR pass through based on grid[EX].
 """
 
 import sys
@@ -82,21 +82,21 @@ OPCODES = {
     '<':  24,  # CL West  (col-1)
     '^':  25,  # CL North (row-1)
     'v':  26,  # CL South (row+1)
-    # Garbage pointer (GP) ops for reversible breadcrumb trails
-    'P':  27,  # grid[GP]++  (leave breadcrumb)
-    'Q':  28,  # grid[GP]--  (erase breadcrumb)
-    ']':  29,  # GP East  (col+1)
-    '[':  30,  # GP West  (col-1)
-    '}':  31,  # GP South (row+1)
-    '{':  32,  # GP North (row-1)
-    # GP-conditional mirrors and CL/GP swap
+    # Exteroceptor (EX) ops for reversible breadcrumb trails
+    'P':  27,  # grid[EX]++  (leave breadcrumb)
+    'Q':  28,  # grid[EX]--  (erase breadcrumb)
+    ']':  29,  # EX East  (col+1)
+    '[':  30,  # EX West  (col-1)
+    '}':  31,  # EX South (row+1)
+    '{':  32,  # EX North (row-1)
+    # EX-conditional mirrors and CL/EX swap
     'K':  33,  # swap(CL_register, GP_register)
-    '(':  34,  # \ reflect if grid[GP] ≠ 0, else pass through
-    ')':  35,  # \ reflect if grid[GP] = 0, else pass through
-    '#':  36,  # / reflect if grid[GP] = 0, else pass through
-    '$':  37,  # / reflect if grid[GP] ≠ 0, else pass through
-    # Data/GP swap for efficient variable zeroing
-    'Z':  38,  # swap([H0], [GP])  (byte-level GP swap)
+    '(':  34,  # \ reflect if grid[EX] ≠ 0, else pass through
+    ')':  35,  # \ reflect if grid[EX] = 0, else pass through
+    '#':  36,  # / reflect if grid[EX] = 0, else pass through
+    '$':  37,  # / reflect if grid[EX] ≠ 0, else pass through
+    # Data/EX swap for efficient variable zeroing
+    'Z':  38,  # swap([H0], [EX])  (byte-level EX swap)
     # ── Bit-level operations (v1.6) ──
     'x':  39,  # [H0] ^= [H1]  (XOR-accumulate, self-inverse)
     'r':  40,  # [H0] rotate right 1 bit  (bit0→bit7, inverse: l)
@@ -108,23 +108,23 @@ OPCODES = {
     'Y':  46,  # [H0] ^= ror([H1], [CL] & 15)  (fused rotate-XOR, self-inverse)
     ':':  47,  # [CL]++  (inverse: ;)
     ';':  48,  # [CL]--  (inverse: :)
-    # ── H2 scan head operations (v1.9) ──
-    'H':  49,  # H2 move North (inverse: h)
-    'h':  50,  # H2 move South (inverse: H)
-    'a':  51,  # H2 move East  (inverse: d)
-    'd':  52,  # H2 move West  (inverse: a)
-    'm':  53,  # [H0] ^= [H2]  (raw 16-bit XOR, self-inverse, copy-in/uncompute)
-    'M':  54,  # payload(H0) -= payload(H2) with Δp  (inverse: see notes)
-    'j':  55,  # [H2] ^= [H0]  (raw 16-bit write-back, self-inverse)
-    'V':  56,  # swap([CL], [H2])  (test bridge, self-inverse)
-    # ── H2 momentum operations (v1.10) ──
-    'A':  57,  # advance H2 in h2_dir  (inverse: B)
-    'B':  58,  # retreat H2 opposite h2_dir  (inverse: A)
-    'U':  59,  # flip h2_dir (E↔W, N↔S)  (self-inverse)
-    # ── H2 vertical momentum operations (v1.12) ──
-    'C':  60,  # advance H2 in h2_vdir  (inverse: D)
-    'D':  61,  # retreat H2 opposite h2_vdir  (inverse: C)
-    'O':  62,  # flip h2_vdir (N↔S, E↔W)  (self-inverse)
+    # ── IX interoceptor operations (v1.9) ──
+    'H':  49,  # IX move North (inverse: h)
+    'h':  50,  # IX move South (inverse: H)
+    'a':  51,  # IX move East  (inverse: d)
+    'd':  52,  # IX move West  (inverse: a)
+    'm':  53,  # [H0] ^= [IX]  (raw 16-bit XOR, self-inverse, copy-in/uncompute)
+    'M':  54,  # payload(H0) -= payload(IX) with Δp  (inverse: see notes)
+    'j':  55,  # [IX] ^= [H0]  (raw 16-bit write-back, self-inverse)
+    'V':  56,  # swap([CL], [IX])  (test bridge, self-inverse)
+    # ── IX momentum operations (v1.10) ──
+    'A':  57,  # advance IX in ix_dir  (inverse: B)
+    'B':  58,  # retreat IX opposite ix_dir  (inverse: A)
+    'U':  59,  # flip ix_dir (E↔W, N↔S)  (self-inverse)
+    # ── IX vertical momentum operations (v1.12) ──
+    'C':  60,  # advance IX in ix_vdir  (inverse: D)
+    'D':  61,  # retreat IX opposite ix_vdir  (inverse: C)
+    'O':  62,  # flip ix_vdir (N↔S, E↔W)  (self-inverse)
 }
 
 OPCODE_TO_CHAR = {v: k for k, v in OPCODES.items()}
@@ -139,7 +139,7 @@ OPCODE_TO_CHAR[0] = '·'   # NOP displayed as middle dot
 # Key property: NO combination of 1, 2, or 3 data-bit flips can turn one
 # valid opcode payload into another.  Every corrupted opcode becomes NOP.
 # This eliminates the cascading failure mode where noise creates rogue
-# opcodes (especially j/m) that corrupt remote cells via H2.
+# opcodes (especially j/m) that corrupt remote cells via IX.
 
 OPCODE_PAYLOADS = {
      0:    0,  1:  449,  2:  706,  3:  771,  4:  836,  5:  645,
@@ -183,8 +183,8 @@ def encode_opcode(opcode_num):
 HEAD_MOVE_INVERSE = {
     7: DIR_S, 8: DIR_N, 9: DIR_W, 10: DIR_E,   # H0: N↔S, E↔W
     11: DIR_S, 12: DIR_N, 13: DIR_W, 14: DIR_E,  # H1: N↔S, E↔W
-    29: DIR_W, 30: DIR_E, 31: DIR_N, 32: DIR_S,  # GP: ]↔[, }↔{
-    49: DIR_S, 50: DIR_N, 51: DIR_W, 52: DIR_E,  # H2: H↔h, a↔d
+    29: DIR_W, 30: DIR_E, 31: DIR_N, 32: DIR_S,  # EX: ]↔[, }↔{
+    49: DIR_S, 50: DIR_N, 51: DIR_W, 52: DIR_E,  # IX: H↔h, a↔d
 }
 
 # ─── 16-bit Hamming(16,11) SECDED Constants ──────────────────────────
@@ -350,11 +350,11 @@ class FB2DSimulator:
         # Data heads and control locus (flat indices)
         self.h0 = 0
         self.h1 = 0
-        self.h2 = 0  # Scan head for cross-gadget correction
-        self.h2_dir = DIR_E  # H2 horizontal momentum (for A/B advance/retreat)
-        self.h2_vdir = DIR_S  # H2 vertical momentum (for C/D advance/retreat)
+        self.ix = 0  # Interoceptor for cross-gadget correction
+        self.ix_dir = DIR_E  # IX horizontal momentum (for A/B advance/retreat)
+        self.ix_vdir = DIR_S  # IX vertical momentum (for C/D advance/retreat)
         self.cl = 0
-        self.gp = 0  # Garbage pointer for breadcrumb trails
+        self.ex = 0  # Exteroceptor for breadcrumb trails
 
         self.step_count = 0
         self.use_color = True
@@ -391,7 +391,7 @@ class FB2DSimulator:
 
     # ── Multi-IP support ─────────────────────────────────────────
 
-    _IP_FIELDS = ('ip_row', 'ip_col', 'ip_dir', 'h0', 'h1', 'h2', 'h2_dir', 'h2_vdir', 'cl', 'gp')
+    _IP_FIELDS = ('ip_row', 'ip_col', 'ip_dir', 'h0', 'h1', 'ix', 'ix_dir', 'ix_vdir', 'cl', 'ex')
 
     def _capture_ip_state(self):
         """Snapshot the active IP's state into a dict."""
@@ -419,19 +419,19 @@ class FB2DSimulator:
         self._load_active(index)
 
     def add_ip(self, ip_row=0, ip_col=0, ip_dir=None,
-               h0=0, h1=0, h2=0, h2_dir=None, h2_vdir=None, cl=0, gp=0):
+               h0=0, h1=0, ix=0, ix_dir=None, ix_vdir=None, cl=0, ex=0):
         """Add a new IP with the given state. Returns the IP index."""
         if ip_dir is None:
             ip_dir = DIR_E
-        if h2_dir is None:
-            h2_dir = DIR_E
-        if h2_vdir is None:
-            h2_vdir = DIR_S
+        if ix_dir is None:
+            ix_dir = DIR_E
+        if ix_vdir is None:
+            ix_vdir = DIR_S
         self._save_active()
         state = {
             'ip_row': ip_row, 'ip_col': ip_col, 'ip_dir': ip_dir,
-            'h0': h0, 'h1': h1, 'h2': h2, 'h2_dir': h2_dir,
-            'h2_vdir': h2_vdir, 'cl': cl, 'gp': gp,
+            'h0': h0, 'h1': h1, 'ix': ix, 'ix_dir': ix_dir,
+            'ix_vdir': ix_vdir, 'cl': cl, 'ex': ex,
         }
         self.ips.append(state)
         self.n_ips = len(self.ips)
@@ -526,48 +526,48 @@ class FB2DSimulator:
         elif opcode == 26:   # v CL South
             self.cl = self._move_head(self.cl, DIR_S)
 
-        # ── GP (garbage pointer) operations ──
-        elif opcode == 27:   # P payload(GP)++ with Δp parity fixup
-            self.grid[self.gp] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.gp]]]
+        # ── EX (exteroceptor) operations ──
+        elif opcode == 27:   # P payload(EX)++ with Δp parity fixup
+            self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
 
-        elif opcode == 28:   # Q payload(GP)-- with Δp parity fixup
-            self.grid[self.gp] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.gp]]]
+        elif opcode == 28:   # Q payload(EX)-- with Δp parity fixup
+            self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
 
-        elif opcode == 29:   # ] GP East
-            self.gp = self._move_head(self.gp, DIR_E)
+        elif opcode == 29:   # ] EX East
+            self.ex = self._move_head(self.ex, DIR_E)
 
-        elif opcode == 30:   # [ GP West
-            self.gp = self._move_head(self.gp, DIR_W)
+        elif opcode == 30:   # [ EX West
+            self.ex = self._move_head(self.ex, DIR_W)
 
-        elif opcode == 31:   # } GP South
-            self.gp = self._move_head(self.gp, DIR_S)
+        elif opcode == 31:   # } EX South
+            self.ex = self._move_head(self.ex, DIR_S)
 
-        elif opcode == 32:   # { GP North
-            self.gp = self._move_head(self.gp, DIR_N)
+        elif opcode == 32:   # { EX North
+            self.ex = self._move_head(self.ex, DIR_N)
 
-        # ── GP-conditional mirrors and CL/GP swap ──
+        # ── EX-conditional mirrors and CL/EX swap ──
         elif opcode == 33:   # K swap(CL_register, GP_register)
-            self.cl, self.gp = self.gp, self.cl
+            self.cl, self.ex = self.ex, self.cl
 
-        elif opcode == 34:   # ( \ reflect if payload(GP) ≠ 0
-            if self.grid[self.gp] & DATA_MASK:
+        elif opcode == 34:   # ( \ reflect if payload(EX) ≠ 0
+            if self.grid[self.ex] & DATA_MASK:
                 self.ip_dir = BACKSLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 35:   # ) \ reflect if payload(GP) = 0
-            if not (self.grid[self.gp] & DATA_MASK):
+        elif opcode == 35:   # ) \ reflect if payload(EX) = 0
+            if not (self.grid[self.ex] & DATA_MASK):
                 self.ip_dir = BACKSLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 36:   # # / reflect if payload(GP) = 0
-            if not (self.grid[self.gp] & DATA_MASK):
+        elif opcode == 36:   # # / reflect if payload(EX) = 0
+            if not (self.grid[self.ex] & DATA_MASK):
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 37:   # $ / reflect if payload(GP) ≠ 0
-            if self.grid[self.gp] & DATA_MASK:
+        elif opcode == 37:   # $ / reflect if payload(EX) ≠ 0
+            if self.grid[self.ex] & DATA_MASK:
                 self.ip_dir = SLASH_REFLECT[self.ip_dir]
 
-        elif opcode == 38:   # Z swap([H0], [GP])
-            self.grid[self.h0], self.grid[self.gp] = \
-                self.grid[self.gp], self.grid[self.h0]
+        elif opcode == 38:   # Z swap([H0], [EX])
+            self.grid[self.h0], self.grid[self.ex] = \
+                self.grid[self.ex], self.grid[self.h0]
 
         # ── Bit-level operations (v1.6) ──
         elif opcode == 39:   # x  [H0] ^= [H1]  (XOR, self-inverse)
@@ -621,49 +621,49 @@ class FB2DSimulator:
         elif opcode == 48:   # ;  payload(CL)-- with Δp parity fixup
             self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
-        # ── H2 (scan head) operations (v1.9) ──
-        elif opcode in (49, 50, 51, 52):    # H2 movement H/h/a/d
+        # ── IX (interoceptor) operations (v1.9) ──
+        elif opcode in (49, 50, 51, 52):    # IX movement H/h/a/d
             dirs = {49: DIR_N, 50: DIR_S, 51: DIR_E, 52: DIR_W}
-            self.h2 = self._move_head(self.h2, dirs[opcode])
+            self.ix = self._move_head(self.ix, dirs[opcode])
 
-        elif opcode == 53:   # m [H0] ^= [H2]  (raw 16-bit XOR, self-inverse)
-            if self.h0 != self.h2:  # NOP under head overlap (non-bijective)
-                self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h2]
+        elif opcode == 53:   # m [H0] ^= [IX]  (raw 16-bit XOR, self-inverse)
+            if self.h0 != self.ix:  # NOP under head overlap (non-bijective)
+                self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.ix]
 
-        elif opcode == 54:   # M payload(H0) -= payload(H2) with Δp (uncompute)
-            if self.h0 != self.h2:  # NOP under head overlap (non-bijective)
+        elif opcode == 54:   # M payload(H0) -= payload(IX) with Δp (uncompute)
+            if self.h0 != self.ix:  # NOP under head overlap (non-bijective)
                 _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-                _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h2]])) & PAYLOAD_MASK
+                _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.ix]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
-        elif opcode == 55:   # j [H2] ^= [H0]  (raw 16-bit write-back, self-inverse)
-            if self.h2 != self.h0:  # NOP under head overlap (non-bijective)
-                self.grid[self.h2] = self.grid[self.h2] ^ self.grid[self.h0]
+        elif opcode == 55:   # j [IX] ^= [H0]  (raw 16-bit write-back, self-inverse)
+            if self.ix != self.h0:  # NOP under head overlap (non-bijective)
+                self.grid[self.ix] = self.grid[self.ix] ^ self.grid[self.h0]
 
-        elif opcode == 56:   # V swap([CL], [H2])  (test bridge, self-inverse)
-            self.grid[self.cl], self.grid[self.h2] = \
-                self.grid[self.h2], self.grid[self.cl]
+        elif opcode == 56:   # V swap([CL], [IX])  (test bridge, self-inverse)
+            self.grid[self.cl], self.grid[self.ix] = \
+                self.grid[self.ix], self.grid[self.cl]
 
-        # ── H2 momentum operations (v1.10) ──
-        elif opcode == 57:   # A advance H2 in h2_dir
-            self.h2 = self._move_head(self.h2, self.h2_dir)
+        # ── IX momentum operations (v1.10) ──
+        elif opcode == 57:   # A advance IX in ix_dir
+            self.ix = self._move_head(self.ix, self.ix_dir)
 
-        elif opcode == 58:   # B retreat H2 opposite h2_dir
-            self.h2 = self._move_head(self.h2, self.h2_dir ^ 2)  # N↔S, E↔W
+        elif opcode == 58:   # B retreat IX opposite ix_dir
+            self.ix = self._move_head(self.ix, self.ix_dir ^ 2)  # N↔S, E↔W
 
-        elif opcode == 59:   # U flip h2_dir (E↔W, N↔S, self-inverse)
-            self.h2_dir = self.h2_dir ^ 2
+        elif opcode == 59:   # U flip ix_dir (E↔W, N↔S, self-inverse)
+            self.ix_dir = self.ix_dir ^ 2
 
-        # ── H2 vertical momentum operations (v1.12) ──
-        elif opcode == 60:   # C advance H2 in h2_vdir
-            self.h2 = self._move_head(self.h2, self.h2_vdir)
+        # ── IX vertical momentum operations (v1.12) ──
+        elif opcode == 60:   # C advance IX in ix_vdir
+            self.ix = self._move_head(self.ix, self.ix_vdir)
 
-        elif opcode == 61:   # D retreat H2 opposite h2_vdir
-            self.h2 = self._move_head(self.h2, self.h2_vdir ^ 2)
+        elif opcode == 61:   # D retreat IX opposite ix_vdir
+            self.ix = self._move_head(self.ix, self.ix_vdir ^ 2)
 
-        elif opcode == 62:   # O flip h2_vdir (N↔S, E↔W, self-inverse)
-            self.h2_vdir = self.h2_vdir ^ 2
+        elif opcode == 62:   # O flip ix_vdir (N↔S, E↔W, self-inverse)
+            self.ix_vdir = self.ix_vdir ^ 2
 
         # else: NOP (0 or 63–2047 payload)
 
@@ -704,13 +704,13 @@ class FB2DSimulator:
             cond = bool(self.grid[self.cl] & DATA_MASK) if opcode == 5 else \
                    (not (self.grid[self.cl] & DATA_MASK))
             prev_dir = BACKSLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
-        elif opcode in (34, 35):  # conditional \ mirrors on payload(GP)
-            cond = bool(self.grid[self.gp] & DATA_MASK) if opcode == 34 else \
-                   (not (self.grid[self.gp] & DATA_MASK))
+        elif opcode in (34, 35):  # conditional \ mirrors on payload(EX)
+            cond = bool(self.grid[self.ex] & DATA_MASK) if opcode == 34 else \
+                   (not (self.grid[self.ex] & DATA_MASK))
             prev_dir = BACKSLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
-        elif opcode in (36, 37):  # conditional / mirrors on payload(GP)
-            cond = (not (self.grid[self.gp] & DATA_MASK)) if opcode == 36 else \
-                   bool(self.grid[self.gp] & DATA_MASK)
+        elif opcode in (36, 37):  # conditional / mirrors on payload(EX)
+            cond = (not (self.grid[self.ex] & DATA_MASK)) if opcode == 36 else \
+                   bool(self.grid[self.ex] & DATA_MASK)
             prev_dir = SLASH_REFLECT[self.ip_dir] if cond else self.ip_dir
         else:
             prev_dir = self.ip_dir
@@ -772,22 +772,22 @@ class FB2DSimulator:
         elif opcode == 26:   # was CL South, undo North
             self.cl = self._move_head(self.cl, DIR_N)
 
-        # ── GP (garbage pointer) undo operations ──
+        # ── EX (exteroceptor) undo operations ──
         elif opcode == 27:   # P was ++, undo -- (Δp dec)
-            self.grid[self.gp] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.gp]]]
+            self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
 
         elif opcode == 28:   # Q was --, undo ++ (Δp inc)
-            self.grid[self.gp] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.gp]]]
+            self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
 
-        elif opcode in (29, 30, 31, 32):  # GP movement, undo
-            self.gp = self._move_head(self.gp, HEAD_MOVE_INVERSE[opcode])
+        elif opcode in (29, 30, 31, 32):  # EX movement, undo
+            self.ex = self._move_head(self.ex, HEAD_MOVE_INVERSE[opcode])
 
         elif opcode == 33:   # K is self-inverse
-            self.cl, self.gp = self.gp, self.cl
+            self.cl, self.ex = self.ex, self.cl
 
         elif opcode == 38:   # Z is self-inverse
-            self.grid[self.h0], self.grid[self.gp] = \
-                self.grid[self.gp], self.grid[self.h0]
+            self.grid[self.h0], self.grid[self.ex] = \
+                self.grid[self.ex], self.grid[self.h0]
 
         # ── Bit-level undo (v1.6) ──
         elif opcode == 39:   # x XOR is self-inverse
@@ -841,48 +841,48 @@ class FB2DSimulator:
         elif opcode == 48:   # ; was [CL]--, undo ++ (Δp inc)
             self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
 
-        # ── H2 (scan head) undo (v1.9) ──
-        elif opcode in (49, 50, 51, 52):    # H2 was moved, undo
-            self.h2 = self._move_head(self.h2, HEAD_MOVE_INVERSE[opcode])
+        # ── IX (interoceptor) undo (v1.9) ──
+        elif opcode in (49, 50, 51, 52):    # IX was moved, undo
+            self.ix = self._move_head(self.ix, HEAD_MOVE_INVERSE[opcode])
 
         elif opcode == 53:   # m XOR is self-inverse
-            if self.h0 != self.h2:  # NOP under head overlap
-                self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.h2]
+            if self.h0 != self.ix:  # NOP under head overlap
+                self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.ix]
 
         elif opcode == 54:   # M was -=, undo += (Δp add)
-            if self.h0 != self.h2:  # NOP under head overlap
+            if self.h0 != self.ix:  # NOP under head overlap
                 _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-                _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h2]])) & PAYLOAD_MASK
+                _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.ix]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 55:   # j XOR is self-inverse
-            if self.h2 != self.h0:  # NOP under head overlap
-                self.grid[self.h2] = self.grid[self.h2] ^ self.grid[self.h0]
+            if self.ix != self.h0:  # NOP under head overlap
+                self.grid[self.ix] = self.grid[self.ix] ^ self.grid[self.h0]
 
         elif opcode == 56:   # V swap is self-inverse
-            self.grid[self.cl], self.grid[self.h2] = \
-                self.grid[self.h2], self.grid[self.cl]
+            self.grid[self.cl], self.grid[self.ix] = \
+                self.grid[self.ix], self.grid[self.cl]
 
-        # ── H2 momentum undo (v1.10) ──
+        # ── IX momentum undo (v1.10) ──
         elif opcode == 57:   # A was advance, undo = retreat
-            self.h2 = self._move_head(self.h2, self.h2_dir ^ 2)
+            self.ix = self._move_head(self.ix, self.ix_dir ^ 2)
 
         elif opcode == 58:   # B was retreat, undo = advance
-            self.h2 = self._move_head(self.h2, self.h2_dir)
+            self.ix = self._move_head(self.ix, self.ix_dir)
 
         elif opcode == 59:   # U flip is self-inverse
-            self.h2_dir = self.h2_dir ^ 2
+            self.ix_dir = self.ix_dir ^ 2
 
-        # ── H2 vertical momentum undo (v1.12) ──
+        # ── IX vertical momentum undo (v1.12) ──
         elif opcode == 60:   # C was advance, undo = retreat
-            self.h2 = self._move_head(self.h2, self.h2_vdir ^ 2)
+            self.ix = self._move_head(self.ix, self.ix_vdir ^ 2)
 
         elif opcode == 61:   # D was retreat, undo = advance
-            self.h2 = self._move_head(self.h2, self.h2_vdir)
+            self.ix = self._move_head(self.ix, self.ix_vdir)
 
         elif opcode == 62:   # O flip is self-inverse
-            self.h2_vdir = self.h2_vdir ^ 2
+            self.ix_vdir = self.ix_vdir ^ 2
 
         # Mirrors (incl 34–37) and NOP: no data effect to undo (direction handled above)
 
@@ -936,9 +936,9 @@ class FB2DSimulator:
         self.ip_dir = DIR_E
         self.h0 = 0
         self.h1 = 0
-        self.h2 = 0
+        self.ix = 0
         self.cl = 0
-        self.gp = 0
+        self.ex = 0
         self.step_count = 0
         self.n_ips = 1
         self.active_ip = 0
@@ -1107,8 +1107,8 @@ class FB2DSimulator:
         cl_r, cl_c = self._to_rc(self.cl)
         h0_r, h0_c = self._to_rc(self.h0)
         h1_r, h1_c = self._to_rc(self.h1)
-        h2_r, h2_c = self._to_rc(self.h2)
-        gp_r, gp_c = self._to_rc(self.gp)
+        ix_r, ix_c = self._to_rc(self.ix)
+        ex_r, ex_c = self._to_rc(self.ex)
 
         # Header
         print(f"\n{'═' * 70}")
@@ -1118,8 +1118,8 @@ class FB2DSimulator:
                   f"CL={self.cl}({cl_r},{cl_c})  "
                   f"H0={self.h0}({h0_r},{h0_c})  "
                   f"H1={self.h1}({h1_r},{h1_c})  "
-                  f"H2={self.h2}({h2_r},{h2_c})  "
-                  f"GP={self.gp}({gp_r},{gp_c})")
+                  f"IX={self.ix}({ix_r},{ix_c})  "
+                  f"EX={self.ex}({ex_r},{ex_c})")
         else:
             print(f"  Step {self.step_count}   ({self.n_ips} IPs)")
             for idx, ips in enumerate(self.ips):
@@ -1128,8 +1128,8 @@ class FB2DSimulator:
                 marker = '*' if idx == self.active_ip else ' '
                 print(f"  {marker}IP{idx}=({ir},{ic}){da}  "
                       f"CL={ips['cl']}  H0={ips['h0']}  "
-                      f"H1={ips['h1']}  H2={ips['h2']}  "
-                      f"GP={ips['gp']}")
+                      f"H1={ips['h1']}  IX={ips['ix']}  "
+                      f"EX={ips['ex']}")
         print(f"{'═' * 70}")
 
         # Column headers
@@ -1151,8 +1151,8 @@ class FB2DSimulator:
                 is_cl = (flat == self.cl)
                 is_h0 = (flat == self.h0)
                 is_h1 = (flat == self.h1)
-                is_h2 = (flat == self.h2)
-                is_gp = (flat == self.gp)
+                is_ix = (flat == self.ix)
+                is_ex = (flat == self.ex)
                 is_sel = (self.selection is not None and
                           self.selection[0] <= r <= self.selection[2] and
                           self.selection[1] <= c <= self.selection[3])
@@ -1167,13 +1167,13 @@ class FB2DSimulator:
                         cell = self._color(f" {ip_arrow} ", 'bold', 'red')
                     else:
                         cell = self._color(f" {ip_arrow} ", 'bold', 'bg_red')
-                elif is_gp and is_cl and is_h0:
+                elif is_ex and is_cl and is_h0:
                     cell = self._color(f"⟨{ch}⟩" if len(ch) == 1 else f"⟨{ch}", 'bold', 'yellow')
-                elif is_gp and is_cl:
+                elif is_ex and is_cl:
                     cell = self._color(f"⟨{ch}⟩" if len(ch) == 1 else f"⟨{ch}", 'magenta')
-                elif is_gp and is_h0:
+                elif is_ex and is_h0:
                     cell = self._color(f"⟨{ch}⟩" if len(ch) == 1 else f"⟨{ch}", 'cyan')
-                elif is_gp:
+                elif is_ex:
                     if val == 0:
                         cell = self._color(f" ○ ", 'yellow')
                     else:
@@ -1198,7 +1198,7 @@ class FB2DSimulator:
                         cell = self._color(f" o ", 'bold', 'green')
                     else:
                         cell = self._color(pad, 'bold', 'green')
-                elif is_h2:
+                elif is_ix:
                     if val == 0:
                         cell = self._color(f" o ", 'bold', 'blue')
                     else:
@@ -1226,8 +1226,8 @@ class FB2DSimulator:
             legend += (f"{self._color('CL', 'magenta')}  "
                        f"{self._color('H0', 'cyan')}  "
                        f"{self._color('H1', 'green')}  "
-                       f"{self._color('H2', 'blue')}  "
-                       f"{self._color('GP', 'yellow')}")
+                       f"{self._color('IX', 'blue')}  "
+                       f"{self._color('EX', 'yellow')}")
             print(legend)
 
     def display_values(self):
@@ -1235,13 +1235,13 @@ class FB2DSimulator:
         cl_r, cl_c = self._to_rc(self.cl)
         h0_r, h0_c = self._to_rc(self.h0)
         h1_r, h1_c = self._to_rc(self.h1)
-        h2_r, h2_c = self._to_rc(self.h2)
-        gp_r, gp_c = self._to_rc(self.gp)
+        ix_r, ix_c = self._to_rc(self.ix)
+        ex_r, ex_c = self._to_rc(self.ex)
 
         print(f"\n{'─' * 70}")
         print(f"  Values (decimal)   "
               f"IP=({self.ip_row},{self.ip_col})  "
-              f"CL={self.cl}  H0={self.h0}  H1={self.h1}  H2={self.h2}  GP={self.gp}")
+              f"CL={self.cl}  H0={self.h0}  H1={self.h1}  IX={self.ix}  EX={self.ex}")
         print(f"{'─' * 70}")
 
         # Column headers
@@ -1289,16 +1289,16 @@ class FB2DSimulator:
                     f.write(f"{p}ip_row={ip['ip_row']}\n{p}ip_col={ip['ip_col']}\n")
                     f.write(f"{p}ip_dir={ip['ip_dir']}\n")
                     f.write(f"{p}cl={ip['cl']}\n{p}h0={ip['h0']}\n")
-                    f.write(f"{p}h1={ip['h1']}\n{p}h2={ip['h2']}\n")
-                    f.write(f"{p}h2_dir={ip.get('h2_dir', DIR_E)}\n{p}h2_vdir={ip.get('h2_vdir', DIR_S)}\n{p}gp={ip['gp']}\n")
+                    f.write(f"{p}h1={ip['h1']}\n{p}ix={ip['ix']}\n")
+                    f.write(f"{p}ix_dir={ip.get('ix_dir', DIR_E)}\n{p}ix_vdir={ip.get('ix_vdir', DIR_S)}\n{p}ex={ip['ex']}\n")
             else:
                 # Single-IP: unprefixed keys (backward compatible)
                 ip = self.ips[0]
                 f.write(f"ip_row={ip['ip_row']}\nip_col={ip['ip_col']}\n")
                 f.write(f"ip_dir={ip['ip_dir']}\n")
                 f.write(f"cl={ip['cl']}\nh0={ip['h0']}\n")
-                f.write(f"h1={ip['h1']}\nh2={ip['h2']}\n")
-                f.write(f"h2_dir={ip.get('h2_dir', DIR_E)}\nh2_vdir={ip.get('h2_vdir', DIR_S)}\ngp={ip['gp']}\n")
+                f.write(f"h1={ip['h1']}\nix={ip['ix']}\n")
+                f.write(f"ix_dir={ip.get('ix_dir', DIR_E)}\nix_vdir={ip.get('ix_vdir', DIR_S)}\nex={ip['ex']}\n")
             f.write(f"step={self.step_count}\n")
             f.write(f"grid={','.join(str(v) for v in self.grid)}\n")
 
@@ -1329,17 +1329,18 @@ class FB2DSimulator:
 
         if n_ips == 1 and 'ip_row' in data:
             # Legacy single-IP format (unprefixed keys)
+            # Backward compat: try new keys first, fall back to old (h2/gp/h2_dir/h2_vdir)
             self.ips.append({
                 'ip_row': int(data.get('ip_row', 0)),
                 'ip_col': int(data.get('ip_col', 0)),
                 'ip_dir': int(data.get('ip_dir', DIR_E)),
                 'h0': int(data.get('h0', 0)),
                 'h1': int(data.get('h1', 0)),
-                'h2': int(data.get('h2', 0)),
-                'h2_dir': int(data.get('h2_dir', DIR_E)),
-                'h2_vdir': int(data.get('h2_vdir', DIR_S)),
+                'ix': int(data.get('ix', data.get('h2', 0))),
+                'ix_dir': int(data.get('ix_dir', data.get('h2_dir', DIR_E))),
+                'ix_vdir': int(data.get('ix_vdir', data.get('h2_vdir', DIR_S))),
                 'cl': int(data.get('cl', 0)),
-                'gp': int(data.get('gp', 0)),
+                'ex': int(data.get('ex', data.get('gp', 0))),
             })
         else:
             for i in range(n_ips):
@@ -1350,11 +1351,11 @@ class FB2DSimulator:
                     'ip_dir': int(data.get(f'{p}ip_dir', DIR_E)),
                     'h0': int(data.get(f'{p}h0', 0)),
                     'h1': int(data.get(f'{p}h1', 0)),
-                    'h2': int(data.get(f'{p}h2', 0)),
-                    'h2_dir': int(data.get(f'{p}h2_dir', DIR_E)),
-                    'h2_vdir': int(data.get(f'{p}h2_vdir', DIR_S)),
+                    'ix': int(data.get(f'{p}ix', data.get(f'{p}h2', 0))),
+                    'ix_dir': int(data.get(f'{p}ix_dir', data.get(f'{p}h2_dir', DIR_E))),
+                    'ix_vdir': int(data.get(f'{p}ix_vdir', data.get(f'{p}h2_vdir', DIR_S))),
                     'cl': int(data.get(f'{p}cl', 0)),
-                    'gp': int(data.get(f'{p}gp', 0)),
+                    'ex': int(data.get(f'{p}ex', data.get(f'{p}gp', 0))),
                 })
 
         self.n_ips = len(self.ips)
@@ -1430,7 +1431,7 @@ def load_example(sim, name):
         #           \ at bot-left, / at bot-right
         sim.grid = [0] * sim.grid_size
         sim.ip_row, sim.ip_col, sim.ip_dir = 0, 1, DIR_E
-        sim.cl, sim.h0, sim.h1, sim.h2, sim.gp = 0, 0, 0, 0, 0
+        sim.cl, sim.h0, sim.h1, sim.ix, sim.ex = 0, 0, 0, 0, 0
         sim.step_count = 0
         # Top row corners
         sim.grid[sim._to_flat(0, 0)] = OPCODES['/']
@@ -1467,8 +1468,8 @@ def load_example(sim, name):
         sim.cl = counter_pos
         sim.h0 = counter_pos
         sim.h1 = 0
-        sim.h2 = 0
-        sim.gp = 0
+        sim.ix = 0
+        sim.ex = 0
         print("Loaded 'loop': decrement loop, counter=5 at (7,0)")
         print("  /-·····\\    IP starts at (1,0)↑N")
         print("  ········    CL=H0=(7,0) [counter=5]")
@@ -1489,7 +1490,7 @@ def load_example(sim, name):
         sim.grid[sim._to_flat(2, 3)] = OPCODES['\\']
         sim.grid[sim._to_flat(2, 6)] = OPCODES['/']
         sim.ip_row, sim.ip_col, sim.ip_dir = 0, 0, DIR_E
-        sim.cl, sim.h0, sim.h1, sim.h2, sim.gp = 0, 0, 0, 0, 0
+        sim.cl, sim.h0, sim.h1, sim.ix, sim.ex = 0, 0, 0, 0, 0
         print("Loaded 'mirrors': zigzag path through 3 mirrors")
         print("  ···\\····    E→S at (0,3)")
         print("  ········")
@@ -1531,8 +1532,8 @@ def load_example(sim, name):
         sim.cl = cond_pos      # 112
         sim.h0 = result_pos    # 120
         sim.h1 = 0
-        sim.h2 = 0
-        sim.gp = 0
+        sim.ix = 0
+        sim.ex = 0
         print("Loaded 'branch': if-then-else conditional")
         print("        / · + · \\         (then-path: result++)")
         print("  → · · % · - · & · →    (else-path: result--)")
@@ -1586,8 +1587,8 @@ def load_example(sim, name):
         sim.cl = b_pos       # (6,15)
         sim.h0 = result_pos  # (5,15)
         sim.h1 = a_pos       # (7,15)
-        sim.h2 = 0
-        sim.gp = 0
+        sim.ix = 0
+        sim.ex = 0
 
         print(f"Loaded 'multiply': {a_val} × {b_val} via repeated addition")
         print("  / . S - N · · \\       (body: result+=a, H0→b, b--, H0→result)")
@@ -1656,9 +1657,9 @@ ISA ({opcount} opcodes + NOP):
     n (11)  North    s (12)  South    e (13)  East    w (14)  West
   CL movement:
     ^ (25)  North    v (26)  South    > (23)  East    < (24)  West
-  GP movement (garbage pointer):
+  EX movement (exteroceptor):
     { (32)  North    } (31)  South    ] (29)  East    [ (30)  West
-  H2 movement (scan head):
+  IX movement (interoceptor):
     H (49)  North    h (50)  South    a (51)  East    d (52)  West
   Byte-level data:
     + (15)  [H0]++                     - (16)  [H0]--
@@ -1668,23 +1669,23 @@ ISA ({opcount} opcodes + NOP):
     x (39)  [H0] ^= [H1]  (XOR, self-inverse)
     r (40)  [H0] rotate right 1 bit   l (41)  [H0] rotate left 1 bit
     f (42)  if [CL]&1: swap([H0],[H1]) (bit-0 Fredkin)
-    z (43)  swap(bit0 [H0], bit0 [GP]) (bit-level GP swap)
+    z (43)  swap(bit0 [H0], bit0 [EX]) (bit-level EX swap)
   CL data:
     G (21)  swap(H1_reg, [H0])         T (22)  swap([CL], [H0])
-  GP data (breadcrumbs):
-    P (27)  [GP]++  (leave breadcrumb)
-    Q (28)  [GP]--  (erase breadcrumb)
-  GP-conditional mirrors:
-    ( (34)  \\ if [GP]!=0               ) (35)  \\ if [GP]=0
-    $ (37)  /  if [GP]!=0               # (36)  /  if [GP]=0
-  CL/GP swap:
+  EX data (breadcrumbs):
+    P (27)  [EX]++  (leave breadcrumb)
+    Q (28)  [EX]--  (erase breadcrumb)
+  EX-conditional mirrors:
+    ( (34)  \\ if [EX]!=0               ) (35)  \\ if [EX]=0
+    $ (37)  /  if [EX]!=0               # (36)  /  if [EX]=0
+  CL/EX swap:
     K (33)  swap(CL_register, GP_register)
-  Data/GP swap:
-    Z (38)  swap([H0], [GP])  (byte-level, zero a variable)
-  H2 data (scan head, v1.9):
-    m (53)  [H0] ^= [H2]  (raw XOR, self-inv) M (54)  [H0] -= [H2]  (Δp payload sub)
-    j (55)  [H2] ^= [H0]  (write-back, raw 16-bit, self-inverse)
-    V (56)  swap([CL], [H2])  (test bridge, self-inverse)
+  Data/EX swap:
+    Z (38)  swap([H0], [EX])  (byte-level, zero a variable)
+  IX data (interoceptor, v1.9):
+    m (53)  [H0] ^= [IX]  (raw XOR, self-inv) M (54)  [H0] -= [IX]  (Δp payload sub)
+    j (55)  [IX] ^= [H0]  (write-back, raw 16-bit, self-inverse)
+    V (56)  swap([CL], [IX])  (test bridge, self-inverse)
   Notation: H0 = head position, [H0] = value at that position
 
   / reflect: E<->N  S<->W     \\ reflect: E<->S  N<->W
@@ -1705,8 +1706,8 @@ Commands:
   cl [r c | flat]      Set/show CL (on active IP)
   h0 [r c | flat]      Set/show H0 (on active IP)
   h1 [r c | flat]      Set/show H1 (on active IP)
-  h2 [r c | flat]      Set/show H2 (on active IP)
-  gp [r c | flat]      Set/show GP (on active IP)
+  ix [r c | flat]      Set/show IX (on active IP)
+  ex [r c | flat]      Set/show EX (on active IP)
 
   step / s [n]         Forward n steps — all IPs interleaved (default 1)
   back / b [n]         Reverse n steps — all IPs (default 1)
@@ -1854,12 +1855,12 @@ def interactive_session():
                         r, c = ipstate['ip_row'], ipstate['ip_col']
                         d = DIR_ARROWS[ipstate['ip_dir']]
                         active = " *" if i == sim.active_ip else ""
-                        h2d = DIR_ARROWS[ipstate.get('h2_dir', DIR_E)]
-                        h2v = DIR_ARROWS[ipstate.get('h2_vdir', DIR_S)]
+                        h2d = DIR_ARROWS[ipstate.get('ix_dir', DIR_E)]
+                        h2v = DIR_ARROWS[ipstate.get('ix_vdir', DIR_S)]
                         print(f"  IP{i}: ({r},{c}) {d}  "
                               f"CL={ipstate['cl']} H0={ipstate['h0']} "
-                              f"H1={ipstate['h1']} H2={ipstate['h2']}({h2d},{h2v}) "
-                              f"GP={ipstate['gp']}{active}")
+                              f"H1={ipstate['h1']} IX={ipstate['ix']}({h2d},{h2v}) "
+                              f"EX={ipstate['ex']}{active}")
                 elif len(args) == 1 and args[0].isdigit():
                     # Select active IP: ip 0, ip 1, etc.
                     idx = int(args[0])
@@ -1923,8 +1924,8 @@ def interactive_session():
                       f"{DIR_ARROWS[sim.ip_dir]}")
                 sim.display_grid()
 
-            # ── CL / H0 / H1 / H2 / GP ──
-            elif cmd in ('cl', 'h0', 'h1', 'h2', 'gp'):
+            # ── CL / H0 / H1 / IX / EX ──
+            elif cmd in ('cl', 'h0', 'h1', 'ix', 'ex'):
                 if args:
                     pos, _ = parse_pos(sim, args)
                     if pos is not None:

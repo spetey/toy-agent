@@ -38,9 +38,9 @@ a "neighborhood" of 12 payloads (1 center + 11 single-bit neighbors).
 |------|---------|
 | H0   | Primary data head |
 | H1   | Secondary data head |
-| H2   | Scan head — programmable head for cross-gadget correction |
+| IX   | Interoceptor — programmable head for cross-gadget correction |
 | CL   | Condition latch — tested by conditional mirrors; also provides rotation amounts |
-| GP   | Garbage pointer — breadcrumb trail for reversibility |
+| EX   | Exteroceptor — breadcrumb trail for reversibility |
 
 All heads point to cells on the same toroidal grid as the IP.
 
@@ -85,14 +85,14 @@ Conditional mirrors test whether any data bit in [CL] is set
 | `<` | 24 | Move CL west |
 | `^` | 25 | Move CL north |
 | `v` | 26 | Move CL south |
-| `]` | 29 | Move GP east |
-| `[` | 30 | Move GP west |
-| `}` | 31 | Move GP south |
-| `{` | 32 | Move GP north |
-| `H` | 49 | Move H2 north |
-| `h` | 50 | Move H2 south |
-| `a` | 51 | Move H2 east |
-| `d` | 52 | Move H2 west |
+| `]` | 29 | Move EX east |
+| `[` | 30 | Move EX west |
+| `}` | 31 | Move EX south |
+| `{` | 32 | Move EX north |
+| `H` | 49 | Move IX north |
+| `h` | 50 | Move IX south |
+| `a` | 51 | Move IX east |
+| `d` | 52 | Move IX west |
 
 All movement wraps on the torus.
 
@@ -129,7 +129,7 @@ correction gadget uses them to manipulate raw bits.
 | `r` | 40 | [H0] rotate right 1 bit | `l` |
 | `l` | 41 | [H0] rotate left 1 bit | `r` |
 | `f` | 42 | if [CL] & 1: swap([H0], [H1]) — bit-0 Fredkin | self |
-| `z` | 43 | swap(bit 0 of [H0], bit 0 of [GP]) | self |
+| `z` | 43 | swap(bit 0 of [H0], bit 0 of [EX]) | self |
 | `R` | 44 | [H0] rotate right by (payload([CL]) & 15) bits | `L` |
 | `L` | 45 | [H0] rotate left by (payload([CL]) & 15) bits | `R` |
 | `Y` | 46 | [H0] ^= ror([H1], payload([CL]) & 15) — fused rotate-XOR | self |
@@ -144,49 +144,49 @@ Key distinctions:
   conditional logic
 - **`R`/`L`/`Y`** read the rotation amount from `payload([CL]) & 15`
   (0-15 positions, suitable for 16-bit cells)
-- **`z`** swaps raw bit 0 of [H0] with raw bit 0 of [GP] — used to
+- **`z`** swaps raw bit 0 of [H0] with raw bit 0 of [EX] — used to
   extract single syndrome/parity bits
 
-## GP (Garbage Pointer) Ops (8 opcodes)
+## EX (Exteroceptor) Ops (8 opcodes)
 
 | Op | Payload | Description | Inverse |
 |----|---------|-------------|---------|
-| `P` | 27 | payload([GP])++ — leave breadcrumb | `Q` |
-| `Q` | 28 | payload([GP])-- — erase breadcrumb | `P` |
-| `K` | 33 | swap(CL register, GP register) — exchange head positions | self |
-| `(` | 34 | `\` reflect if payload([GP]) != 0 | — |
-| `)` | 35 | `\` reflect if payload([GP]) == 0 | — |
-| `#` | 36 | `/` reflect if payload([GP]) == 0 | — |
-| `$` | 37 | `/` reflect if payload([GP]) != 0 | — |
-| `Z` | 38 | swap([H0], [GP]) — full 16-bit GP swap | self |
+| `P` | 27 | payload([EX])++ — leave breadcrumb | `Q` |
+| `Q` | 28 | payload([EX])-- — erase breadcrumb | `P` |
+| `K` | 33 | swap(CL register, EX register) — exchange head positions | self |
+| `(` | 34 | `\` reflect if payload([EX]) != 0 | — |
+| `)` | 35 | `\` reflect if payload([EX]) == 0 | — |
+| `#` | 36 | `/` reflect if payload([EX]) == 0 | — |
+| `$` | 37 | `/` reflect if payload([EX]) != 0 | — |
+| `Z` | 38 | swap([H0], [EX]) — full 16-bit EX swap | self |
 
-GP mirrors test `payload([GP])` (data bits only, ignoring parity).
+EX mirrors test `payload([EX])` (data bits only, ignoring parity).
 
 The standard loop pattern is `( P ... %`:
 
-1. `(` tests [GP]: if payload != 0, reflect (skip loop body). On first
-   entry [GP] is 0, so IP continues into the body.
-2. `P` increments [GP], leaving a breadcrumb (makes [GP] nonzero).
+1. `(` tests [EX]: if payload != 0, reflect (skip loop body). On first
+   entry [EX] is 0, so IP continues into the body.
+2. `P` increments [EX], leaving a breadcrumb (makes [EX] nonzero).
 3. Loop body executes.
 4. `%` tests [CL]: if payload([CL]) != 0, reflect back toward `(`.
 
-On re-entry, `(` sees nonzero [GP] and reflects (exits). The reverse
-path uses `Q` to erase the breadcrumb, restoring [GP] to 0.
+On re-entry, `(` sees nonzero [EX] and reflects (exits). The reverse
+path uses `Q` to erase the breadcrumb, restoring [EX] to 0.
 
-## H2 Scan Head Ops (4 opcodes)
+## IX Interoceptor Ops (4 opcodes)
 
-H2 is a programmable scan head for cross-gadget correction. In the
-dual-gadget architecture, each gadget's H2 points at the other gadget's
+IX is a programmable interoceptor for cross-gadget correction. In the
+dual-gadget architecture, each gadget's IX points at the other gadget's
 code cells. The copy-down pattern: `m` copies a remote codeword to a
-local GP cell, correction runs locally, then `j` writes the correction
+local EX cell, correction runs locally, then `j` writes the correction
 mask back to the remote cell.
 
 | Op | Payload | Description | Inverse |
 |----|---------|-------------|---------|
-| `m` | 53 | [H0] ^= [H2] — raw 16-bit XOR (copy-in / uncompute) | self |
-| `M` | 54 | payload([H0]) -= payload([H2]) (mod 2048, with parity fixup) | — |
-| `j` | 55 | [H2] ^= [H0] — raw 16-bit write-back | self |
-| `V` | 56 | swap([CL], [H2]) — test bridge (full 16-bit) | self |
+| `m` | 53 | [H0] ^= [IX] — raw 16-bit XOR (copy-in / uncompute) | self |
+| `M` | 54 | payload([H0]) -= payload([IX]) (mod 2048, with parity fixup) | — |
+| `j` | 55 | [IX] ^= [H0] — raw 16-bit write-back | self |
+| `V` | 56 | swap([CL], [IX]) — test bridge (full 16-bit) | self |
 
 `m` and `j` operate on raw 16-bit cell values (like bit-level ops).
 `M` operates on payloads and maintains the Hamming invariant (like
@@ -194,65 +194,65 @@ byte-level arithmetic). `V` is a full 16-bit swap.
 
 The copy-down pattern for correcting a remote cell:
 
-1. `m` — copy remote codeword [H2] into local zero cell via XOR
-2. Run correction logic locally (H0, H1, CL, GP on the GP row)
+1. `m` — copy remote codeword [IX] into local zero cell via XOR
+2. Run correction logic locally (H0, H1, CL, EX on the EX row)
 3. `M` — uncompute local copy (payload subtract zeroes the payload,
    since the remote cell is still the original value)
-4. `j` — write correction mask back: [H2] ^= [H0]
+4. `j` — write correction mask back: [IX] ^= [H0]
 
-Only H2 touches remote rows; all other heads stay local.
+Only IX touches remote rows; all other heads stay local.
 
-`V` (test bridge) enables boundary detection: swap [CL] with [H2] to
+`V` (test bridge) enables boundary detection: swap [CL] with [IX] to
 test a remote cell's value with conditional mirrors (`?`/`%`), then `V`
 again to restore.
 
-## H2 Horizontal Momentum Ops (3 opcodes)
+## IX Horizontal Momentum Ops (3 opcodes)
 
-H2 momentum ops give H2 a persistent horizontal direction (`h2_dir`,
-per-IP, defaults to East). This enables serpentine scanning: H2 sweeps
+IX momentum ops give IX a persistent horizontal direction (`ix_dir`,
+per-IP, defaults to East). This enables serpentine scanning: IX sweeps
 east across a row, detects a boundary, then retreats, moves vertically,
 flips direction, and sweeps west — systematic row-by-row coverage
 without coprimality constraints.
 
 | Op | Payload | Description | Inverse |
 |----|---------|-------------|---------|
-| `A` | 57 | Advance H2 one step in `h2_dir` | `B` |
-| `B` | 58 | Retreat H2 one step opposite `h2_dir` | `A` |
-| `U` | 59 | Flip `h2_dir` via XOR 2 (E↔W, N↔S) | self |
+| `A` | 57 | Advance IX one step in `ix_dir` | `B` |
+| `B` | 58 | Retreat IX one step opposite `ix_dir` | `A` |
+| `U` | 59 | Flip `ix_dir` via XOR 2 (E↔W, N↔S) | self |
 
 The horizontal boundary detection pattern (local-only, no remote write):
 
-1. `A` — advance H2 in current direction
-2. `m` — copy [H2] to local [H0] via XOR (H0 was 0)
+1. `A` — advance IX in current direction
+2. `m` — copy [IX] to local [H0] via XOR (H0 was 0)
 3. `T` — move value to CL for testing
 4. `?` — if [CL]==0 (zero cell = boundary), redirect to handler
 5. `T` — restore CL, `m` — restore H0 (on non-boundary path)
 6. Handler: `/ B C U : \` — retreat, advance vertically, flip, signal
 
-## H2 Vertical Momentum Ops (3 opcodes)
+## IX Vertical Momentum Ops (3 opcodes)
 
-Per-IP field `h2_vdir` (defaults to South). Enables ping-pong bounded
-scanning: after a horizontal boundary, `C` advances H2 vertically. A
-vertical boundary test detects when H2 leaves the code+handler area.
-On vertical boundary: `D O C` bounces H2 back (retreat, flip, re-advance).
-H2 ping-pongs between the first code row and handler row without entering
+Per-IP field `ix_vdir` (defaults to South). Enables ping-pong bounded
+scanning: after a horizontal boundary, `C` advances IX vertically. A
+vertical boundary test detects when IX leaves the code+handler area.
+On vertical boundary: `D O C` bounces IX back (retreat, flip, re-advance).
+IX ping-pongs between the first code row and handler row without entering
 stomach/waste rows.
 
 | Op | Payload | Description | Inverse |
 |----|---------|-------------|---------|
-| `C` | 60 | Advance H2 one step in `h2_vdir` | `D` |
-| `D` | 61 | Retreat H2 one step opposite `h2_vdir` | `C` |
-| `O` | 62 | Flip `h2_vdir` via XOR 2 (N↔S, E↔W) | self |
+| `C` | 60 | Advance IX one step in `ix_vdir` | `D` |
+| `D` | 61 | Retreat IX one step opposite `ix_vdir` | `C` |
+| `O` | 62 | Flip `ix_vdir` via XOR 2 (N↔S, E↔W) | self |
 
 Vertical boundary test pattern (on last code row, between merge gates):
 
 ```
 T Z ]        deposit handler signal to waste row
-m T ? T m    test [H2] after vertical advance
+m T ? T m    test [IX] after vertical advance
 ```
 
-If [H2]=0 (outside code+handler area): `?` fires, IP drops to bounce
-sub-handler: `/ D O C : \` (retreat, flip h2_vdir, re-advance, signal).
+If [IX]=0 (outside code+handler area): `?` fires, IP drops to bounce
+sub-handler: `/ D O C : \` (retreat, flip ix_vdir, re-advance, signal).
 
 Full ping-pong scan (5 rows, W=99): rows 7→8→9→10→11→10→9→8→7→8...
 ~864 cycles per full down-up sweep.
@@ -268,19 +268,19 @@ Every opcode has a unique inverse (itself or another opcode):
 | `r` | `l` | Rotate right / left by 1 |
 | `R` | `L` | Rotate right / left by CL |
 | `:` | `;` | CL increment / decrement |
-| `P` | `Q` | GP breadcrumb / erase |
+| `P` | `Q` | EX breadcrumb / erase |
 | `N`/`S` | `S`/`N` | H0 movement pairs |
 | `E`/`W` | `W`/`E` | H0 movement pairs |
 | `n`/`s` | `s`/`n` | H1 movement pairs |
 | `e`/`w` | `w`/`e` | H1 movement pairs |
 | `>`/`<` | `<`/`>` | CL movement pairs |
 | `^`/`v` | `v`/`^` | CL movement pairs |
-| `]`/`[` | `[`/`]` | GP movement pairs |
-| `}`/`{` | `{`/`}` | GP movement pairs |
-| `H`/`h` | `h`/`H` | H2 movement pairs |
-| `a`/`d` | `d`/`a` | H2 movement pairs |
-| `A`/`B` | `B`/`A` | H2 horizontal momentum advance / retreat |
-| `C`/`D` | `D`/`C` | H2 vertical momentum advance / retreat |
+| `]`/`[` | `[`/`]` | EX movement pairs |
+| `}`/`{` | `{`/`}` | EX movement pairs |
+| `H`/`h` | `h`/`H` | IX movement pairs |
+| `a`/`d` | `d`/`a` | IX movement pairs |
+| `A`/`B` | `B`/`A` | IX horizontal momentum advance / retreat |
+| `C`/`D` | `D`/`C` | IX vertical momentum advance / retreat |
 
 Self-inverse ops: `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`,
 `m`, `j`, `V`, `U`, `O`

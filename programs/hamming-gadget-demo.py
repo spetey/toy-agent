@@ -7,17 +7,17 @@ in one forward pass, with full step_back() reversibility.
 
 Uses Y (fused rotate-XOR, v1.7) for syndrome/parity computation and a
 barrel shifter (paired f gates with l/r rotations) for 1-hot correction
-mask assembly. Only 1 dirty GP cell per single-bit correction (0 for
+mask assembly. Only 1 dirty EX cell per single-bit correction (0 for
 no-error and double-error cases).
 
 ARCHITECTURE (3-row torus, re-entrant, full Y-uncompute):
 
   Row 0 (DATA):  CW          ← single cell, ready for another correction loop
   Row 1 (CODE):  [opcodes left-to-right ...]
-  Row 2 (GP):    PA S0 S1 S2 S3 EV SCR ROT
+  Row 2 (EX):    PA S0 S1 S2 S3 EV SCR ROT
                   0  1  2  3  4  5   6   7
 
-All scratch cells live on the GP row (assumed zero).
+All scratch cells live on the EX row (assumed zero).
 After correction: S0-S3,SCR,ROT clean (Y-uncomputed/unused). ≤1 dirty cell
 (PA or EV depending on error type; 0 dirty for no-error/double-error).
 
@@ -28,7 +28,7 @@ z opcode: swap(bit0 of [H0], bit0 of [H1])  — raw bit swap.
 ALGORITHM PHASES (all on CODE row, IP walks East):
 
   Phase A — OVERALL PARITY (~32 ops):
-    H0 on PA (GP row), H1 on CW. Y with CL payload 0..15.
+    H0 on PA (EX row), H1 on CW. Y with CL payload 0..15.
     PA.bit0 = XOR of all 16 CW bits = overall parity (p_all).
 
   Phase B — z-EXTRACT PA → EVIDENCE (~6 ops):
@@ -60,7 +60,7 @@ ALGORITHM PHASES (all on CODE row, IP walks East):
     z(EV, PA) + x(EV, PA) merges two residuals into ≤1 dirty cell.
 
   Phase G — EPILOGUE (~7 ops):
-    Return H0, H1 to (DATA_ROW, CW). CL at ROT(0), GP at PA.
+    Return H0, H1 to (DATA_ROW, CW). CL at ROT(0), EX at PA.
 
 DIRTY CELL ANALYSIS:
   No error (p=0,s=0):         0 dirty cells
@@ -71,28 +71,28 @@ DIRTY CELL ANALYSIS:
 RE-ENTRANCY SLOT LAYOUT:
     Each correction cycle uses an 8-column "slot" (SLOT_WIDTH = 8).
     The codeword sits at slot_base on DATA_ROW; scratch cells occupy
-    slot_base..slot_base+7 on GP_ROW.
+    slot_base..slot_base+7 on EX_ROW.
 
-      Slot 0: cols 0..7    CW at (DATA, 0),   scratch at (GP, 0..7)
-      Slot 1: cols 8..15   CW at (DATA, 8),   scratch at (GP, 8..15)
+      Slot 0: cols 0..7    CW at (DATA, 0),   scratch at (EX, 0..7)
+      Slot 1: cols 8..15   CW at (DATA, 8),   scratch at (EX, 8..15)
       ...
 
     Between cycles, the outer loop advances all heads east by SLOT_WIDTH:
-      H0, H1, CL, GP += 8 east each
+      H0, H1, CL, EX += 8 east each
 
 TORUS SWEEP (re-entrant loop via actual fb2d opcodes):
     The code row contains gadget (336 ops) + head advance (32 ops) = 368 ops.
     368 / SLOT_WIDTH = 46 slots per full row. The IP wraps on the torus
     back to column 0 after each cycle. Each cycle takes `cols` steps.
 
-    SINGLE-PASS: each GP slot starts at 0 (clean). After correction,
-    ≤1 dirty cell per slot. A second lap would find dirty GP cells.
+    SINGLE-PASS: each EX slot starts at 0 (clean). After correction,
+    ≤1 dirty cell per slot. A second lap would find dirty EX cells.
     Multi-pass requires a compressor or zero reservoir (future phase).
 
 WRAPPED TORUS SWEEP (boustrophedon re-entrant loop):
     Same 368 ops wrapped into W-wide boustrophedon layout via mirrors.
     The IP snakes through code rows, exits at col W-1 going South,
-    passes through GP[W-1] and DATA[W-1] (both safe NOPs), then
+    passes through EX[W-1] and DATA[W-1] (both safe NOPs), then
     re-enters via the existing boustrophedon mirror at (CODE_ROW, W-1).
     No corridor row needed. Requires (W-1) % SLOT_WIDTH not in {0, 5}.
     For W=64: 8×64 grid, 6 code rows, 388 steps/cycle, max 8 codewords.
@@ -112,22 +112,22 @@ from hamming import encode, inject_error, inject_double_error, decode
 # ── Data cell columns (row 0) ── (just the codeword!)
 CW = 0   # codeword
 
-# ── GP row scratch cell columns (assumed zero) ──
+# ── EX row scratch cell columns (assumed zero) ──
 # Barrel-shifter layout: PA and EV are the only potentially dirty cells.
 # Dirty after gadget: ≤1 of PA(0) or EV(5), depending on error type.
 # Clean after gadget: S0-S3(1-4) via Y-uncompute, SCR(6), ROT(7).
-GP_PA   = 0   # overall parity (0 or raw 1; only dirty for bit-0 errors)
+EX_PA   = 0   # overall parity (0 or raw 1; only dirty for bit-0 errors)
 GP_S0   = 1   # syndrome bit 0 accumulator (cleaned by Y-uncompute)
 GP_S1   = 2   # syndrome bit 1 accumulator (cleaned by Y-uncompute)
 GP_S2   = 3   # syndrome bit 2 accumulator (cleaned by Y-uncompute)
 GP_S3   = 4   # syndrome bit 3 accumulator (cleaned by Y-uncompute)
-GP_EV   = 5   # EVIDENCE: 1-hot correction mask (only dirty for bit-k errors)
-GP_SCR  = 6   # SCRATCH for barrel shifter f-pairs (always cleaned)
+EX_EV   = 5   # EVIDENCE: 1-hot correction mask (only dirty for bit-k errors)
+EX_SCR  = 6   # SCRATCH for barrel shifter f-pairs (always cleaned)
 ROT     = 7   # CL rotation counter (starts 0, recovered to 0)
 
 DATA_ROW = 0
 CODE_ROW = 1
-GP_ROW   = 2
+EX_ROW   = 2
 N_ROWS   = 3
 N_DATA   = 1   # just CW on data row
 
@@ -149,13 +149,13 @@ class GadgetBuilder:
 
     Uses Y (fused rotate-XOR) for efficient bit-position XOR accumulation.
     CL payload is manipulated inline via : and ; — no constant cells needed.
-    Tracks row and col for H0, H1, CL, and GP.
+    Tracks row and col for H0, H1, CL, and EX.
     """
 
     def __init__(self, h0_row=DATA_ROW, h0_col=CW,
                  h1_row=DATA_ROW, h1_col=CW,
                  cl_col=ROT, cl_payload=0,
-                 gp_col=GP_PA,
+                 gp_col=EX_PA,
                  n_rows=3):
         self.ops = []           # list of opchar strings
         self.cursor = 0         # current column on CODE_ROW
@@ -163,9 +163,9 @@ class GadgetBuilder:
         self.h0_col = h0_col
         self.h1_row = h1_row
         self.h1_col = h1_col
-        self.cl_col = cl_col    # CL position (column on GP row)
+        self.cl_col = cl_col    # CL position (column on EX row)
         self.cl_payload = cl_payload  # tracked payload at CL cell
-        self.gp_col = gp_col    # GP position (column on GP row)
+        self.gp_col = gp_col    # EX position (column on EX row)
         self.n_rows = n_rows
 
     def emit(self, opchar):
@@ -227,7 +227,7 @@ class GadgetBuilder:
         self.move_h1_col(target_col)
 
     def move_cl_col(self, target_col):
-        """Move CL east/west to target column on GP row.
+        """Move CL east/west to target column on EX row.
 
         After moving, cl_payload becomes unknown (new cell's value).
         Caller must set cl_payload if they want to track it.
@@ -274,11 +274,11 @@ def build_gadget(gp_distance=2, n_rows=3):
 
     Standard-form Hamming where syndrome == bit position. Uses a barrel
     shifter (paired f gates with l/r rotations) to build a 1-hot EVIDENCE
-    mask directly from overall parity and syndrome bits. Only 1 dirty GP
+    mask directly from overall parity and syndrome bits. Only 1 dirty EX
     cell per single-bit correction (0 for no-error and double-error).
 
     Args:
-        gp_distance: how many rows south from DATA_ROW to GP_ROW.
+        gp_distance: how many rows south from DATA_ROW to EX_ROW.
         n_rows: total grid rows (for toroidal shortcuts).
 
     Returns: (code_ops, total_cols, end_col)
@@ -287,11 +287,11 @@ def build_gadget(gp_distance=2, n_rows=3):
     gp_row_idx = gp_distance
 
     # ── Phase A: Overall parity via Y ──
-    # H0 on PA (GP row), H1 on CW (DATA row), CL on ROT (payload 0).
+    # H0 on PA (EX row), H1 on CW (DATA row), CL on ROT (payload 0).
     # Y at rotations 0..15 → PA.bit0 = XOR of all 16 CW bits = p_all.
 
-    gb.move_h0_row(gp_row_idx)   # DATA→GP: toroidal shortcut
-    # H0 now at (GP_ROW, PA=0). H1 on CW. CL at ROT, payload 0.
+    gb.move_h0_row(gp_row_idx)   # DATA→EX: toroidal shortcut
+    # H0 now at (EX_ROW, PA=0). H1 on CW. CL at ROT, payload 0.
     gb.xor_accumulate_bits(list(range(16)))   # CL: 0→15
 
     phase_a_ops = gb.pos()
@@ -300,10 +300,10 @@ def build_gadget(gp_distance=2, n_rows=3):
     # Move H0 to EV, H1 to PA. z swaps bit0 of [H0=EV(=0)] with [H1=PA].
     # After: EV = raw p_all (0 or 1), PA.bit0 = 0.
 
-    gb.move_h0_col(GP_EV)       # PA(0) → EV(5): E×5
-    gb.move_h1(gp_row_idx, GP_PA)  # CW(DATA,0) → PA(GP,0)
+    gb.move_h0_col(EX_EV)       # PA(0) → EV(5): E×5
+    gb.move_h1(gp_row_idx, EX_PA)  # CW(DATA,0) → PA(EX,0)
     gb.emit('z')                 # EV.bit0 ← PA.bit0; PA.bit0 ← 0
-    gb.move_h1(DATA_ROW, CW)    # PA(GP,0) → CW(DATA,0)
+    gb.move_h1(DATA_ROW, CW)    # PA(EX,0) → CW(DATA,0)
 
     phase_b_ops = gb.pos() - phase_a_ops
 
@@ -311,13 +311,13 @@ def build_gadget(gp_distance=2, n_rows=3):
     # Same Y ops reversed (15→0). Cancels all Y-accumulated junk in PA.
     # PA.bit0 was zeroed by z, so after uncompute PA = raw p_all (0 or 1).
 
-    gb.move_h0_col(GP_PA)       # EV(5) → PA(0): W×5
+    gb.move_h0_col(EX_PA)       # EV(5) → PA(0): W×5
     gb.xor_accumulate_bits(list(range(15, -1, -1)))   # CL: 15→0
 
     phase_ap_ops = gb.pos() - phase_a_ops - phase_b_ops
 
     # ── Phase C: Syndrome computation via Y ──
-    # H0 on S0-S3 (GP row), H1 on CW, CL on ROT (payload 0).
+    # H0 on S0-S3 (EX row), H1 on CW, CL on ROT (payload 0).
     # Same optimized ordering as before for minimal :; ops.
 
     # H0: PA(0) → S0(1): E×1
@@ -349,8 +349,8 @@ def build_gadget(gp_distance=2, n_rows=3):
     # After all 4 stages: EV = p_all << syndrome (1-hot mask, or 0).
 
     # Position H0 on EV, H1 on SCR
-    gb.move_h0_col(GP_EV)                   # S3(4) → EV(5): E×1
-    gb.move_h1(gp_row_idx, GP_SCR)          # CW(DATA,0) → SCR(GP,6)
+    gb.move_h0_col(EX_EV)                   # S3(4) → EV(5): E×1
+    gb.move_h1(gp_row_idx, EX_SCR)          # CW(DATA,0) → SCR(EX,6)
 
     # Move CL to S0 for first barrel stage
     gb.move_cl_col(GP_S0)                    # ROT(7) → S0(1): <×6
@@ -374,7 +374,7 @@ def build_gadget(gp_distance=2, n_rows=3):
 
     # Move H0 to S3, H1 back to CW, CL back to ROT
     gb.move_h0_col(GP_S3)                    # EV(5) → S3(4): W×1
-    gb.move_h1(DATA_ROW, CW)                 # SCR(GP,6) → CW(DATA,0)
+    gb.move_h1(DATA_ROW, CW)                 # SCR(EX,6) → CW(DATA,0)
     gb.move_cl_col(ROT)                      # S3(4) → ROT(7): >×3
     gb.cl_payload = 8                        # ROT unchanged since Phase C
 
@@ -402,8 +402,8 @@ def build_gadget(gp_distance=2, n_rows=3):
     # ── Phase E: Correction XOR ──
     # CW ^= EVIDENCE. Flips the error bit (no-op if EV=0).
 
-    gb.move_h0(DATA_ROW, CW)                # S0(GP,1) → CW(DATA,0)
-    gb.move_h1(gp_row_idx, GP_EV)           # CW(DATA,0) → EV(GP,5)
+    gb.move_h0(DATA_ROW, CW)                # S0(EX,1) → CW(DATA,0)
+    gb.move_h1(gp_row_idx, EX_EV)           # CW(DATA,0) → EV(EX,5)
     gb.emit('x')                             # CW ^= EVIDENCE
 
     phase_e_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops
@@ -418,8 +418,8 @@ def build_gadget(gp_distance=2, n_rows=3):
     #   Bit-k (k≠0):   PA=1, EV=1<<k → z: EV|=1, PA=0. x: nop.
     #                   EV=(1<<k)|1 dirty.               (1 dirty)
 
-    gb.move_h0(gp_row_idx, GP_EV)           # CW(DATA,0) → EV(GP,5)
-    gb.move_h1_col(GP_PA)                    # EV(GP,5) → PA(GP,0): w×5
+    gb.move_h0(gp_row_idx, EX_EV)           # CW(DATA,0) → EV(EX,5)
+    gb.move_h1_col(EX_PA)                    # EV(EX,5) → PA(EX,0): w×5
     gb.emit('z')                             # swap bit0 of EV with PA
     gb.emit('x')                             # EV ^= PA
 
@@ -428,10 +428,10 @@ def build_gadget(gp_distance=2, n_rows=3):
 
     # ── Phase G: Epilogue ──
     # Return H0 and H1 to (DATA_ROW, CW).
-    # CL at ROT(7), payload 0.  GP at PA(0).
+    # CL at ROT(7), payload 0.  EX at PA(0).
 
-    gb.move_h0(DATA_ROW, CW)                # EV(GP,5) → CW(DATA,0)
-    gb.move_h1(DATA_ROW, CW)                # PA(GP,0) → CW(DATA,0)
+    gb.move_h0(DATA_ROW, CW)                # EV(EX,5) → CW(DATA,0)
+    gb.move_h1(DATA_ROW, CW)                # PA(EX,0) → CW(DATA,0)
 
     phase_g_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops
                    - phase_c_ops - phase_d_ops - phase_cp_ops
@@ -440,8 +440,8 @@ def build_gadget(gp_distance=2, n_rows=3):
     # Final state:
     #   H0 = (DATA_ROW, CW)     — ready for next codeword
     #   H1 = (DATA_ROW, CW)     — ready for next codeword
-    #   CL = (GP_ROW, ROT), payload 0
-    #   GP = (GP_ROW, GP_PA=0)  — slot base
+    #   CL = (EX_ROW, ROT), payload 0
+    #   EX = (EX_ROW, EX_PA=0)  — slot base
 
     end_col = gb.pos()
     total_cols = gb.pos() + 2
@@ -454,7 +454,7 @@ SLOT_WIDTH = ROT + 1   # 8 columns per correction slot
 def make_hamming_gadget(codeword, wrap_width=None):
     """Build a torus with the Hamming(16,11) SECDED gadget.
 
-    Data row has only CW. All scratch on GP row. CL on GP row.
+    Data row has only CW. All scratch on EX row. CL on EX row.
 
     If wrap_width is None, uses a single-row layout (3 rows total).
     If wrap_width is given, wraps the code into that width using
@@ -472,7 +472,7 @@ def make_hamming_gadget(codeword, wrap_width=None):
         for i, opchar in enumerate(code_ops):
             sim.grid[sim._to_flat(CODE_ROW, i)] = encode_opcode(OP[opchar])
 
-        gp_row = GP_ROW
+        ex_row = EX_ROW
         sim._wrap_end_row = CODE_ROW
         sim._wrap_end_col = end_col
         sim._wrap_end_dir = 1  # East
@@ -502,7 +502,7 @@ def make_hamming_gadget(codeword, wrap_width=None):
             gp_dist = new_gp_dist
             n_rows = new_n_rows
 
-        gp_row = n_rows - 1
+        ex_row = n_rows - 1
         sim = FB2DSimulator(rows=n_rows, cols=cols)
 
         rows_used, end_row, last_op_col, end_dir = sim.wrap_code(
@@ -527,8 +527,8 @@ def make_hamming_gadget(codeword, wrap_width=None):
     sim.ip_dir = 1  # East
     sim.h0 = sim._to_flat(DATA_ROW, CW)
     sim.h1 = sim._to_flat(DATA_ROW, CW)
-    sim.cl = sim._to_flat(gp_row, ROT)     # CL on ROT cell
-    sim.gp = sim._to_flat(gp_row, GP_PA)   # GP on PA cell
+    sim.cl = sim._to_flat(ex_row, ROT)     # CL on ROT cell
+    sim.ex = sim._to_flat(ex_row, EX_PA)   # EX on PA cell
 
     return sim
 
@@ -560,8 +560,8 @@ def run_gadget(codeword, verbose=False, wrap_width=None):
     result_cw = sim.grid[sim._to_flat(DATA_ROW, CW)]
 
     # Check re-entrancy head positions
-    gp_row = sim.rows - 1
-    reentrant_ok = check_reentrant(sim, gp_row, verbose=verbose)
+    ex_row = sim.rows - 1
+    reentrant_ok = check_reentrant(sim, ex_row, verbose=verbose)
 
     # Reference syndrome for reporting
     _, ref_syn, ref_p_all, _ = decode(codeword)
@@ -575,9 +575,9 @@ def run_gadget(codeword, verbose=False, wrap_width=None):
         sim.grid[sim._to_flat(DATA_ROW, CW)] == codeword
     )
 
-    # GP row scratch cells should be back to 0 after reversal
+    # EX row scratch cells should be back to 0 after reversal
     for col in range(SLOT_WIDTH):
-        if sim.grid[sim._to_flat(gp_row, col)] != 0:
+        if sim.grid[sim._to_flat(ex_row, col)] != 0:
             reverse_ok = False
 
     if verbose and not reverse_ok:
@@ -586,26 +586,26 @@ def run_gadget(codeword, verbose=False, wrap_width=None):
               f" (expected 0x{codeword:04x})")
         gp_names = ['PA', 'S0', 'S1', 'S2', 'S3', 'EV', 'SCR', 'ROT']
         for idx, name in enumerate(gp_names):
-            val = sim.grid[sim._to_flat(gp_row, idx)]
-            print(f"      GP.{name}=0x{val:04x}")
+            val = sim.grid[sim._to_flat(ex_row, idx)]
+            print(f"      EX.{name}=0x{val:04x}")
 
     return result_cw, ref_syn, ref_p_all, forward_steps, reverse_ok, reentrant_ok
 
 
-def check_reentrant(sim, gp_row, verbose=False):
+def check_reentrant(sim, ex_row, verbose=False):
     """Verify head positions are correct for re-entrancy after forward pass.
 
     Expected positions:
       H0 = (DATA_ROW, CW)
       H1 = (DATA_ROW, CW)
-      CL = (GP_ROW, ROT), payload 0
-      GP = (GP_ROW, GP_PA)
+      CL = (EX_ROW, ROT), payload 0
+      EX = (EX_ROW, EX_PA)
     """
     ok = True
     expected_h0 = sim._to_flat(DATA_ROW, CW)
     expected_h1 = sim._to_flat(DATA_ROW, CW)
-    expected_cl = sim._to_flat(gp_row, ROT)
-    expected_gp = sim._to_flat(gp_row, GP_PA)
+    expected_cl = sim._to_flat(ex_row, ROT)
+    expected_gp = sim._to_flat(ex_row, EX_PA)
 
     if sim.h0 != expected_h0:
         if verbose:
@@ -620,16 +620,16 @@ def check_reentrant(sim, gp_row, verbose=False):
     if sim.cl != expected_cl:
         if verbose:
             cl_r, cl_c = sim.cl // sim.cols, sim.cl % sim.cols
-            print(f"    [REENTRY] CL at ({cl_r},{cl_c}), expected ({gp_row},{ROT})")
+            print(f"    [REENTRY] CL at ({cl_r},{cl_c}), expected ({ex_row},{ROT})")
         ok = False
     if sim.grid[sim.cl] != 0:
         if verbose:
             print(f"    [REENTRY] [CL]=0x{sim.grid[sim.cl]:04x}, expected 0")
         ok = False
-    if sim.gp != expected_gp:
+    if sim.ex != expected_gp:
         if verbose:
-            gp_r, gp_c = sim.gp // sim.cols, sim.gp % sim.cols
-            print(f"    [REENTRY] GP at ({gp_r},{gp_c}), expected ({gp_row},{GP_PA})")
+            ex_r, ex_c = sim.ex // sim.cols, sim.ex % sim.cols
+            print(f"    [REENTRY] EX at ({ex_r},{ex_c}), expected ({ex_row},{EX_PA})")
         ok = False
 
     return ok
@@ -685,8 +685,8 @@ def run_reentrant_test(cases, verbose=False):
     Each case is (payload_11bit, error_bit_or_None).
 
     LAYOUT: Each correction cycle uses an 8-column "slot" (SLOT_WIDTH).
-      Slot 0: cols 0..7    CW at (DATA, 0),  scratch at (GP, 0..7)
-      Slot 1: cols 8..15   CW at (DATA, 8),  scratch at (GP, 8..15)
+      Slot 0: cols 0..7    CW at (DATA, 0),  scratch at (EX, 0..7)
+      Slot 1: cols 8..15   CW at (DATA, 8),  scratch at (EX, 8..15)
 
     Between cycles the outer loop advances all heads east by SLOT_WIDTH (8).
     """
@@ -718,14 +718,14 @@ def run_reentrant_test(cases, verbose=False):
         sim.grid[sim._to_flat(DATA_ROW, data_col)] = bad
 
     # Initial head positions
-    gp_row = GP_ROW
+    ex_row = EX_ROW
     sim.ip_row = CODE_ROW
     sim.ip_col = 0
     sim.ip_dir = 1  # East
     sim.h0 = sim._to_flat(DATA_ROW, 0)
     sim.h1 = sim._to_flat(DATA_ROW, 0)
-    sim.cl = sim._to_flat(gp_row, ROT)
-    sim.gp = sim._to_flat(gp_row, GP_PA)
+    sim.cl = sim._to_flat(ex_row, ROT)
+    sim.ex = sim._to_flat(ex_row, EX_PA)
 
     end_col = len(code_ops)
     all_ok = True
@@ -758,13 +758,13 @@ def run_reentrant_test(cases, verbose=False):
         # Check re-entrancy head positions
         expected_h0 = sim._to_flat(DATA_ROW, slot_base)
         expected_h1 = sim._to_flat(DATA_ROW, slot_base)
-        expected_gp = sim._to_flat(gp_row, slot_base + GP_PA)
-        expected_cl = sim._to_flat(gp_row, slot_base + ROT)
+        expected_gp = sim._to_flat(ex_row, slot_base + EX_PA)
+        expected_cl = sim._to_flat(ex_row, slot_base + ROT)
 
         heads_ok = (
             sim.h0 == expected_h0
             and sim.h1 == expected_h1
-            and sim.gp == expected_gp
+            and sim.ex == expected_gp
             and sim.cl == expected_cl
             and sim.grid[sim.cl] == 0
         )
@@ -780,14 +780,14 @@ def run_reentrant_test(cases, verbose=False):
             if not heads_ok and verbose:
                 h0_r, h0_c = sim.h0 // sim.cols, sim.h0 % sim.cols
                 h1_r, h1_c = sim.h1 // sim.cols, sim.h1 % sim.cols
-                gp_r, gp_c = sim.gp // sim.cols, sim.gp % sim.cols
+                ex_r, ex_c = sim.ex // sim.cols, sim.ex % sim.cols
                 cl_r, cl_c = sim.cl // sim.cols, sim.cl % sim.cols
                 e_h0_r, e_h0_c = expected_h0 // sim.cols, expected_h0 % sim.cols
                 e_gp_r, e_gp_c = expected_gp // sim.cols, expected_gp % sim.cols
                 e_cl_r, e_cl_c = expected_cl // sim.cols, expected_cl % sim.cols
                 print(f"      H0=({h0_r},{h0_c}) exp ({e_h0_r},{e_h0_c})")
                 print(f"      H1=({h1_r},{h1_c}) exp ({e_h0_r},{e_h0_c})")
-                print(f"      GP=({gp_r},{gp_c}) exp ({e_gp_r},{e_gp_c})")
+                print(f"      EX=({ex_r},{ex_c}) exp ({e_gp_r},{e_gp_c})")
                 print(f"      CL=({cl_r},{cl_c}) exp ({e_cl_r},{e_cl_c})"
                       f" [CL]=0x{sim.grid[sim.cl]:04x}")
 
@@ -799,9 +799,9 @@ def run_reentrant_test(cases, verbose=False):
                 sim.h0 = sim._move_head(sim.h0, 1)   # East
             for _ in range(SLOT_WIDTH):
                 sim.h1 = sim._move_head(sim.h1, 1)   # East
-            # GP: from PA (slot_base + 0) to next PA (slot_base + 8) = 8 east
+            # EX: from PA (slot_base + 0) to next PA (slot_base + 8) = 8 east
             for _ in range(SLOT_WIDTH):
-                sim.gp = sim._move_head(sim.gp, 1)   # East
+                sim.ex = sim._move_head(sim.ex, 1)   # East
             for _ in range(SLOT_WIDTH):
                 sim.cl = sim._move_head(sim.cl, 1)    # East
 
@@ -819,14 +819,14 @@ def run_reentrant_test(cases, verbose=False):
 # Grid layout:
 #   Row 0 (DATA): CW0 at col 0, CW1 at col 8, ..., CW_{N-1} at col (N-1)*8
 #   Row 1 (CODE): [336 gadget ops] [32 head-advance ops] [NOPs...]
-#   Row 2 (GP):   slot0(PA..ROT) | slot1(PA..ROT) | ...
+#   Row 2 (EX):   slot0(PA..ROT) | slot1(PA..ROT) | ...
 #
 # Each cycle: cols steps (one full row traversal). N cycles for N codewords.
 # After N cycles, all codewords corrected. Heads advanced N*SLOT_WIDTH cols.
 #
-# SINGLE-PASS CONSTRAINT: Each GP slot must start clean (all zeros).
+# SINGLE-PASS CONSTRAINT: Each EX slot must start clean (all zeros).
 # After correction, ≤1 dirty cell remains per slot. A second lap would
-# find dirty GP cells and fail. Multi-pass requires a compressor to
+# find dirty EX cells and fail. Multi-pass requires a compressor to
 # reclaim dirty cells — that's a future phase.
 
 
@@ -834,7 +834,7 @@ def build_reentrant_code(gp_distance=2, n_rows=3):
     """Build gadget + head-advance ops for re-entrant torus sweep.
 
     After the correction gadget, 4×SLOT_WIDTH head-movement ops advance
-    all four heads (H0, H1, GP, CL) east by SLOT_WIDTH columns, positioning
+    all four heads (H0, H1, EX, CL) east by SLOT_WIDTH columns, positioning
     them for the next correction slot.
 
     On the torus, the IP wraps from the end of the code row back to
@@ -848,7 +848,7 @@ def build_reentrant_code(gp_distance=2, n_rows=3):
     advance = []
     advance += ['E'] * SLOT_WIDTH   # H0 east ×8
     advance += ['e'] * SLOT_WIDTH   # H1 east ×8
-    advance += [']'] * SLOT_WIDTH   # GP east ×8
+    advance += [']'] * SLOT_WIDTH   # EX east ×8
     advance += ['>'] * SLOT_WIDTH   # CL east ×8
 
     return gadget_ops + advance
@@ -862,7 +862,7 @@ def make_reentrant_torus(cases):
     Layout:
       Row 0 (DATA):  CW_i at col i*SLOT_WIDTH (i = 0..N-1)
       Row 1 (CODE):  gadget + advance ops (Hamming-encoded)
-      Row 2 (GP):    slot_i scratch at cols i*SLOT_WIDTH..i*SLOT_WIDTH+7
+      Row 2 (EX):    slot_i scratch at cols i*SLOT_WIDTH..i*SLOT_WIDTH+7
 
     Grid width = max(code_length, N * SLOT_WIDTH), rounded up to a
     multiple of SLOT_WIDTH for clean slot alignment.
@@ -898,14 +898,14 @@ def make_reentrant_torus(cases):
         sim.grid[sim._to_flat(DATA_ROW, i * SLOT_WIDTH)] = bad
 
     # Initial head positions
-    gp_row = GP_ROW
+    ex_row = EX_ROW
     sim.ip_row = CODE_ROW
     sim.ip_col = 0
     sim.ip_dir = 1  # East
     sim.h0 = sim._to_flat(DATA_ROW, CW)
     sim.h1 = sim._to_flat(DATA_ROW, CW)
-    sim.cl = sim._to_flat(gp_row, ROT)
-    sim.gp = sim._to_flat(gp_row, GP_PA)
+    sim.cl = sim._to_flat(ex_row, ROT)
+    sim.ex = sim._to_flat(ex_row, EX_PA)
 
     return sim, expected
 
@@ -932,7 +932,7 @@ def run_reentrant_torus_test(cases, verbose=False, check_reverse=False):
     n = len(cases)
     sim, expected = make_reentrant_torus(cases)
     cols = sim.cols
-    gp_row = GP_ROW
+    ex_row = EX_ROW
 
     # Run N cycles. Each cycle = cols steps (full row traversal).
     total_steps = n * cols
@@ -960,18 +960,18 @@ def run_reentrant_torus_test(cases, verbose=False, check_reverse=False):
     final_offset = (n * SLOT_WIDTH) % cols
     exp_h0 = sim._to_flat(DATA_ROW, final_offset + CW)
     exp_h1 = sim._to_flat(DATA_ROW, final_offset + CW)
-    exp_gp = sim._to_flat(gp_row, final_offset + GP_PA)
-    exp_cl = sim._to_flat(gp_row, final_offset + ROT)
+    exp_gp = sim._to_flat(ex_row, final_offset + EX_PA)
+    exp_cl = sim._to_flat(ex_row, final_offset + ROT)
 
     heads_ok = (sim.h0 == exp_h0 and sim.h1 == exp_h1
-                and sim.gp == exp_gp and sim.cl == exp_cl)
+                and sim.ex == exp_gp and sim.cl == exp_cl)
 
     if verbose or not heads_ok:
         h0_r, h0_c = sim.h0 // cols, sim.h0 % cols
-        gp_r, gp_c = sim.gp // cols, sim.gp % cols
+        ex_r, ex_c = sim.ex // cols, sim.ex % cols
         cl_r, cl_c = sim.cl // cols, sim.cl % cols
         exp_col = final_offset
-        print(f"    Final heads: H0=col {h0_c} GP=col {gp_c} CL=col {cl_c}"
+        print(f"    Final heads: H0=col {h0_c} EX=col {ex_c} CL=col {cl_c}"
               f" (expected offset={exp_col})"
               f" {'ok' if heads_ok else 'FAIL'}")
     all_ok &= heads_ok
@@ -999,20 +999,20 @@ def run_reentrant_torus_test(cases, verbose=False, check_reverse=False):
                     print(f"    [REVERSE] CW[{i}]: 0x{result:04x}"
                           f" != expected 0x{orig:04x}")
 
-        # GP row should be all zeros
+        # EX row should be all zeros
         for col in range(cols):
-            if sim.grid[sim._to_flat(gp_row, col)] != 0:
+            if sim.grid[sim._to_flat(ex_row, col)] != 0:
                 reverse_ok = False
                 if verbose:
-                    val = sim.grid[sim._to_flat(gp_row, col)]
-                    print(f"    [REVERSE] GP col {col}: 0x{val:04x} != 0")
+                    val = sim.grid[sim._to_flat(ex_row, col)]
+                    print(f"    [REVERSE] EX col {col}: 0x{val:04x} != 0")
                 break
 
         # Heads should be back at start
         if (sim.h0 != sim._to_flat(DATA_ROW, CW)
                 or sim.h1 != sim._to_flat(DATA_ROW, CW)
-                or sim.gp != sim._to_flat(gp_row, GP_PA)
-                or sim.cl != sim._to_flat(gp_row, ROT)):
+                or sim.ex != sim._to_flat(ex_row, EX_PA)
+                or sim.cl != sim._to_flat(ex_row, ROT)):
             reverse_ok = False
             if verbose:
                 print(f"    [REVERSE] Heads not restored to start")
@@ -1038,21 +1038,21 @@ def save_reentrant_fb2d(cases, name='hamming16-reentrant'):
 #
 # Same 368-op code (gadget + head advance) in a boustrophedon layout.
 # The IP snakes through code rows via mirrors, then exits at col W-1,
-# traverses GP and DATA rows (both NOP at that column), and re-enters
+# traverses EX and DATA rows (both NOP at that column), and re-enters
 # the code via the boustrophedon mirror at (CODE_ROW, W-1).
 #
 # No corridor row needed: the exit mirror is placed on the last code
 # row at col W-1, directing the IP South through the "safe column"
 # (col W-1). Safety requires (W-1) % SLOT_WIDTH not in {0, 5}
-# (avoiding GP_PA and GP_EV offsets).
+# (avoiding EX_PA and EX_EV offsets).
 #
 # Grid layout (example: 60-wide, 7 code rows):
 #   Row 0 (DATA):     CW0 at col 0, CW1 at col 8, ..., CW6 at col 48
 #   Rows 1-7 (CODE):  boustrophedon with mirrors at cols 0 and 59
-#   Row 8 (GP):       slot0..slot6 scratch at 8-col intervals
+#   Row 8 (EX):       slot0..slot6 scratch at 8-col intervals
 #
 # Return path: IP exits last code row at col 59 going South,
-# passes through GP[59] (offset 3 = S2, clean NOP) and DATA[59]
+# passes through EX[59] (offset 3 = S2, clean NOP) and DATA[59]
 # (empty NOP), re-enters CODE row 1 at col 59 via existing \ mirror
 # → S→E → wraps East to col 0.
 #
@@ -1069,10 +1069,10 @@ def make_reentrant_wrapped_torus(cases, wrap_width=60):
     Layout:
       Row 0 (DATA):       CW_i at col i*SLOT_WIDTH
       Rows 1..C (CODE):   368 ops in boustrophedon layout
-      Row C+1 (GP):       slot_i scratch at cols i*SLOT_WIDTH..+7
+      Row C+1 (EX):       slot_i scratch at cols i*SLOT_WIDTH..+7
 
     The IP snakes through code rows, exits at col wrap_width-1 going
-    South, traverses GP and DATA at that column (both NOP), and re-enters
+    South, traverses EX and DATA at that column (both NOP), and re-enters
     via the boustrophedon mirror at (CODE_ROW, wrap_width-1).
 
     Returns: (sim, expected_results, cycle_length)
@@ -1084,8 +1084,8 @@ def make_reentrant_wrapped_torus(cases, wrap_width=60):
         f" max {max_codewords}")
 
     # Build reentrant code (368 ops, same regardless of grid dimensions
-    # because DATA↔GP shortcut is always 1 N/S step on a torus where
-    # DATA=row 0 and GP=last row)
+    # because DATA↔EX shortcut is always 1 N/S step on a torus where
+    # DATA=row 0 and EX=last row)
     code_ops = build_reentrant_code(gp_distance=2, n_rows=N_ROWS)
     op_values = [OP[ch] for ch in code_ops]
     n_ops = len(op_values)
@@ -1099,16 +1099,16 @@ def make_reentrant_wrapped_torus(cases, wrap_width=60):
         remaining = n_ops - first_row_slots
         code_rows = 1 + -(-remaining // (wrap_width - 2))  # ceil div
 
-    n_rows = 1 + code_rows + 1  # DATA + CODE rows + GP
-    gp_row = n_rows - 1
+    n_rows = 1 + code_rows + 1  # DATA + CODE rows + EX
+    ex_row = n_rows - 1
 
-    # Safety: return path at col wrap_width-1 must avoid dirty GP offsets
+    # Safety: return path at col wrap_width-1 must avoid dirty EX offsets
     if code_rows > 1:
         return_col = wrap_width - 1
         return_offset = return_col % SLOT_WIDTH
-        assert return_offset not in (GP_PA, GP_EV), (
-            f"Return col {return_col} has GP offset {return_offset}"
-            f" (PA={GP_PA} or EV={GP_EV}), unsafe for return path."
+        assert return_offset not in (EX_PA, EX_EV), (
+            f"Return col {return_col} has EX offset {return_offset}"
+            f" (PA={EX_PA} or EV={EX_EV}), unsafe for return path."
             f" Choose a different wrap_width.")
 
     sim = FB2DSimulator(rows=n_rows, cols=wrap_width)
@@ -1152,8 +1152,8 @@ def make_reentrant_wrapped_torus(cases, wrap_width=60):
     sim.ip_dir = 1  # East
     sim.h0 = sim._to_flat(DATA_ROW, CW)
     sim.h1 = sim._to_flat(DATA_ROW, CW)
-    sim.cl = sim._to_flat(gp_row, ROT)
-    sim.gp = sim._to_flat(gp_row, GP_PA)
+    sim.cl = sim._to_flat(ex_row, ROT)
+    sim.ex = sim._to_flat(ex_row, EX_PA)
 
     # Compute cycle length
     if code_rows == 1:
@@ -1171,7 +1171,7 @@ def run_reentrant_wrapped_torus_test(cases, wrap_width=60,
     """Test wrapped re-entrant torus sweep with actual fb2d execution.
 
     The IP snakes through boustrophedon code rows and loops via the
-    return path through GP and DATA rows at col wrap_width-1.
+    return path through EX and DATA rows at col wrap_width-1.
 
     Each cycle takes cycle_length steps. After N cycles, all N codewords
     have been corrected.
@@ -1187,7 +1187,7 @@ def run_reentrant_wrapped_torus_test(cases, wrap_width=60,
     n = len(cases)
     sim, expected, cycle_length = make_reentrant_wrapped_torus(
         cases, wrap_width)
-    gp_row = sim.rows - 1
+    ex_row = sim.rows - 1
 
     # Verify cycle length: first cycle should return IP to start
     start_pos = (sim.ip_row, sim.ip_col, sim.ip_dir)
@@ -1225,17 +1225,17 @@ def run_reentrant_wrapped_torus_test(cases, wrap_width=60,
     final_offset = (n * SLOT_WIDTH) % sim.cols
     exp_h0 = sim._to_flat(DATA_ROW, final_offset + CW)
     exp_h1 = sim._to_flat(DATA_ROW, final_offset + CW)
-    exp_gp = sim._to_flat(gp_row, final_offset + GP_PA)
-    exp_cl = sim._to_flat(gp_row, final_offset + ROT)
+    exp_gp = sim._to_flat(ex_row, final_offset + EX_PA)
+    exp_cl = sim._to_flat(ex_row, final_offset + ROT)
 
     heads_ok = (sim.h0 == exp_h0 and sim.h1 == exp_h1
-                and sim.gp == exp_gp and sim.cl == exp_cl)
+                and sim.ex == exp_gp and sim.cl == exp_cl)
 
     if verbose or not heads_ok:
         h0_c = sim.h0 % sim.cols
-        gp_c = sim.gp % sim.cols
+        ex_c = sim.ex % sim.cols
         cl_c = sim.cl % sim.cols
-        print(f"    Final heads: H0=col {h0_c} GP=col {gp_c} CL=col {cl_c}"
+        print(f"    Final heads: H0=col {h0_c} EX=col {ex_c} CL=col {cl_c}"
               f" (expected offset={final_offset})"
               f" {'ok' if heads_ok else 'FAIL'}")
     all_ok &= heads_ok
@@ -1264,17 +1264,17 @@ def run_reentrant_wrapped_torus_test(cases, wrap_width=60,
                           f" != expected 0x{orig:04x}")
 
         for col in range(sim.cols):
-            if sim.grid[sim._to_flat(gp_row, col)] != 0:
+            if sim.grid[sim._to_flat(ex_row, col)] != 0:
                 reverse_ok = False
                 if verbose:
-                    val = sim.grid[sim._to_flat(gp_row, col)]
-                    print(f"    [REVERSE] GP col {col}: 0x{val:04x} != 0")
+                    val = sim.grid[sim._to_flat(ex_row, col)]
+                    print(f"    [REVERSE] EX col {col}: 0x{val:04x} != 0")
                 break
 
         if (sim.h0 != sim._to_flat(DATA_ROW, CW)
                 or sim.h1 != sim._to_flat(DATA_ROW, CW)
-                or sim.gp != sim._to_flat(gp_row, GP_PA)
-                or sim.cl != sim._to_flat(gp_row, ROT)):
+                or sim.ex != sim._to_flat(ex_row, EX_PA)
+                or sim.cl != sim._to_flat(ex_row, ROT)):
             reverse_ok = False
             if verbose:
                 print(f"    [REVERSE] Heads not restored to start")
@@ -1303,23 +1303,23 @@ def save_reentrant_wrapped_fb2d(cases, wrap_width=60, name=None):
 # Redesigned gadget for adjacent data cells and self-contained IP loop.
 #
 # Key changes from the original gadget:
-#   1. EV at offset 0 (GP's starting position), PA at offset 1.
-#      Dirty waste always ends at EV = GP start, via f-consolidation.
+#   1. EV at offset 0 (EX's starting position), PA at offset 1.
+#      Dirty waste always ends at EV = EX start, via f-consolidation.
 #   2. All heads advance by 1 per cycle (4 ops, not 32).
 #   3. Self-contained IP loop via corridor mirror at col 1.
 #   4. Code in 60-wide boustrophedon (cols 2-61) within 64-wide grid.
 #
-# SLOT LAYOUT (relative to GP cycle-start position G):
+# SLOT LAYOUT (relative to EX cycle-start position G):
 #
-#   GP row:  [EV]  PA  S0  S1  S2  S3  SCR  ROT
+#   EX row:  [EV]  PA  S0  S1  S2  S3  SCR  ROT
 #   offset:    0    1   2   3   4   5    6    7
 #   DATA row: ---  CW  ---  ---  ...
 #
-# After f-consolidation: PA always clean, dirty always at EV = GP start.
+# After f-consolidation: PA always clean, dirty always at EV = EX start.
 # After head advance (+1): old EV left behind, new EV = old PA (clean).
 
-# Sliding slot offsets (relative to GP position)
-SL_EV  = 0   # waste/evidence (at GP start position)
+# Sliding slot offsets (relative to EX position)
+SL_EV  = 0   # waste/evidence (at EX start position)
 SL_PA  = 1   # overall parity accumulator
 SL_S0  = 2   # syndrome bit 0 accumulator
 SL_S1  = 3   # syndrome bit 1 accumulator
@@ -1334,13 +1334,13 @@ SL_SI  = [SL_S0, SL_S1, SL_S2, SL_S3]
 def build_sliding_gadget(gp_distance=7, n_rows=8):
     """Build the sliding-slot Hamming(16,11) correction gadget.
 
-    EV at offset 0 (GP start), PA at offset 1 (= CW column).
+    EV at offset 0 (EX start), PA at offset 1 (= CW column).
     Includes f-consolidation to ensure dirty cell always at EV.
-    Includes GP movements (]×1 before, [×1 after) for z ops.
+    Includes EX movements (]×1 before, [×1 after) for z ops.
     Includes head advance (E e ] >) at the end.
 
     Args:
-        gp_distance: GP row index (row number of GP row).
+        gp_distance: EX row index (row number of EX row).
         n_rows: total grid rows.
 
     Returns: list of opchar strings (the complete reentrant code).
@@ -1354,10 +1354,10 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     gp_row_idx = gp_distance
 
     # ── Phase A: Overall parity via Y ──
-    # H0 on PA (GP row), H1 on CW (DATA row), CL on ROT (payload 0).
+    # H0 on PA (EX row), H1 on CW (DATA row), CL on ROT (payload 0).
     # PA is at col SL_PA = 1, same column as CW.
 
-    gb.move_h0_row(gp_row_idx)      # DATA→GP: toroidal shortcut (N×1)
+    gb.move_h0_row(gp_row_idx)      # DATA→EX: toroidal shortcut (N×1)
     gb.move_h0_col(SL_PA)           # CW(1) → PA(1): no move needed
     gb.xor_accumulate_bits(list(range(16)))   # CL: 0→15
 
@@ -1368,9 +1368,9 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     # After: EV = raw p_all (0 or 1), PA.bit0 = 0.
 
     gb.move_h0_col(SL_EV)           # PA(1) → EV(0): W×1
-    gb.move_h1(gp_row_idx, SL_PA)   # CW(DATA,1) → PA(GP,1)
+    gb.move_h1(gp_row_idx, SL_PA)   # CW(DATA,1) → PA(EX,1)
     gb.emit('z')                     # EV.bit0 ← PA.bit0; PA.bit0 ← 0
-    gb.move_h1(DATA_ROW, SL_CW)     # PA(GP,1) → CW(DATA,1)
+    gb.move_h1(DATA_ROW, SL_CW)     # PA(EX,1) → CW(DATA,1)
 
     phase_b_ops = gb.pos() - phase_a_ops
 
@@ -1384,7 +1384,7 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     phase_ap_ops = gb.pos() - phase_a_ops - phase_b_ops
 
     # ── Phase C: Syndrome computation via Y ──
-    # H0 on S0-S3 (GP row), H1 on CW, CL on ROT (payload 0).
+    # H0 on S0-S3 (EX row), H1 on CW, CL on ROT (payload 0).
 
     gb.move_h0_col(SL_S0)           # PA(1) → S0(2): E×1
 
@@ -1409,7 +1409,7 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     # Position H0 on EV, H1 on SCR, CL on S0.
 
     gb.move_h0_col(SL_EV)                    # S3(5) → EV(0): W×5
-    gb.move_h1(gp_row_idx, SL_SCR)           # CW(DATA,1) → SCR(GP,6)
+    gb.move_h1(gp_row_idx, SL_SCR)           # CW(DATA,1) → SCR(EX,6)
     gb.move_cl_col(SL_S0)                    # ROT(7) → S0(2): <×5
 
     for i in range(4):
@@ -1427,7 +1427,7 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     # ── Phase C': Y-uncompute S0-S3 ──
 
     gb.move_h0_col(SL_S3)                    # EV(0) → S3(5): E×5
-    gb.move_h1(DATA_ROW, SL_CW)              # SCR(GP,6) → CW(DATA,1)
+    gb.move_h1(DATA_ROW, SL_CW)              # SCR(EX,6) → CW(DATA,1)
     gb.move_cl_col(SL_ROT)                   # S3(5) → ROT(7): >×2
     gb.cl_payload = 8                         # ROT unchanged since Phase C
 
@@ -1455,8 +1455,8 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     # ── Phase E: Correction XOR ──
     # CW ^= EVIDENCE. H0 to CW, H1 to EV.
 
-    gb.move_h0(DATA_ROW, SL_CW)              # S0(GP,2) → CW(DATA,1)
-    gb.move_h1(gp_row_idx, SL_EV)            # CW(DATA,1) → EV(GP,0)
+    gb.move_h0(DATA_ROW, SL_CW)              # S0(EX,2) → CW(DATA,1)
+    gb.move_h1(gp_row_idx, SL_EV)            # CW(DATA,1) → EV(EX,0)
     gb.emit('x')                              # CW ^= EVIDENCE
 
     phase_e_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops
@@ -1465,8 +1465,8 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     # ── Phase F: Cleanup z+x ──
     # H0 to EV, H1 to PA. z: swap bit0. x: XOR.
 
-    gb.move_h0(gp_row_idx, SL_EV)            # CW(DATA,1) → EV(GP,0)
-    gb.move_h1_col(SL_PA)                    # EV(GP,0) → PA(GP,1): e×1
+    gb.move_h0(gp_row_idx, SL_EV)            # CW(DATA,1) → EV(EX,0)
+    gb.move_h1_col(SL_PA)                    # EV(EX,0) → PA(EX,1): e×1
     gb.emit('z')                              # swap bit0 of EV with PA
     gb.emit('x')                              # EV ^= PA
 
@@ -1494,8 +1494,8 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     # ── Phase G: Epilogue ──
     # Return H0 and H1 to (DATA_ROW, CW).
 
-    gb.move_h0(DATA_ROW, SL_CW)              # EV(GP,0) → CW(DATA,1)
-    gb.move_h1(DATA_ROW, SL_CW)              # PA(GP,1) → CW(DATA,1)
+    gb.move_h0(DATA_ROW, SL_CW)              # EV(EX,0) → CW(DATA,1)
+    gb.move_h1(DATA_ROW, SL_CW)              # PA(EX,1) → CW(DATA,1)
 
     phase_g_ops = (gb.pos() - phase_a_ops - phase_b_ops - phase_ap_ops
                    - phase_c_ops - phase_d_ops - phase_cp_ops
@@ -1506,7 +1506,7 @@ def build_sliding_gadget(gp_distance=7, n_rows=8):
     # ── Head advance: all 4 heads east by 1 ──
     gb.emit('E')      # H0 east ×1
     gb.emit('e')      # H1 east ×1
-    gb.emit(']')      # GP east ×1
+    gb.emit(']')      # EX east ×1
     gb.emit('>')      # CL east ×1
 
     total_ops = gb.pos()
@@ -1600,7 +1600,7 @@ def make_selfcontained_torus(cases, grid_width=64, code_left=2, code_right=61):
     Layout:
       Row 0:     DATA — codewords at adjacent columns
       Rows 1-R:  CODE — boustrophedon in cols code_left..code_right
-      Row R+1:   GP   — sliding scratch slots
+      Row R+1:   EX   — sliding scratch slots
       Col 1:     return corridor (mirrors on first and last code rows)
 
     The IP snakes through code rows and loops back via the corridor at col 1.
@@ -1609,8 +1609,8 @@ def make_selfcontained_torus(cases, grid_width=64, code_left=2, code_right=61):
     Returns: (sim, expected_results, cycle_length)
     """
     n = len(cases)
-    first_cw_col = SL_CW + 1    # first CW at col 2 (GP starts at col 1)
-    max_cw = 55                   # limited by GP scratch extent (col N+8 ≤ 63)
+    first_cw_col = SL_CW + 1    # first CW at col 2 (EX starts at col 1)
+    max_cw = 55                   # limited by EX scratch extent (col N+8 ≤ 63)
     assert n <= max_cw, (
         f"Too many codewords ({n}) for grid width {grid_width},"
         f" max {max_cw}")
@@ -1636,7 +1636,7 @@ def make_selfcontained_torus(cases, grid_width=64, code_left=2, code_right=61):
             inner_slots = code_right - code_left - 1  # 58
             code_rows = 1 + -(-remaining // inner_slots)
 
-        new_n_rows = 1 + code_rows + 1   # DATA + CODE + GP
+        new_n_rows = 1 + code_rows + 1   # DATA + CODE + EX
         new_gp_dist = new_n_rows - 1
 
         if new_gp_dist == gp_dist and new_n_rows == n_rows:
@@ -1644,7 +1644,7 @@ def make_selfcontained_torus(cases, grid_width=64, code_left=2, code_right=61):
         gp_dist = new_gp_dist
         n_rows = new_n_rows
 
-    gp_row = n_rows - 1
+    ex_row = n_rows - 1
 
     sim = FB2DSimulator(rows=n_rows, cols=grid_width)
 
@@ -1675,15 +1675,15 @@ def make_selfcontained_torus(cases, grid_width=64, code_left=2, code_right=61):
         sim.grid[sim._to_flat(DATA_ROW, cw_col)] = bad
 
     # Initial head positions
-    # GP starts at col 1 (EV), CW at col 2 (= PA col)
-    gp_start_col = first_cw_col - 1   # col 1
+    # EX starts at col 1 (EV), CW at col 2 (= PA col)
+    ex_start_col = first_cw_col - 1   # col 1
     sim.ip_row = first_code_row
     sim.ip_col = code_left             # col 2
     sim.ip_dir = 1                     # East
     sim.h0 = sim._to_flat(DATA_ROW, first_cw_col)
     sim.h1 = sim._to_flat(DATA_ROW, first_cw_col)
-    sim.cl = sim._to_flat(gp_row, gp_start_col + SL_ROT)
-    sim.gp = sim._to_flat(gp_row, gp_start_col)
+    sim.cl = sim._to_flat(ex_row, ex_start_col + SL_ROT)
+    sim.ex = sim._to_flat(ex_row, ex_start_col)
 
     # Compute cycle length
     # Rows 1..(rows_used-1): code_width steps each (60 cells per row)
@@ -1711,7 +1711,7 @@ def run_selfcontained_test(cases, grid_width=64, verbose=False,
     n = len(cases)
     sim, expected, cycle_length = make_selfcontained_torus(
         cases, grid_width=grid_width)
-    gp_row = sim.rows - 1
+    ex_row = sim.rows - 1
     first_cw_col = SL_CW + 1   # col 2
 
     # Verify cycle length: first cycle should return IP to start
@@ -1763,27 +1763,27 @@ def run_selfcontained_test(cases, grid_width=64, verbose=False,
 
     exp_h0 = sim._to_flat(DATA_ROW, final_cw)
     exp_h1 = sim._to_flat(DATA_ROW, final_cw)
-    exp_gp = sim._to_flat(gp_row, final_gp)
-    exp_cl = sim._to_flat(gp_row, final_rot)
+    exp_gp = sim._to_flat(ex_row, final_gp)
+    exp_cl = sim._to_flat(ex_row, final_rot)
 
     heads_ok = (sim.h0 == exp_h0 and sim.h1 == exp_h1
-                and sim.gp == exp_gp and sim.cl == exp_cl)
+                and sim.ex == exp_gp and sim.cl == exp_cl)
 
     if verbose or not heads_ok:
         h0_c = sim.h0 % sim.cols
-        gp_c = sim.gp % sim.cols
+        ex_c = sim.ex % sim.cols
         cl_c = sim.cl % sim.cols
-        print(f"    Final heads: H0=col {h0_c} GP=col {gp_c} CL=col {cl_c}"
-              f" (expected H0={final_cw} GP={final_gp} CL={final_rot})"
+        print(f"    Final heads: H0=col {h0_c} EX=col {ex_c} CL=col {cl_c}"
+              f" (expected H0={final_cw} EX={final_gp} CL={final_rot})"
               f" {'ok' if heads_ok else 'FAIL'}")
     all_ok &= heads_ok
 
-    # Check dirty trail on GP row
+    # Check dirty trail on EX row
     if verbose:
         dirty_count = 0
         for i in range(n):
             ev_col = gp_start + i
-            val = sim.grid[sim._to_flat(gp_row, ev_col)]
+            val = sim.grid[sim._to_flat(ex_row, ev_col)]
             if val != 0:
                 dirty_count += 1
         print(f"    Dirty trail: {dirty_count}/{n} waste cells nonzero")
@@ -1812,17 +1812,17 @@ def run_selfcontained_test(cases, grid_width=64, verbose=False,
                           f" != expected 0x{orig:04x}")
 
         for col in range(sim.cols):
-            if sim.grid[sim._to_flat(gp_row, col)] != 0:
+            if sim.grid[sim._to_flat(ex_row, col)] != 0:
                 reverse_ok = False
                 if verbose:
-                    val = sim.grid[sim._to_flat(gp_row, col)]
-                    print(f"    [REVERSE] GP col {col}: 0x{val:04x} != 0")
+                    val = sim.grid[sim._to_flat(ex_row, col)]
+                    print(f"    [REVERSE] EX col {col}: 0x{val:04x} != 0")
                 break
 
         if (sim.h0 != sim._to_flat(DATA_ROW, first_cw_col)
                 or sim.h1 != sim._to_flat(DATA_ROW, first_cw_col)
-                or sim.gp != sim._to_flat(gp_row, gp_start)
-                or sim.cl != sim._to_flat(gp_row, gp_start + SL_ROT)):
+                or sim.ex != sim._to_flat(ex_row, gp_start)
+                or sim.cl != sim._to_flat(ex_row, gp_start + SL_ROT)):
             reverse_ok = False
             if verbose:
                 print(f"    [REVERSE] Heads not restored to start")

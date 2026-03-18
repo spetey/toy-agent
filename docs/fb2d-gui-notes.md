@@ -15,11 +15,11 @@
 ## Feature priorities
 1. **Display & step**: Load .fb2d grid, step forward/back, see IP move with head positions highlighted
 2. **Edit**: Click cells to set opcodes, drag to select regions, copy/paste blocks
-3. **Annotations**: Overlay comments on grid regions (e.g., "outer loop body", "GP trail")
+3. **Annotations**: Overlay comments on grid regions (e.g., "outer loop body", "EX trail")
 4. **Compiler integration**: Edit ifb source, see compiled grid update live
 5. **Breakpoints & watch**: Set breakpoints on cells, watch variable values in DATA_ROW
 
 ## Custom glyph ideas
 - Once in GUI, opcodes can be rendered as any Unicode/emoji/icon
 - Could use directional arrows for head moves, colored shapes for mirror types
-- GP-conditional mirrors could have distinct visual treatment from CL-conditional ones
+- EX-conditional mirrors could have distinct visual treatment from CL-conditional ones

@@ -531,15 +531,15 @@ serve as counters, flags, or scratch space.
 ### 15.3 The Fundamental Obstruction
 
 In fb2d's reversible dynamics, every operation that "uses" a cell must be
-undoable. The garbage pointer (GP) records displaced values so that
-operations can be reversed. But GP itself consumes cells — and those cells
-must be in a known state (typically zero) for the GP trail to be
+undoable. The exteroceptor (EX) records displaced values so that
+operations can be reversed. But EX itself consumes cells — and those cells
+must be in a known state (typically zero) for the EX trail to be
 interpretable.
 
-On an arbitrary grid — where GP might point to cells containing any value —
-the GP mechanism breaks down:
-- `P` (GP++) writes a breadcrumb, but the existing cell value is unknown
-- Loop-entry mirrors like `(` test `[GP] != 0`, but an arbitrary cell might
+On an arbitrary grid — where EX might point to cells containing any value —
+the EX mechanism breaks down:
+- `P` (EX++) writes a breadcrumb, but the existing cell value is unknown
+- Loop-entry mirrors like `(` test `[EX] != 0`, but an arbitrary cell might
   already be nonzero, causing spurious loop entry/exit
 - Carry arithmetic corridors require zero-terminated digit sequences, which
   don't exist on a random grid
@@ -557,7 +557,7 @@ This includes:
   proofs use finite configurations on an all-zero background
 - **Fredkin & Toffoli's conservative logic** (1982): requires blank wires
 - **Janus** (reversible imperative language): variables start at zero
-- **fb2d**: requires zeroed GP trail, initialized registers and flags
+- **fb2d**: requires zeroed EX trail, initialized registers and flags
 
 This appears to be an **open problem**, not a proven impossibility. No one
 has proved that reversible TC *requires* quiescent background, but no one
@@ -578,7 +578,7 @@ fixed-size inputs — any Boolean circuit — but not unbounded loops.
 initialize the state region, and the IP bounces through the dispatch blocks
 for a predetermined number of iterations. The only thing you *can't* do
 (without quiescent background) is loop an unbounded number of times, because
-eventually the GP trail would wrap into unknown territory.
+eventually the EX trail would wrap into unknown territory.
 
 For many practical purposes — including error correction, compression, and
 local self-repair — circuit completeness may suffice. The agent doesn't
