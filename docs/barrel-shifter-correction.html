@@ -336,10 +336,10 @@ phase</h2>
 <p>Three-row torus:</p>
 <pre><code>Row 0 (DATA):  CW (the codeword to correct)
 Row 1 (CODE):  [336 opcodes...]
-Row 2 (EX):    PA  S0  S1  S2  S3  EV  SCR  ROT
+Row 2 (GP):    PA  S0  S1  S2  S3  EV  SCR  ROT
                0   1   2   3   4   5   6    7</code></pre>
-<p>EX row cells all start at 0. Heads: H0 and H1 on CW, CL on ROT
-(payload 0), EX on PA.</p>
+<p>GP row cells all start at 0. Heads: H0 and H1 on CW, CL on ROT
+(payload 0), GP on PA.</p>
 <h3 id="phase-a-compute-overall-parity-32-ops">Phase A: Compute overall
 parity (~32 ops)</h3>
 <p>Move H0 to PA. Use Y (fused rotate-XOR) at 16 different rotation
@@ -349,7 +349,7 @@ junk.)</p>
 <h3 id="phase-b-extract-p_all-into-evidence-6-ops">Phase B: Extract
 p_all into EVIDENCE (~6 ops)</h3>
 <p>Move H0 to EV. Use <code>z</code> to swap bit 0 of EV with bit 0 of
-[EX] (= PA).</p>
+[GP] (= PA).</p>
 <p>After: EV = p_all (raw 0 or 1). PA.bit0 = 0.</p>
 <h3 id="phase-a-uncompute-pa-36-ops">Phase A’: Uncompute PA (~36
 ops)</h3>
@@ -384,7 +384,7 @@ if EVIDENCE = 0.</p>
 <h3 id="phase-f-cleanup-13-ops">Phase F: Cleanup (~13 ops)</h3>
 <p>We now have two potentially dirty cells: PA and EV. We merge them
 into at most one dirty cell using <code>z</code> + <code>x</code>:</p>
-<pre><code>z:  swap bit 0 of EV with bit 0 of PA (via EX)
+<pre><code>z:  swap bit 0 of EV with bit 0 of PA (via GP)
 x:  EV ^= PA</code></pre>
 <p>See the worked example below for why this works.</p>
 <h3 id="epilogue-7-ops">Epilogue (~7 ops)</h3>
@@ -394,9 +394,9 @@ x:  EV ^= PA</code></pre>
 <h2 id="h2-copy-down-variant-dual-gadget-mutual-correction">H2 Copy-Down
 Variant (dual-gadget mutual correction)</h2>
 <p>In the dual-gadget architecture, two gadgets correct each other’s
-code. Each gadget’s IX scans the other gadget’s code cells. Instead of
-H0 shuttling between the data row and EX row, a <strong>copy-down
-pattern</strong> keeps all correction work local to the EX row
+code. Each gadget’s H2 scans the other gadget’s code cells. Instead of
+H0 shuttling between the data row and GP row, a <strong>copy-down
+pattern</strong> keeps all correction work local to the GP row
 (“stomach”):</p>
 <pre><code>Stomach layout (9 slots):
 EV  PA  CWL  S0  S1  S2  S3  SCR  ROT
@@ -414,25 +414,25 @@ syndrome)</li>
 counting</li>
 </ul>
 <p>The flow becomes:</p>
-<pre><code>Copy-in:   m                    — [H0] ^= [IX] (CWL gets remote CW)
+<pre><code>Copy-in:   m                    — [H0] ^= [H2] (CWL gets remote CW)
 Phase A:   Y parity
 Phase B:   z-extract p_all → EV
 Phase A&#39;:  Y-uncompute PA
 Phase C:   Y syndrome
 Phase D:   Barrel shifter → EV = p_all &lt;&lt; syndrome
 Phase C&#39;:  Y-uncompute S0-S3
-Uncompute: M                    — payload(H0) -= payload(IX) (CWL → 0)
-Write-back: j                   — [IX] ^= [H0] (remote gets mask XOR)
+Uncompute: M                    — payload(H0) -= payload(H2) (CWL → 0)
+Write-back: j                   — [H2] ^= [H0] (remote gets mask XOR)
 Phase F:   z+x cleanup</code></pre>
-<p>After Phase F: H0=EV, H1=PA, EX=EV. At most 1 dirty cell (EV or
+<p>After Phase F: H0=EV, H1=PA, GP=EV. At most 1 dirty cell (EV or
 PA).</p>
 <p><strong>Total (copy-down): 323 ops</strong> (315 correction + 3
 epilogue + 5 advance).</p>
 <hr />
 <h2 id="contained-design-phase-g-waste-cleanup">Contained Design: Phase
 G (waste cleanup)</h2>
-<p>In the <strong>contained serpentine</strong> design, H0/H1/CL/EX stay
-at fixed positions on the stomach row across cycles. Only IX advances
+<p>In the <strong>contained serpentine</strong> design, H0/H1/CL/GP stay
+at fixed positions on the stomach row across cycles. Only H2 advances
 (serpentine scan). The “advance” block (<code>E e ] &gt;</code>) is
 removed. This means waste from EV and PA can’t be left behind as heads
 advance — it must be deposited into a <strong>dump corridor</strong> on
@@ -455,7 +455,7 @@ evidence mask) and PA (with p_all). All waste values have <strong>bit 0
 E × 8          H0: EV → ROT
 e × 8          H1: PA → dump9
 f e f e f e f e f   5 conditional swaps (shift-register deposit)
-] K T K [      K-T-K trick: PA waste → ROT via CL/EX register swap
+] K T K [      K-T-K trick: PA waste → ROT via CL/GP register swap
 e f            Single f deposits PA waste at dump14
 W × 6          H0: ROT → CWL
 w × 12         H1: dump14 → CWL</code></pre>
@@ -572,14 +572,14 @@ reversibility constraints</h2>
 </tr>
 <tr>
 <td><code>m</code></td>
-<td>H0=IX</td>
+<td>H0=H2</td>
 <td>[H0] ^= [H0] = 0</td>
 <td>No</td>
 </tr>
 <tr>
 <td><code>j</code></td>
-<td>IX=H0</td>
-<td>[IX] ^= [IX] = 0</td>
+<td>H2=H0</td>
+<td>[H2] ^= [H2] = 0</td>
 <td>No</td>
 </tr>
 <tr>
@@ -678,7 +678,7 @@ is <code>1 &lt;&lt; 5</code>. Exactly the mask we need!</p>
 original 0x05A0. Correction complete!</p>
 <h3 id="phase-f-cleanup">Phase F: cleanup</h3>
 <p>Before cleanup: PA = 1, EV = 32 = <code>...0010 0000</code>.</p>
-<pre><code>z: swap bit 0 of EV with bit 0 of PA (via EX).
+<pre><code>z: swap bit 0 of EV with bit 0 of PA (via GP).
    EV.bit0 was 0, PA.bit0 was 1.
    After: EV = 33 = ...0010 0001, PA = 0.
 
@@ -709,7 +709,7 @@ can tell it’s garbage rather than data.</p>
 <h2 id="reversibility">Reversibility</h2>
 <p>Everything is reversible. Running <code>step_back()</code> through
 all 336 steps restores the grid to its exact original state: corrupted
-codeword back in CW, all EX cells back to 0. The dirty cell from Phase F
+codeword back in CW, all GP cells back to 0. The dirty cell from Phase F
 gets cleaned by the reverse of z+x, the Y-uncompute phases re-dirty and
 then un-dirty the accumulators, and so on.</p>
 <h2 id="cost-summary">Cost summary</h2>
@@ -739,7 +739,7 @@ then un-dirty the accumulators, and so on.</p>
 <td>8 cells</td>
 </tr>
 <tr>
-<td>IX copy-down</td>
+<td>H2 copy-down</td>
 <td>323</td>
 <td>1</td>
 <td>0</td>

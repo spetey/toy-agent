@@ -164,12 +164,12 @@ Three-row torus:
 ```
 Row 0 (DATA):  CW (the codeword to correct)
 Row 1 (CODE):  [336 opcodes...]
-Row 2 (EX):    PA  S0  S1  S2  S3  EV  SCR  ROT
+Row 2 (GP):    PA  S0  S1  S2  S3  EV  SCR  ROT
                0   1   2   3   4   5   6    7
 ```
 
-EX row cells all start at 0. Heads: H0 and H1 on CW, CL on ROT
-(payload 0), EX on PA.
+GP row cells all start at 0. Heads: H0 and H1 on CW, CL on ROT
+(payload 0), GP on PA.
 
 ### Phase A: Compute overall parity (~32 ops)
 
@@ -180,7 +180,7 @@ After: PA.bit0 = p_all. (Other bits of PA contain Y-accumulated junk.)
 
 ### Phase B: Extract p_all into EVIDENCE (~6 ops)
 
-Move H0 to EV. Use `z` to swap bit 0 of EV with bit 0 of [EX] (= PA).
+Move H0 to EV. Use `z` to swap bit 0 of EV with bit 0 of [GP] (= PA).
 
 After: EV = p_all (raw 0 or 1). PA.bit0 = 0.
 
@@ -232,7 +232,7 @@ We now have two potentially dirty cells: PA and EV. We merge them into
 at most one dirty cell using `z` + `x`:
 
 ```
-z:  swap bit 0 of EV with bit 0 of PA (via EX)
+z:  swap bit 0 of EV with bit 0 of PA (via GP)
 x:  EV ^= PA
 ```
 
@@ -246,12 +246,12 @@ Move H0 and H1 back to CW. All heads restored.
 
 ---
 
-## IX Copy-Down Variant (dual-gadget mutual correction)
+## H2 Copy-Down Variant (dual-gadget mutual correction)
 
 In the dual-gadget architecture, two gadgets correct each other's code.
-Each gadget's IX scans the other gadget's code cells. Instead of H0
-shuttling between the data row and EX row, a **copy-down pattern** keeps
-all correction work local to the EX row ("stomach"):
+Each gadget's H2 scans the other gadget's code cells. Instead of H0
+shuttling between the data row and GP row, a **copy-down pattern** keeps
+all correction work local to the GP row ("stomach"):
 
 ```
 Stomach layout (9 slots):
@@ -269,19 +269,19 @@ EV  PA  CWL  S0  S1  S2  S3  SCR  ROT
 The flow becomes:
 
 ```
-Copy-in:   m                    — [H0] ^= [IX] (CWL gets remote CW)
+Copy-in:   m                    — [H0] ^= [H2] (CWL gets remote CW)
 Phase A:   Y parity
 Phase B:   z-extract p_all → EV
 Phase A':  Y-uncompute PA
 Phase C:   Y syndrome
 Phase D:   Barrel shifter → EV = p_all << syndrome
 Phase C':  Y-uncompute S0-S3
-Uncompute: M                    — payload(H0) -= payload(IX) (CWL → 0)
-Write-back: j                   — [IX] ^= [H0] (remote gets mask XOR)
+Uncompute: M                    — payload(H0) -= payload(H2) (CWL → 0)
+Write-back: j                   — [H2] ^= [H0] (remote gets mask XOR)
 Phase F:   z+x cleanup
 ```
 
-After Phase F: H0=EV, H1=PA, EX=EV. At most 1 dirty cell (EV or PA).
+After Phase F: H0=EV, H1=PA, GP=EV. At most 1 dirty cell (EV or PA).
 
 **Total (copy-down): 323 ops** (315 correction + 3 epilogue + 5 advance).
 
@@ -289,8 +289,8 @@ After Phase F: H0=EV, H1=PA, EX=EV. At most 1 dirty cell (EV or PA).
 
 ## Contained Design: Phase G (waste cleanup)
 
-In the **contained serpentine** design, H0/H1/CL/EX stay at fixed
-positions on the stomach row across cycles. Only IX advances (serpentine
+In the **contained serpentine** design, H0/H1/CL/GP stay at fixed
+positions on the stomach row across cycles. Only H2 advances (serpentine
 scan). The "advance" block (`E e ] >`) is removed. This means waste
 from EV and PA can't be left behind as heads advance — it must be
 deposited into a **dump corridor** on the same row.
@@ -318,7 +318,7 @@ T              EV waste → ROT (CL's cell). CL.bit0 = waste & 1.
 E × 8          H0: EV → ROT
 e × 8          H1: PA → dump9
 f e f e f e f e f   5 conditional swaps (shift-register deposit)
-] K T K [      K-T-K trick: PA waste → ROT via CL/EX register swap
+] K T K [      K-T-K trick: PA waste → ROT via CL/GP register swap
 e f            Single f deposits PA waste at dump14
 W × 6          H0: ROT → CWL
 w × 12         H1: dump14 → CWL
@@ -338,27 +338,27 @@ the waste row:
 
 - `T`: swap [CL=ROT] ↔ [H0=CWL]. If the handler fired, CL has the
   `:` signal; T moves it to CWL and zeros CL.
-- `Z`: swap [H0=CWL] ↔ [EX=waste_row]. Handler signal goes to waste;
+- `Z`: swap [H0=CWL] ↔ [GP=waste_row]. Handler signal goes to waste;
   fresh zero comes to CWL.
-- `]`: advance EX east past the deposited waste.
+- `]`: advance GP east past the deposited waste.
 
 On clean cycles (no handler fired): all values are 0, so T and Z are
-0↔0 no-ops. EX still advances (eats a zero that stays zero).
+0↔0 no-ops. GP still advances (eats a zero that stays zero).
 
 This replaces the earlier `T x` preamble which was non-injective
 (H0=H1 XOR zeroed the cell). The `T Z ]` pattern is fully reversible
 — the handler signal is deposited to waste rather than destroyed.
 
-### EX budget
+### GP budget
 
 The contained serpentine design uses 4 `]` per cycle:
 - 1 in the preamble (T Z ])
 - 2 in Phase G (EV deposit + PA deposit)
 - 1 in the handler deposit between & gates (T Z ])
 
-With grid width W, EX wraps after W/4 cycles. For W=99: ~24 cycles
+With grid width W, GP wraps after W/4 cycles. For W=99: ~24 cycles
 per wrap. The "infinite-zeros" cheat zeros waste rows after every
-step, eliminating the EX budget limit. This is not reversible (zeroing
+step, eliminating the GP budget limit. This is not reversible (zeroing
 destroys breadcrumbs step_back needs). True reversibility requires
 either a reversible compressor or enough waste capacity to never wrap.
 
@@ -400,8 +400,8 @@ Several fb2d ops are NOT bijective when heads overlap:
 |----|---------|--------|------------|
 | `x` | H0=H1 | [H0] ^= [H0] = 0 | No (all values → 0) |
 | `,` | H0=H1 | [H0] -= [H0] = 0 | No |
-| `m` | H0=IX | [H0] ^= [H0] = 0 | No |
-| `j` | IX=H0 | [IX] ^= [IX] = 0 | No |
+| `m` | H0=H2 | [H0] ^= [H0] = 0 | No |
+| `j` | H2=H0 | [H2] ^= [H2] = 0 | No |
 | `f`/`F` | CL=H0 or CL=H1 | Condition changes with swap | No (when [other]=0) |
 
 All other ops (swaps: `X`, `T`, `V`, `Z`, `K`; increments: `+`, `-`,
@@ -515,7 +515,7 @@ the original 0x05A0. Correction complete!
 Before cleanup: PA = 1, EV = 32 = `...0010 0000`.
 
 ```
-z: swap bit 0 of EV with bit 0 of PA (via EX).
+z: swap bit 0 of EV with bit 0 of PA (via GP).
    EV.bit0 was 0, PA.bit0 was 1.
    After: EV = 33 = ...0010 0001, PA = 0.
 
@@ -556,7 +556,7 @@ which is how you can tell it's garbage rather than data.
 
 Everything is reversible. Running `step_back()` through all 336 steps
 restores the grid to its exact original state: corrupted codeword back
-in CW, all EX cells back to 0. The dirty cell from Phase F gets cleaned
+in CW, all GP cells back to 0. The dirty cell from Phase F gets cleaned
 by the reverse of z+x, the Y-uncompute phases re-dirty and then
 un-dirty the accumulators, and so on.
 
@@ -565,7 +565,7 @@ un-dirty the accumulators, and so on.
 | Variant | Code ops | Dirty cells (error) | Dirty cells (clean) | Stomach width |
 |---------|----------|---------------------|---------------------|---------------|
 | Standalone | 336 | 1 | 0 | 8 cells |
-| IX copy-down | 323 | 1 | 0 | 9 cells |
+| H2 copy-down | 323 | 1 | 0 | 9 cells |
 | Contained serpentine | 372 | 1 (in dump corridor) | 0 | 9 + N_DUMP+1 cells |
 
 Each correction deposits at most 1 waste cell into the dump corridor

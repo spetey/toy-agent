@@ -426,16 +426,16 @@ range check using existing ops. For now, hardcode sweep ranges.
 - **Bit-level ops (v1.6)**: `x` (XOR), `r`/`l` (rotate), `f` (bit-0
   Fredkin), `z` (bit-0 H1 swap). Motivated by need for carry detection,
   LEB128 encoding, and future error correction.
-- **EX = exteroceptor**: records "breadcrumbs" for reversibility.
-  Loops use `( P ... %` pattern. Nested loops use monotonic EX advance.
+- **GP = garbage pointer**: records "breadcrumbs" for reversibility.
+  Loops use `( P ... %` pattern. Nested loops use monotonic GP advance.
 - **Zero-terminated LE base-256**: the chosen multi-cell integer encoding.
   The zero terminator doubles as a growth digit on carry overflow.
-- **IX interoceptor (v1.9)**: programmable head for cross-gadget correction.
+- **H2 scan head (v1.9)**: programmable head for cross-gadget correction.
   Chosen over auto-boustrophedon head because: (a) on large grids, the
   scanning pattern should be in gadget code, not hardware; (b) agents need
   to detect boundaries adaptively, not assume a fixed sweep topology;
-  (c) programmable IX + `V` test bridge enables future boundary detection.
-  Key insight: copy-down pattern (`m`/`M`/`j`) means only IX touches
+  (c) programmable H2 + `V` test bridge enables future boundary detection.
+  Key insight: copy-down pattern (`m`/`M`/`j`) means only H2 touches
   remote rows, eliminating the H0 shuttle problem entirely.
 - **Nearest-codeword payload decoding**: the d_min=4 opcode encoding
   ([11,6,4] linear code) is now used as an error-CORRECTING code, not
@@ -462,7 +462,13 @@ range check using existing ops. For now, hardcode sweep ranges.
   Hamming correction. Clean cells (95%+) take a short bypass path.
   The bypass must undo all CL increments from Phase A+B (15 `;` ops)
   plus one more `;` for merge-gate signaling. The "stomach" (working
-  area) has 9 fixed cells; EX ("the mouth") roams the waste row.
+  area) has 9 fixed cells; GP ("the mouth") roams the waste row.
 - **Blank boundary rows**: zero-filled rows above bypass and below code
-  serve as IX vertical boundaries. Future: -1 border cells (payload
+  serve as H2 vertical boundaries. Future: -1 border cells (payload
   2047) for adaptive boundary detection in non-zero environments.
+- **GP → EX, H2 → IX rename**: GP (garbage pointer) renamed to EX
+  (exteroceptor) — the external-facing head that roams the environment.
+  H2 (scan head) renamed to IX (interoceptor) — the internal-facing
+  head that scans for and corrects errors. Both are two-character names
+  matching H0, H1, CL convention. The biological metaphor: perception
+  (EX) vs interoception (IX). Opcode chars unchanged.

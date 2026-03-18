@@ -37,14 +37,14 @@ Three progressively more capable torus agents demonstrated the resource
 model:
 
 1. **fuel-demo**: XOR-compress identical fuel pairs to extract clean
-   zeros, shuttle them to the EX trail
+   zeros, shuttle them to the GP trail
 2. **fuel-demo-v2**: inner bounded loop powered by fuel-derived zeros
    (the "digestive system")
 3. **fuel-demo-v3**: error-checking agent that rotates data bytes using
    fuel — the first step toward self-maintenance
 
 Key insight: clean zeros are the fundamental resource. Fuel is
-compressible data; compression produces zeros; zeros power EX-based
+compressible data; compression produces zeros; zeros power GP-based
 reversible computation.
 
 ## Hamming(8,4) Error Correction
@@ -86,40 +86,40 @@ The correction gadget was redesigned for a self-contained boustrophedon
 (serpentine) code layout: code rows zigzag left-to-right then
 right-to-left, connected by mirror columns. This eliminated dependence
 on torus wrapping for the IP loop and enabled the gadget to process
-adjacent codewords with a sliding EX scratch window that advances by 1
+adjacent codewords with a sliding GP scratch window that advances by 1
 per cycle (322 ops/cycle).
 
-## v1.9: IX Interoceptor and Copy-Down Architecture
+## v1.9: H2 Scan Head and Copy-Down Architecture
 
 The central problem of mutual correction: if gadget A needs to correct
-gadget B's code, H0 would have to shuttle between A's EX row and B's
+gadget B's code, H0 would have to shuttle between A's GP row and B's
 code rows — 6 round trips per correction cycle. This doesn't scale when
 the target code is on distant rows.
 
-Solution: the IX interoceptor with 4 new opcodes:
+Solution: the H2 scan head with 4 new opcodes:
 
-- `m` (`[H0] ^= [IX]`): raw XOR copies a remote codeword to a local
+- `m` (`[H0] ^= [H2]`): raw XOR copies a remote codeword to a local
   zero cell
-- `M` (`payload(H0) -= payload(IX)`): uncomputes the local copy after
+- `M` (`payload(H0) -= payload(H2)`): uncomputes the local copy after
   correction
-- `j` (`[IX] ^= [H0]`): writes the correction mask back to the remote
+- `j` (`[H2] ^= [H0]`): writes the correction mask back to the remote
   cell
-- `V` (`swap([CL], [IX])`): test bridge for future boundary detection
+- `V` (`swap([CL], [H2])`): test bridge for future boundary detection
 
 Critical design insight: `m` must be raw 16-bit XOR (not payload
 arithmetic with parity re-encoding), because the correction gadget needs
 to see the corrupted raw bits to compute the syndrome. Payload arithmetic
 would re-encode with fresh parity, hiding the error.
 
-With copy-down, only IX touches remote rows. All other heads stay local
-on the EX row.
+With copy-down, only H2 touches remote rows. All other heads stay local
+on the GP row.
 
 ## Multi-IP and Mutual Correction
 
 The simulator gained interleaved round-robin multi-IP execution: each IP
-has independent heads (H0, H1, IX, CL, EX) but shares the grid. Two
+has independent heads (H0, H1, H2, CL, GP) but shares the grid. Two
 identical Hamming gadgets on separate IPs correct each other's code via
-IX copy-down.
+H2 copy-down.
 
 Key finding: parity-bit errors (bits 0, 1, 2, 4, 8) are safe — they
 change the Hamming codeword but not the opcode, so both IPs execute
