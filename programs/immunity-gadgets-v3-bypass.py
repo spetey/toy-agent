@@ -7,17 +7,18 @@ the IP takes a short bypass path, dramatically reducing the number of
 stomach ops and the noise vulnerability window.
 
 ARCHITECTURE (per gadget, R+6 rows):
-  Row 0:        BLANK ROW (zeros; top boundary for IX, future -1 border)
+  Row 0:        BOUNDARY ROW (0xFFFF; top boundary for IX)
   Row 1:        BYPASS ROW (NOP-filled, IX scans)
   Row 2:        HANDLER ROW (boundary handlers going East, NOP-filled)
   Rows 3..R+2:  CODE ROWS (boustrophedon)
-  Row R+3:      BLANK ROW (zeros; bottom boundary for IX, future -1 border)
+  Row R+3:      BOUNDARY ROW (0xFFFF; bottom boundary for IX)
   Row R+4:      STOMACH ROW (working area: H0, H1, CL fixed here)
   Row R+5:      WASTE ROW (EX roams, eats zeros, excretes waste)
 
 IX SCAN AREA: rows 1..R+2 (bypass + handler + code = R+2).
-  Vertical boundary: blank rows (all zeros) above and below.
-  Blank rows are explicit boundaries, not part of the scan.
+  Vertical boundary: 0xFFFF rows above and below.
+  Horizontal boundary: col 0 and col W-1 are 0xFFFF on scan rows.
+  Boundary detection: m T : ? ; T m (: wraps payload 2047→0, ? fires).
 
 KEY DESIGN: three ? mirrors, two rows above code.
   - Boundary ? sends IP North from code row 3 to handler row 2.
@@ -41,10 +42,12 @@ HANDLER ROW FILL:
   - NOP value: hamming_encode(1) = 0x000f (payload 1 → opcode 0 → NOP).
 
 HANDLER ALIGNMENT:
-  After each boundary ? in the gadget, we add X X padding (2 NOPs) so
-  the & merge gate is 5 positions after the ?.  This aligns with the
-  handler's 6-op east-going layout (/ B C U ; \) whose exit \ is at
-  ?_col + 5 on the handler row, matching the & on the code row.
+  After each boundary ? in the gadget, we add X padding (1 NOP) so
+  the & merge gate is 5 positions after the ?.  The : ? ; pattern adds
+  2 ops vs the old ? pattern, but removes 1 padding X, so the net is
+  +1 op per test.  The handler's 6-op east-going layout (/ B C U ; \)
+  has exit \ at ?_col + 5 on the handler row, matching the & on the
+  code row.
 
 BOUNCE HANDLER: / D O ; X \  (not / D O C ; \).
   D retreats IX from boundary back to last scan row.  O flips ix_vdir.
@@ -57,7 +60,7 @@ CORRIDOR: col 1
   First code row (3) col 1: / (N→E)
   Intermediate code rows col 1: X
   Merge gate & at (3, 2) — corridor, handler, and bypass all converge.
-  Col 0 = blank (western IX boundary).
+  Col 0 = 0xFFFF boundary (western IX boundary).
 
 VULNERABILITY ANALYSIS:
   Clean path: ~90 steps (probe + bypass).  Only PA written then zeroed.
@@ -109,8 +112,13 @@ OP = OPCODES
 #   - 1-bit safe: all 11 data-bit flips → NOP (0/11 become real opcodes)
 #   - 2-bit safe: all 55 data-bit pairs → NOP (0/55 become real opcodes)
 # Compare payload 1019 (non-codeword): 1-bit safe but 30/55 2-bit → real opcodes.
-# Data-bit distance 8 from zero, distance 3 from 2047 (future boundary marker).
+# Data-bit distance 8 from zero, distance 3 from boundary marker (payload 2047).
 NOP_CELL = hamming_encode(1017)  # 0x7e8e, data-bit dist 8 from zero
+
+# Boundary marker: 0xFFFF (payload 2047).  Not a valid opcode (decodes to NOP).
+# Detected by : ? ; pattern (: increments payload 2047→0, ? fires on zero).
+# Displayed as '~' in both REPL and GUI.
+BOUNDARY_CELL = 0xFFFF
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -122,9 +130,9 @@ def build_probe_bypass_gadget(last_row_dir):
 
     Order:
       1. Preamble (T Z ]) — deposit handler/bypass CL signal to waste
-      2. IX advance + horizontal boundary test (A m T ? T m X X)
+      2. IX advance + horizontal boundary test (A m T : ? ; T m X)
       3. Handler #1 merge (&) + CL deposit (T Z ]) + vertical test
-         (m T ? T m X X) + handler #2 merge (&)
+         (m T : ? ; T m X) + handler #2 merge (&)
       4. Copy-in (m) + Probe (Phase A + B + T + ?)
       5. [BRANCH: clean → bypass row 0, dirty → continue]
       6. Correction (Phase A' + C + D + C' + uncompute + writeback + F + G)
@@ -142,13 +150,16 @@ def build_probe_bypass_gadget(last_row_dir):
     gb.emit(']')     # EX advance east on waste row
 
     # ── 2. IX advance + horizontal boundary test ──
+    # Boundary cells are 0xFFFF (payload 2047).  : increments payload
+    # 2047→0, then ? fires on zero.  ; undoes the increment.
     gb.emit('A')     # advance IX in ix_dir
     gb.emit('m')     # [H0=CWL] ^= [IX] → CWL = remote value (was 0)
     gb.emit('T')     # swap [CL=ROT] ↔ [H0=CWL] → CL has remote value
+    gb.emit(':')     # CL++ (boundary 2047→0, normal cells stay non-zero)
     gb.emit('?')     # horizontal boundary test: / if CL==0 → E→N
+    gb.emit(';')     # undo: CL-- (restore original payload)
     gb.emit('T')     # undo: CL ↔ CWL
     gb.emit('m')     # undo: CWL ^= [IX] → CWL = 0
-    gb.emit('X')     # padding NOP (H0=H1=CWL, swap is no-op)
     gb.emit('X')     # padding NOP — aligns handler exit with &
 
     # ── 3. Handler #1 merge + CL deposit + vertical test ──
@@ -159,10 +170,11 @@ def build_probe_bypass_gadget(last_row_dir):
 
     gb.emit('m')     # vertical test: [H0=CWL] ^= [IX]
     gb.emit('T')     # CL ↔ CWL
+    gb.emit(':')     # CL++ (boundary 2047→0)
     gb.emit('?')     # vertical boundary test: / if CL==0 → E→N
+    gb.emit(';')     # undo: CL--
     gb.emit('T')     # undo
     gb.emit('m')     # undo
-    gb.emit('X')     # padding NOP
     gb.emit('X')     # padding NOP — aligns bounce handler exit with &
 
     gb.emit('&')     # handler #2 / bounce merge gate
@@ -521,9 +533,9 @@ def _place_probe_gadget(sim, layout, op_values, main_ops,
                         probe_branch_idx, bypass_ops):
     """Place one probe-bypass gadget.
 
-    BLANK ROWS (rows 0 and R+3 relative to gadget):
-      All zeros.  IX vertical boundaries (top and bottom).
-      Future: -1 boundary cells for adaptive boundary detection.
+    BOUNDARY ROWS (rows 0 and R+3 relative to gadget):
+      Filled with 0xFFFF boundary markers.  IX vertical boundaries.
+      Detected by : ? ; pattern (payload 2047+1 wraps to 0).
 
     BYPASS ROW (row 1 relative to gadget):
       Filled with NOP cells so IX includes it in the scan (gets corrected!).
@@ -536,7 +548,9 @@ def _place_probe_gadget(sim, layout, op_values, main_ops,
         / B C U ; \\  (horizontal) and  / D O ; X \\  (vertical bounce).
       Handler exit \\ (E→S) drops to code row where & merge gate is.
 
-    CORRIDOR: col 1 on code rows.  Col 0 = blank (IX west boundary).
+    BOUNDARY COLUMNS: col 0 and col W-1 on all scan rows = 0xFFFF.
+
+    CORRIDOR: col 1 on code rows.
       Last code row col 1: \\ (W→N).  First code row col 1: / (N→E).
       & merge gate at (first_code_row, col 2).
     """
@@ -577,18 +591,26 @@ def _place_probe_gadget(sim, layout, op_values, main_ops,
                 sim.grid[flat] = encode_opcode(OP['X'])
 
     # ── Fill handler row with NOP cells (cols 1..code_right) ──
-    # Col 0 stays zero (western boundary for IX).
     for col in range(1, code_right + 1):
         sim.grid[sim._to_flat(handler_row, col)] = NOP_CELL
 
     # ── Fill bypass row with NOP cells (cols 1..code_right) ──
     # So IX includes bypass row in its scan (gets corrected!).
-    # Col 0 stays zero (western boundary).
     for col in range(1, code_right + 1):
         sim.grid[sim._to_flat(bypass_row, col)] = NOP_CELL
 
-    # Blank rows (top and bottom) are left as zeros — they are the
-    # IX vertical boundaries.  No fill needed.
+    # ── Fill boundary markers (0xFFFF) ──
+    # Blank rows (top and bottom): entire row is boundary.
+    blank_top = bypass_row - 1
+    blank_bot = code_start_row + R
+    for col in range(W):
+        sim.grid[sim._to_flat(blank_top, col)] = BOUNDARY_CELL
+        sim.grid[sim._to_flat(blank_bot, col)] = BOUNDARY_CELL
+
+    # Col 0 and col W-1 on scan rows (bypass, handler, code): boundary.
+    for row in [bypass_row, handler_row] + list(range(first_code_row, last_code_row + 1)):
+        sim.grid[sim._to_flat(row, 0)] = BOUNDARY_CELL
+        sim.grid[sim._to_flat(row, W - 1)] = BOUNDARY_CELL
 
     # ── Locate the three ? mirrors in the boustrophedon ──
     question_indices = [i for i, op in enumerate(main_ops) if op == '?']
@@ -929,6 +951,12 @@ if __name__ == '__main__':
     print()
 
     if all_ok:
+        # Generate loadable state file
+        sim, layout, cycle_length = make_probe_bypass_ouroboros(width)
+        out_dir = os.path.dirname(os.path.abspath(__file__))
+        out_path = os.path.join(out_dir, f'immunity-gadgets-v3-bypass-w{width}.fb2d')
+        sim.save_state(out_path, hints={'waste_cleanup': 1})
+        print(f"Saved: {out_path}")
         print("=" * 60)
         print(f"ALL PROBE-BYPASS TESTS PASSED (W={width})")
         print("=" * 60)

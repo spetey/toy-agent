@@ -1118,6 +1118,10 @@ class FB2DSimulator:
         payload = _CELL_TO_PAYLOAD[value]
         opcode = _PAYLOAD_TO_OPCODE[payload]
         if opcode in OPCODE_TO_CHAR:
+            # Boundary marker: payload 2047 (0xFFFF) decodes to NOP but
+            # is displayed as ~ to distinguish from regular NOP.
+            if opcode == 0 and payload == 2047:
+                return '~'
             return OPCODE_TO_CHAR[opcode]
         if value < 100:
             return f'{value:2d}'

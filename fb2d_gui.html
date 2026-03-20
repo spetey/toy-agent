@@ -926,6 +926,8 @@ function cellChar(val) {
   const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
   // Show NOP filler as 'o' to distinguish from true NOP (payload 0)
   if (opcode === 0 && payload === NOP_FILLER_PAYLOAD) return 'o';
+  // Show boundary marker (payload 2047 = 0xFFFF) as '~'
+  if (opcode === 0 && payload === 2047) return '~';
   if (opcode in OPCODE_CHARS) return OPCODE_CHARS[opcode];
   return val.toString(16).padStart(4, '0');
 }
@@ -1167,7 +1169,8 @@ canvas.addEventListener('mousemove', (e) => {
     const ch = cellChar(val);
     const payload = cellToPayload(val);
     const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
-    const name = (opcode === 0 && payload === NOP_FILLER_PAYLOAD) ? 'NOP filler'
+    const name = (opcode === 0 && payload === 2047) ? 'boundary'
+               : (opcode === 0 && payload === NOP_FILLER_PAYLOAD) ? 'NOP filler'
                : OPCODE_NAMES[opcode] || (opcode === 0 ? 'NOP' : `op${opcode}`);
     const { syn, pAll } = hammingSyndrome(val);
     const synStr = syn === 0 && pAll === 0 ? 'ok' : `syn=${syn}${pAll ? '!' : ''}`;
