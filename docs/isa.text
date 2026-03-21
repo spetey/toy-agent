@@ -1,4 +1,4 @@
-# fb2d Instruction Set Architecture (v1.12)
+# fb2d Instruction Set Architecture (v1.14)
 
 62 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
 `payload(cell)` (the 11 data bits of the Hamming(16,11) codeword) as
@@ -294,3 +294,12 @@ the IP backward through a mirror reflects it the same way.
 Any payload not corresponding to opcodes 1-62 (and not within Hamming
 distance 1 of such a payload) is a NOP: the IP advances without side
 effects. The canonical "empty cell" is raw value 0 (payload 0).
+
+## Special Cell Values
+
+Two non-opcode cell values have architectural significance:
+
+| Symbol | Payload | Raw Value | Description |
+|--------|---------|-----------|-------------|
+| `o` | 1017 | 0x7E8E | **NOP filler**. The 64th (unused) codeword of the [11,6,4] opcode code. As a true codeword, it has d_min=4 from all opcode codewords: all 1-bit AND 2-bit data errors still decode to NOP (0/55 two-bit pairs produce a real opcode). Used for padding on code rows, bypass rows, return rows, and handler rows. Data-bit distance 8 from zero (robust boundary detection). |
+| `~` | 2047 | 0xFFFF | **Boundary marker**. All bits set. Decodes to NOP (not within Hamming distance 1 of any opcode). Used for IX scan boundary rows (top and bottom) and boundary columns (col 0 and col W-1). Detected via `m T : ? ; T m` — `:` wraps payload 2047→0, `?` fires on zero. Enables agents in non-zero environments where zero cells are not reliably empty. |

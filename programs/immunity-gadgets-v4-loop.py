@@ -68,7 +68,7 @@ HANDLER ALIGNMENT:
 CORRIDOR: col 1
   Last code row (R+3) col 1: \\ (W→N)
   First code row (4) col 1: / (N→E)
-  Intermediate code rows col 1: X
+  Intermediate code rows col 1: NOP filler (o)
   Merge gate & at (4, 2) — corridor, handler, and bypass all converge.
   Col 0 = 0xFFFF boundary (western IX boundary).
 
@@ -140,14 +140,14 @@ def build_probe_bypass_gadget(last_row_dir):
 
     Order:
       1. Preamble (T Z ]) — deposit handler/bypass CL signal to waste
-      2. IX advance + horizontal boundary test (A m T : ? ; T m X)
+      2. IX advance + horizontal boundary test (A m T : ? ; T m o)
       3. Handler #1 merge (&) + CL deposit (T Z ]) + vertical test
-         (m T : ? ; T m X) + handler #2 merge (&)
+         (m T : ? ; T m o...) + handler #2 merge (&)
       4. Copy-in (m) + Probe (Phase A + B + T + ?)
       5. [BRANCH: clean → bypass row 0, dirty → continue]
       6. Correction (Phase A' + C + D + C' + uncompute + writeback + F + G)
 
-    The X X padding after each T m undo allows 6-op handlers going East
+    The o o padding (NOP filler) after each T m undo allows 6-op handlers going East
     on the handler row (/ B C U ; \\) to align their exit with the & gate.
 
     Returns: (main_ops, probe_branch_idx, bypass_ops)
@@ -170,7 +170,7 @@ def build_probe_bypass_gadget(last_row_dir):
     gb.emit(';')     # undo: CL-- (restore original payload)
     gb.emit('T')     # undo: CL ↔ CWL
     gb.emit('m')     # undo: CWL ^= [IX] → CWL = 0
-    gb.emit('X')     # padding NOP — aligns handler exit with &
+    gb.emit('o')     # NOP filler — aligns handler exit with &
 
     # ── 3. Handler #1 merge + CL deposit + vertical test ──
     gb.emit('&')     # handler #1 merge gate (\ if CL!=0)
@@ -185,9 +185,9 @@ def build_probe_bypass_gadget(last_row_dir):
     gb.emit(';')     # undo: CL--
     gb.emit('T')     # undo
     gb.emit('m')     # undo
-    # Padding for 16-op rewind handler alignment (exit \ at vbound+15)
+    # NOP filler padding for 16-op rewind handler alignment (exit \ at vbound+15)
     for _ in range(11):
-        gb.emit('X')
+        gb.emit('o')
     gb.emit('&')     # rewind handler merge gate (handler \ at ?+15)
     gb.emit('T')     # deposit rewind handler CL signal
     gb.emit('Z')     # to waste
@@ -486,7 +486,9 @@ def make_probe_bypass_ouroboros(width=99, errors=None):
 
     last_dir = layout['last_row_dir']
     main_ops, probe_idx, bypass_ops = build_probe_bypass_gadget(last_dir)
-    op_values = [OP[ch] for ch in main_ops]
+    # 'o' = NOP filler (payload 1017); encode as negative raw cell value
+    # so place_boustrophedon uses it directly (not via encode_opcode).
+    op_values = [-NOP_CELL if ch == 'o' else OP[ch] for ch in main_ops]
 
     T = layout['total_rows']
     W = width
@@ -597,8 +599,8 @@ def _place_probe_gadget(sim, layout, op_values, main_ops,
     rows_used, end_row, last_col, end_dir_int = place_boustrophedon(
         sim, op_values, code_left, code_right, start_row=code_start_row)
 
-    # Fill partial last row with X (no-op when H0=H1)
-    _fill_row_with_X(sim, layout, last_code_row)
+    # Fill partial last row with NOP filler
+    _fill_row_with_nop(sim, layout, last_code_row)
 
     # ── Corridor at col 1 (col 0 = blank boundary for IX) ──
     sim.grid[sim._to_flat(last_code_row, 1)] = encode_opcode(OP['\\'])
@@ -607,14 +609,14 @@ def _place_probe_gadget(sim, layout, op_values, main_ops,
     # ── Merge gate at (first_code_row, col 2) ──
     sim.grid[sim._to_flat(first_code_row, 2)] = encode_opcode(OP['&'])
 
-    # Fill cols 1-2 on all non-first code rows with X.
+    # Fill cols 1-2 on all non-first code rows with NOP filler.
     # (First code row has / at col 1 and & at col 2; last code row has
-    # \ at col 1 but col 2 still needs X so IX can scan through it.)
+    # \ at col 1 but col 2 still needs NOP filler so IX can scan through it.)
     for row in range(first_code_row + 1, last_code_row + 1):
         for col in [1, 2]:
             flat = sim._to_flat(row, col)
             if sim.grid[flat] == 0:
-                sim.grid[flat] = encode_opcode(OP['X'])
+                sim.grid[flat] = NOP_CELL
 
     # ── Fill handler, return, and bypass rows with NOP cells (cols 1..code_right) ──
     # NOP cells so IX includes these rows in its scan (gets corrected!).
@@ -746,15 +748,14 @@ def _place_probe_gadget(sim, layout, op_values, main_ops,
     sim.grid[sim._to_flat(bypass_row, 2)] = encode_opcode(OP['/'])
 
 
-def _fill_row_with_X(sim, layout, row):
-    """Fill empty cells on a row with X (swap, NOP when H0=H1)."""
+def _fill_row_with_nop(sim, layout, row):
+    """Fill empty cells on a row with NOP filler (payload 1017, 'o')."""
     code_left = layout['code_left']
     code_right = layout['code_right']
-    fill_value = encode_opcode(OP['X'])
     for col in range(code_left, code_right + 1):
         flat = sim._to_flat(row, col)
         if sim.grid[flat] == 0:
-            sim.grid[flat] = fill_value
+            sim.grid[flat] = NOP_CELL
 
 
 def _compute_cycle_length(sim, layout):

@@ -287,11 +287,19 @@ def place_boustrophedon(sim, op_values, left_col, right_col, start_row):
     The IP enters at (start_row, left_col) going East and snakes through
     rows using mirrors at the column boundaries.
 
+    op_values: list of opcode numbers (int). Negative values are treated
+    as pre-encoded raw cell values (abs(val)) — not passed through
+    encode_opcode. Use this for NOP filler cells.
+
     Does NOT place the final turn mirror on the last row (leaves the IP
     free to continue into the return corridor).
 
     Returns: (rows_used, end_row, last_op_col, end_dir)
     """
+    def _encode(val):
+        if val < 0:
+            return -val  # pre-encoded raw cell value
+        return encode_opcode(val)
     total = len(op_values)
     if total == 0:
         return 0, start_row, left_col, 1
@@ -309,7 +317,7 @@ def place_boustrophedon(sim, op_values, left_col, right_col, start_row):
             slots = right_col - left_col   # e.g. 61-2 = 59
             n = min(slots, total - placed)
             for i in range(n):
-                sim.grid[sim._to_flat(row, left_col + i)] = encode_opcode(
+                sim.grid[sim._to_flat(row, left_col + i)] = _encode(
                     op_values[placed])
                 placed += 1
             if placed >= total:
@@ -323,7 +331,7 @@ def place_boustrophedon(sim, op_values, left_col, right_col, start_row):
             slots = right_col - left_col - 1   # e.g. 61-2-1 = 58
             n = min(slots, total - placed)
             for i in range(n):
-                sim.grid[sim._to_flat(row, right_col - 1 - i)] = encode_opcode(
+                sim.grid[sim._to_flat(row, right_col - 1 - i)] = _encode(
                     op_values[placed])
                 placed += 1
             if placed >= total:
@@ -337,7 +345,7 @@ def place_boustrophedon(sim, op_values, left_col, right_col, start_row):
             slots = right_col - left_col - 1
             n = min(slots, total - placed)
             for i in range(n):
-                sim.grid[sim._to_flat(row, left_col + 1 + i)] = encode_opcode(
+                sim.grid[sim._to_flat(row, left_col + 1 + i)] = _encode(
                     op_values[placed])
                 placed += 1
             if placed >= total:

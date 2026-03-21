@@ -133,6 +133,13 @@ Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
 | Cell level | Hamming(16,11) SECDED, d_min=3 | 1-bit errors in the 16-bit cell | 2-bit errors |
 | Opcode level | [11,6,4] linear code, d_min=4 | 1 data-bit error in opcode identity | 2 data-bit errors (→ NOP) |
 
+#### Special Cell Values
+
+| Symbol | Payload | Raw | Purpose |
+|--------|---------|-----|---------|
+| `o` | 1017 | 0x7E8E | **NOP filler**. 64th codeword of [11,6,4] code. All 1-bit and 2-bit data errors decode to NOP (not a real opcode). Used for padding on code, bypass, return, and handler rows. |
+| `~` | 2047 | 0xFFFF | **Boundary marker**. All bits set. Decodes to NOP. Used for IX scan boundary rows and columns. Detected via `m T : ? ; T m` (`:` wraps 2047→0). |
+
 ### Hamming Correction Gadget
 
 The IX copy-down correction gadget corrects single-bit errors:
