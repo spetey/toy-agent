@@ -613,21 +613,21 @@ class FB2DSimulator:
                 self.grid[self.h1] = (b & 0xFFFE) | a_bit
 
         elif opcode == 44:   # R  [H0] ror by (payload([CL]) & 15) bits (raw 16-bit)
-            if self.h0 != flat_ip:
+            if self.h0 != self.cl and self.h0 != flat_ip:
                 n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
                 if n:
                     v = self.grid[self.h0]
                     self.grid[self.h0] = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 45:   # L  [H0] rol by (payload([CL]) & 15) bits (raw 16-bit)
-            if self.h0 != flat_ip:
+            if self.h0 != self.cl and self.h0 != flat_ip:
                 n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
                 if n:
                     v = self.grid[self.h0]
                     self.grid[self.h0] = ((v << n) & CELL_MASK | (v >> (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 46:   # Y  [H0] ^= ror([H1], payload([CL]) & 15)  (raw 16-bit, self-inverse)
-            if self.h0 != self.h1 and self.h0 != flat_ip:
+            if self.h0 != self.h1 and self.h0 != self.cl and self.h0 != flat_ip:
                 n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
                 v = self.grid[self.h1]
                 rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v
@@ -851,21 +851,21 @@ class FB2DSimulator:
                 self.grid[self.h1] = (b & 0xFFFE) | a_bit
 
         elif opcode == 44:   # R was ror-by-CL, undo with rol-by-CL (payload 16-bit)
-            if self.h0 != prev_flat:
+            if self.h0 != self.cl and self.h0 != prev_flat:
                 n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
                 if n:
                     v = self.grid[self.h0]
                     self.grid[self.h0] = ((v << n) & CELL_MASK | (v >> (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 45:   # L was rol-by-CL, undo with ror-by-CL (payload 16-bit)
-            if self.h0 != prev_flat:
+            if self.h0 != self.cl and self.h0 != prev_flat:
                 n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
                 if n:
                     v = self.grid[self.h0]
                     self.grid[self.h0] = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK
 
         elif opcode == 46:   # Y is self-inverse (payload 16-bit)
-            if self.h0 != self.h1 and self.h0 != prev_flat:
+            if self.h0 != self.h1 and self.h0 != self.cl and self.h0 != prev_flat:
                 n = _CELL_TO_PAYLOAD[self.grid[self.cl]] & ROTATION_MASK
                 v = self.grid[self.h1]
                 rotated = ((v >> n) | (v << (CELL_BITS - n))) & CELL_MASK if n else v

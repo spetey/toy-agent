@@ -98,7 +98,7 @@ codeword of the [11,6,4] opcode code. Waste cleanup is auto-enabled.
 
 Build and test: `python3 programs/immunity-gadgets-v4-loop.py`
 
-## ISA Summary (v1.12, 62 opcodes + NOP)
+## ISA Summary (v1.14, 62 opcodes + NOP)
 
 ### Mirrors
 | Op | Code | Meaning |
@@ -230,6 +230,13 @@ aliasing occurs:
 - `F`: NOP when CL == H0 or CL == H1
 - `f`: NOP when CL == H0 or CL == H1
 
+**CL-overlap guards** (v1.14): ops that write [H0] using [CL] as a
+parameter (rotation amount) are non-reversible when H0 == CL, because
+the write changes the parameter that step_back would read. These are
+NOP when H0 == CL:
+- `R`, `L`: rotate [H0] by payload([CL])&15 — rotation changes the amount
+- `Y`: [H0] ^= ror([H1], payload([CL])&15) — XOR changes the rotation amount
+
 **IP-cell write guard** (v1.13): if a data op writes to the grid cell
 the IP is currently sitting on, it changes the opcode that `step_back()`
 will later read. step_back would then undo the wrong operation. Guard:
@@ -328,6 +335,9 @@ python3 test_pools.py
 
 # Carry arithmetic demo (10 tests including multi-byte carry):
 python3 programs/carry-demo.py
+
+# Exhaustive reversibility test (all opcodes × all head aliasings):
+python3 test_reversibility.py
 
 # Interactive GUI (load immunity-gadgets-v4-loop-w99 for the main example):
 python3 fb2d_server.py
@@ -612,3 +622,10 @@ range check using existing ops. For now, hardcode sweep ranges.
   not nearest-codeword payloads, so error patterns are preserved through
   arithmetic. The initial suspicion that Δp ops broke on corrupted cells
   was wrong.
+- **CL-overlap NOP guards (v1.14)**: R, L, and Y use [CL] as a rotation
+  parameter and write to [H0]. When H0==CL, the write changes the
+  parameter that step_back reads, making the operation irreversible.
+  Guard: R, L, Y are NOP when H0==CL. Discovered via snapshot-based
+  round-trip testing at 262207 steps — the first step where head
+  degradation caused H0 and CL to alias the same cell. Verified with
+  2M-step round-trip (466 noise flips, 1588 cells changed, 0 diffs).

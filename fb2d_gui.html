@@ -116,6 +116,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
   <button id="btnForward" title="Step forward (Right)">&#x25B6;</button>
   <button id="btnForwardFast" title="Step forward batch (Shift+Right)">&#x25B6;&#x25B6;</button>
   <span style="color:#555">|</span>
+  <button id="btnPlayBack" title="Play backwards (Shift+Space)">&#x25C0; Play</button>
   <button id="btnPlay" title="Play/Pause (Space)">&#x25B6; Play</button>
   <label style="color:#aaa; font-size:11px;">Batch:</label>
   <input type="number" id="batchSize" value="1" min="1" max="10000" step="1"
@@ -158,6 +159,10 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
   </div>
   <button id="btnExCleanup" title="Reversible waste cleanup (clean cells EX leaves behind)">&#x267B; Waste</button>
   <span id="exCleanupStats" style="color:#55efc4; font-size:11px; display:none;"></span>
+  <span style="color:#555">|</span>
+  <button id="btnSnapshotSave" title="Download snapshot (deterministic replay)">&#x1F4BE; Snapshot</button>
+  <button id="btnSnapshotLoad" title="Load snapshot from file">&#x1F4C2; Load Snap</button>
+  <input type="file" id="snapshotFileInput" accept=".json,.fb2d.json" style="display:none;">
   <span style="color:#555">|</span>
   <button id="btnHelp" title="Keyboard shortcuts (?)">?</button>
 </div>
@@ -217,7 +222,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
     <div class="section">
       <kbd>&rarr;</kbd> Step forward &nbsp; <kbd>&larr;</kbd> Step back<br>
       <kbd>Shift+&rarr;</kbd> Step batch &nbsp; <kbd>Shift+&larr;</kbd> Back batch<br>
-      <kbd>Space</kbd> Play / Pause<br>
+      <kbd>Space</kbd> Play / Pause &nbsp; <kbd>Shift+Space</kbd> Play backwards<br>
       <kbd>R</kbd> Reset to step 0<br>
       <kbd>N</kbd> Toggle noise injection<br>
       <kbd>G</kbd> Toggle waste cleanup (reversible)
@@ -239,6 +244,11 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
       <b>Edit mode:</b> Click cell to set opcode, drag to select<br>
       <b>Right-click</b> a cell to annotate it<br>
       <b>Shift+drag</b> to select a region for labeling
+    </div>
+    <div class="section" style="color:#888;">
+      <b>Snapshot:</b> Save = download JSON for sharing/later reload.<br>
+      Load = replay from zero-state (full reversibility restored).<br>
+      ~200K steps/sec, so 1M steps replays in ~5s.
     </div>
   </div>
 </div>
@@ -401,6 +411,7 @@ let regionSelecting = false, regionStart = null, regionEnd = null;
 
 // Playback
 let playing = false;
+let playDirection = 1;  // 1 = forward, -1 = reverse
 let playTimer = null;
 let playDelay = 200;
 let playStepsPerTick = 1;
@@ -476,7 +487,7 @@ async function stepForward(n = 1) {
     afterStep();
   } catch (err) {
     console.error('stepForward failed:', err);
-    if (playing) togglePlay();
+    if (playing) stopPlay();
     document.getElementById('stepDisplay').textContent = 'ERROR — reset (R)';
   }
 }
@@ -487,7 +498,7 @@ async function stepBack(n = 1) {
     afterStep();
   } catch (err) {
     console.error('stepBack failed:', err);
-    if (playing) togglePlay();
+    if (playing) stopPlay();
     document.getElementById('stepDisplay').textContent = 'ERROR — reset (R)';
   }
 }
@@ -495,7 +506,7 @@ async function stepBack(n = 1) {
 async function resetToStart() {
   const file = currentFile || (state && state.current_file);
   if (!file) return;
-  if (playing) togglePlay();
+  if (playing) stopPlay();
   state = await api('reset', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -1354,7 +1365,7 @@ function toggleEditMode() {
     btn.innerHTML = '&#x270E; Edit';
     controls.classList.add('visible');
     wrap.classList.add('editMode');
-    if (playing) togglePlay();
+    if (playing) stopPlay();
   } else {
     btn.classList.remove('editActive');
     btn.innerHTML = '&#x270E; Edit';
@@ -1464,6 +1475,58 @@ async function doSave() {
   });
   document.getElementById('selInfo').textContent = 'Saved!';
   setTimeout(() => updateEditButtons(), 1500);
+}
+
+// ── Snapshot save/load ──────────────────────────────────────────
+
+async function doSnapshotSave() {
+  try {
+    const snapshot = await api('snapshot');
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const name = (currentFile || 'untitled').replace('.fb2d', '');
+    a.href = url;
+    a.download = `${name}-step${snapshot.step_all_count}.fb2d.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('Snapshot save failed:', err);
+    alert('Snapshot save failed: ' + err.message);
+  }
+}
+
+async function doSnapshotLoad(file) {
+  try {
+    const text = await file.text();
+    const snapshot = JSON.parse(text);
+    const steps = snapshot.step_all_count || 0;
+    const rate = steps > 0 ? Math.round(steps / 5) : 0;  // ~5s estimated
+    if (steps > 50000) {
+      const est = (steps / 200000).toFixed(1);
+      if (!confirm(`Replay ${steps.toLocaleString()} steps (~${est}s). Continue?`)) return;
+    }
+    if (playing) stopPlay();
+    document.getElementById('stepDisplay').textContent = `Replaying ${steps.toLocaleString()} steps...`;
+    // Use setTimeout to let the UI update before the blocking fetch
+    await new Promise(r => setTimeout(r, 50));
+    state = await api('snapshot', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: text,
+    });
+    currentFile = snapshot.source_file || '';
+    if (currentFile) {
+      document.getElementById('fileSelect').value = currentFile;
+    }
+    afterStep();
+  } catch (err) {
+    console.error('Snapshot load failed:', err);
+    alert('Snapshot load failed: ' + err.message);
+    await refreshState();
+  }
 }
 
 async function setCell(r, c, value) {
@@ -1599,23 +1662,43 @@ function closeOpcodePicker() {
 buildOpcodePicker();
 
 // ── Playback ───────────────────────────────────────────────────
-function togglePlay() {
-  playing = !playing;
-  const btn = document.getElementById('btnPlay');
-  if (playing) {
-    btn.textContent = '\u25A0 Stop';
-    btn.classList.add('active');
-    playTick();
-  } else {
-    btn.textContent = '\u25B6 Play';
-    btn.classList.remove('active');
-    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+function stopPlay() {
+  playing = false;
+  document.getElementById('btnPlay').textContent = '\u25B6 Play';
+  document.getElementById('btnPlay').classList.remove('active');
+  document.getElementById('btnPlayBack').textContent = '\u25C0 Play';
+  document.getElementById('btnPlayBack').classList.remove('active');
+  if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+}
+
+function togglePlay(direction) {
+  // If already playing in same direction, stop. Otherwise start in new direction.
+  if (playing && playDirection === direction) {
+    stopPlay();
+    return;
   }
+  if (playing) stopPlay();  // was playing other direction
+  playing = true;
+  playDirection = direction;
+  if (direction === 1) {
+    document.getElementById('btnPlay').textContent = '\u25A0 Stop';
+    document.getElementById('btnPlay').classList.add('active');
+  } else {
+    document.getElementById('btnPlayBack').textContent = '\u25A0 Stop';
+    document.getElementById('btnPlayBack').classList.add('active');
+  }
+  playTick();
 }
 
 async function playTick() {
   if (!playing) return;
-  await stepForward(playStepsPerTick);
+  if (playDirection === 1) {
+    await stepForward(playStepsPerTick);
+  } else {
+    await stepBack(playStepsPerTick);
+    // Stop if we've reached step 0
+    if (state && state.step_all_count <= 0) { stopPlay(); return; }
+  }
   if (playing) playTimer = setTimeout(playTick, playDelay);
 }
 
@@ -1743,7 +1826,7 @@ function updateGpCleanupStats(st) {
 // ── Button handlers ────────────────────────────────────────────
 document.getElementById('fileSelect').addEventListener('change', (e) => {
   if (e.target.value) {
-    if (playing) togglePlay();
+    if (playing) stopPlay();
     loadFile(e.target.value);
   }
 });
@@ -1800,7 +1883,8 @@ document.getElementById('btnForward').addEventListener('click', () => stepForwar
 document.getElementById('btnBack').addEventListener('click', () => stepBack(1));
 document.getElementById('btnForwardFast').addEventListener('click', () => stepForward(playStepsPerTick));
 document.getElementById('btnBackFast').addEventListener('click', () => stepBack(playStepsPerTick));
-document.getElementById('btnPlay').addEventListener('click', togglePlay);
+document.getElementById('btnPlayBack').addEventListener('click', () => togglePlay(-1));
+document.getElementById('btnPlay').addEventListener('click', () => togglePlay(1));
 document.getElementById('speedSlider').addEventListener('input', updateSpeed);
 document.getElementById('batchSize').addEventListener('change', updateBatch);
 
@@ -1821,6 +1905,16 @@ document.getElementById('noiseType').addEventListener('change', () => { if (nois
 document.getElementById('noiseSeed').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
 
 document.getElementById('btnExCleanup').addEventListener('click', toggleExCleanup);
+
+document.getElementById('btnSnapshotSave').addEventListener('click', doSnapshotSave);
+document.getElementById('btnSnapshotLoad').addEventListener('click', () => {
+  document.getElementById('snapshotFileInput').click();
+});
+document.getElementById('snapshotFileInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) doSnapshotLoad(file);
+  e.target.value = '';  // allow re-selecting same file
+});
 
 document.getElementById('btnHelp').addEventListener('click', () => {
   document.getElementById('helpOverlay').classList.toggle('visible');
@@ -1858,7 +1952,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowLeft' && e.shiftKey) { stepBack(playStepsPerTick); e.preventDefault(); }
   else if (e.key === 'ArrowRight') { stepForward(1); e.preventDefault(); }
   else if (e.key === 'ArrowLeft') { stepBack(1); e.preventDefault(); }
-  else if (e.key === ' ') { togglePlay(); e.preventDefault(); }
+  else if (e.key === ' ') { togglePlay(e.shiftKey ? -1 : 1); e.preventDefault(); }
   else if ((e.key === 'f' || e.key === 'F') && !mod) { zoomFit(); }
   else if (e.key === '=' || e.key === '+') { zoomAt(canvas.width/2, canvas.height/2, 1.3); }
   else if (e.key === '-') { zoomAt(canvas.width/2, canvas.height/2, 1/1.3); }

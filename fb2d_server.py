@@ -552,6 +552,122 @@ def set_gp_cleanup():
     return set_waste_cleanup()
 
 
+# ── Snapshot routes ───────────────────────────────────────────────
+#
+# A snapshot captures the zero-state (source .fb2d file contents, pool
+# config) plus the step count. Loading a snapshot replays deterministically
+# from step 0, rebuilding full pool history so reversibility works.
+
+
+@app.route('/api/snapshot', methods=['GET'])
+def download_snapshot():
+    """Download a JSON snapshot of the current run.
+
+    Contains everything needed for deterministic replay: the initial
+    .fb2d file contents (grid + IPs at step 0), pool configuration,
+    and the step count to replay to. On load, the server replays
+    forward from step 0 to reconstruct full reversibility state.
+    """
+    # Read the source .fb2d file contents
+    source_contents = None
+    if current_file:
+        path = os.path.join(PROGRAMS_DIR, current_file)
+        if os.path.isfile(path):
+            with open(path, 'r') as f:
+                source_contents = f.read()
+
+    snapshot = {
+        'version': 1,
+        'source_file': current_file,
+        'source_contents': source_contents,
+        'step_all_count': _step_all_count,
+        'noise': {
+            'enabled': noise_enabled,
+            'seed': noise_pool._seed,
+            'flips_per_1M': noise_pool.flips_per_1M,
+            'type': noise_pool.noise_type,
+            # Geometry params that affect RNG event generation
+            'n_code_rows': noise_pool.n_code_rows,
+            'grid_cols': noise_pool.grid_cols,
+            'col_min': noise_pool.col_min,
+            'col_max': noise_pool.col_max,
+        },
+        'waste_cleanup_enabled': waste_cleanup_enabled,
+        # Current state for quick inspection (not used for replay)
+        'current_state': serialize_state(),
+    }
+    return jsonify(snapshot)
+
+
+@app.route('/api/snapshot', methods=['POST'])
+def load_snapshot():
+    """Load a snapshot by replaying from zero-state.
+
+    Accepts a JSON snapshot, writes the source .fb2d to a temp file
+    if needed, loads it, configures pools, then replays forward to
+    the target step count. Returns the final state.
+    """
+    global current_file, _step_all_count, noise_enabled, waste_cleanup_enabled
+
+    data = request.get_json(force=True)
+    version = data.get('version', 1)
+    target_steps = int(data.get('step_all_count', 0))
+    source_file = data.get('source_file', '')
+    source_contents = data.get('source_contents', None)
+    noise_cfg = data.get('noise', {})
+    waste_enabled = data.get('waste_cleanup_enabled', False)
+
+    # Step 1: Load the zero-state grid
+    import tempfile
+    if source_contents:
+        # Write source to a temp file and load it
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.fb2d',
+                                         delete=False) as tmp:
+            tmp.write(source_contents)
+            tmp_path = tmp.name
+        try:
+            sim.load_state(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+    elif source_file:
+        path = os.path.join(PROGRAMS_DIR, source_file)
+        if not os.path.isfile(path):
+            abort(404, f'Source file not found: {source_file}')
+        sim.load_state(path)
+    else:
+        abort(400, 'Snapshot must contain source_contents or source_file')
+
+    current_file = source_file
+    _step_all_count = 0
+
+    # Step 2: Configure pools with exact geometry from snapshot
+    # n_code_rows and col range must match the original run exactly,
+    # because they determine the RNG output in _generate_up_to().
+    noise_pool.reset(seed=int(noise_cfg.get('seed', 42)))
+    noise_pool.configure(
+        flips_per_1M=float(noise_cfg.get('flips_per_1M', 0)),
+        noise_type=noise_cfg.get('type', 'any'),
+        n_code_rows=int(noise_cfg.get('n_code_rows', len(_get_code_rows()))),
+        grid_cols=int(noise_cfg.get('grid_cols', sim.cols)),
+        col_min=int(noise_cfg.get('col_min', 1)),
+        col_max=int(noise_cfg.get('col_max', max(1, sim.cols - 2))),
+    )
+    noise_enabled = bool(noise_cfg.get('enabled', False))
+
+    waste_pool.reset()
+    _waste_cleanup_log.clear()
+    waste_cleanup_enabled = bool(waste_enabled)
+
+    # Step 3: Replay forward to target step
+    for _ in range(target_steps):
+        _step_all_forward()
+
+    print(f'[snapshot] loaded: {source_file}, replayed {target_steps} steps '
+          f'(noise={noise_enabled}, waste={waste_cleanup_enabled})')
+
+    return jsonify(serialize_state())
+
+
 if __name__ == '__main__':
     print(f'fb2d GUI server — programs dir: {PROGRAMS_DIR}')
     print(f'Open http://localhost:5001')

@@ -71,6 +71,9 @@ python3 programs/carry-demo.py
 
 # Reversible pool tests (waste cleanup + noise injection)
 python3 test_pools.py
+
+# Exhaustive reversibility proof (all opcodes × all head aliasings)
+python3 test_reversibility.py
 ```
 
 ### CLI REPL
@@ -164,6 +167,10 @@ protect them:
 - **Head-overlap guards**: when two heads alias the same cell, some
   operations become non-bijective (e.g., XOR of a cell with itself
   always gives zero). These ops are NOP when heads alias.
+- **CL-overlap guards** (v1.14): ops that write [H0] using [CL] as a
+  parameter (R, L, Y — rotation amount comes from [CL]) are NOP when
+  H0 == CL. Otherwise the write changes the parameter that step_back
+  would read, producing a different rotation amount on undo.
 - **IP-cell write guard** (v1.13): if a data op would write to the grid
   cell the IP is sitting on, it's NOP. Otherwise it would change the
   opcode that step_back later reads, causing it to undo the wrong thing.
@@ -256,6 +263,7 @@ fb2d_gui.html                    Browser-based GUI simulator
 ifbc.py                          ifb-to-fb2d compiler
 pools.py                         Reversible waste pool + noise pool
 test_pools.py                    Pool tests (waste, noise, integration)
+test_reversibility.py            Exhaustive opcode reversibility proof
 programs/                        Example programs and demos
   immunity-gadgets-v4-loop.py        Rewind-loop dual gadgets + tests (★ MWE)
   immunity-gadgets-v4-loop-w99.fb2d  Loadable state file for v4 demo
@@ -272,7 +280,7 @@ programs/                        Example programs and demos
   factorial.ifb / factorial.fb2d     Factorial (compiled from ifb)
   fibonacci.ifb / fibonacci.fb2d     Fibonacci (compiled from ifb)
 docs/                            Design documents
-  isa.md                         ISA reference (62 opcodes, v1.13)
+  isa.md                         ISA reference (62 opcodes, v1.14)
   barrel-shifter-correction.md   Barrel-shifter correction algorithm walkthrough
   tc_proof_sketch.md             Turing completeness proof sketch
   nested-loops-notes.md          Nested loop implementation notes
@@ -281,13 +289,18 @@ CLAUDE.md                        Detailed project context for AI assistants
 
 ## Status
 
-This is active research software. The language design is at v1.13
+This is active research software. The language design is at v1.14
 (62 opcodes + NOP). Recent milestones:
 
+- **CL-overlap NOP guards** (v1.14): R, L, and Y use [CL] as a rotation
+  parameter and write to [H0]. When H0==CL, the write changes the
+  parameter step_back would read. Now NOP-guarded. Discovered via
+  round-trip testing at ~262K steps — the first point where noise
+  degradation caused H0 and CL to alias. Verified with 2M-step
+  round-trip (466 noise flips, 0 diffs).
 - **Reversibility NOP guards** (v1.13): IP-cell write guard and G value
-  guard close the remaining reversibility holes. Data ops that would
-  write to the IP's instruction cell are NOP; G is NOP when the cell
-  value exceeds grid size. Confirmed that payload arithmetic was already
+  guard. Data ops that would write to the IP's instruction cell are NOP;
+  G is NOP when the cell value exceeds grid size. Payload arithmetic is
   bijective on all 65536 cell values (corrupted or not).
 - **Rewind-loop sweep** (v4): the main MWE. Replaces ping-pong with
   top-down rewind loop for uniform sweep frequency. Every scan row
