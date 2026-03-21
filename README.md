@@ -43,7 +43,7 @@ pip install flask          # one-time setup
 python3 fb2d_server.py     # starts on http://localhost:5001
 ```
 
-1. Load **immunity-gadgets-v3-bypass-w99** from the dropdown
+1. Load **immunity-gadgets-v4-loop-w99** from the dropdown
 2. Enable waste cleanup (click the "Waste" button or press `W`)
 3. Enable noise — press `N`, set rate to ~50 flips/1M rounds, seed 42
 4. Press Space to play
@@ -51,13 +51,17 @@ python3 fb2d_server.py     # starts on http://localhost:5001
 Watch: IP0 (red) corrects gadget B's code via IX (blue), IP1 (orange)
 corrects gadget A simultaneously. Clean cells (NOP filler `o`) take the
 bypass shortcut. Dirty cells (yellow = 1-bit error) get full Hamming
-correction. Green cells on the waste row show consumed zeros.
+correction. Boundary rows (`~` = 0xFFFF) mark the IX scan boundaries.
+Green cells on the waste row show consumed zeros.
 
 ### Tests
 
 ```bash
-# Immunity gadgets v3 — probe-bypass dual correction (★ start here)
-python3 programs/immunity-gadgets-v3-bypass.py
+# Immunity gadgets v4 — rewind-loop dual correction (★ start here)
+python3 programs/immunity-gadgets-v4-loop.py
+
+# Sweep strategy comparison — ping-pong vs rewind loop
+python3 programs/sweep-model.py
 
 # Compiler tests (16 tests: factorial, nested loops, stream I/O, reversal)
 python3 ifbc.py --test-all
@@ -75,7 +79,7 @@ python3 test_pools.py
 python3 fb2d.py
 
 # Inside the simulator:
-#   load immunity-gadgets-v3-bypass-w99   — load the main demo
+#   load immunity-gadgets-v4-loop-w99      — load the main demo
 #   run 1000    — run 1000 steps forward
 #   back 1000   — run 1000 steps backward (perfectly reversed)
 #   show        — display the grid
@@ -99,7 +103,7 @@ change each IP's direction. Each IP has five independent heads:
 Code and data share the same surface (von Neumann architecture). The
 ISA has 62 opcodes (byte-level arithmetic, bit-level operations, head
 movement, mirrors, EX operations, IX scan ops, and IX momentum ops
-for serpentine scanning with vertical ping-pong). See
+for serpentine scanning with top-down rewind loop). See
 [`docs/isa.md`](docs/isa.md) for the full ISA reference.
 
 ### 16-Bit Cells
@@ -253,8 +257,11 @@ ifbc.py                          ifb-to-fb2d compiler
 pools.py                         Reversible waste pool + noise pool
 test_pools.py                    Pool tests (waste, noise, integration)
 programs/                        Example programs and demos
-  immunity-gadgets-v3-bypass.py      Probe-bypass dual gadgets + tests (★ MWE)
-  immunity-gadgets-v3-bypass-w99.fb2d  Loadable state file for v3 demo
+  immunity-gadgets-v4-loop.py        Rewind-loop dual gadgets + tests (★ MWE)
+  immunity-gadgets-v4-loop-w99.fb2d  Loadable state file for v4 demo
+  sweep-model.py                     Ping-pong vs rewind-loop comparison model
+  immunity-gadgets-v3-bypass.py      Probe-bypass dual gadgets (ping-pong, prev.)
+  immunity-gadgets-v3-bypass-w99.fb2d  Loadable state file for v3
   immunity-gadgets-v2-serpentine.py   Serpentine dual gadgets with IX momentum
   immunity-gadgets-v2-serpentine-w99.fb2d
   immunity-gadget-v1.py              Original mutual correction demo
@@ -282,17 +289,24 @@ This is active research software. The language design is at v1.13
   write to the IP's instruction cell are NOP; G is NOP when the cell
   value exceeds grid size. Confirmed that payload arithmetic was already
   bijective on all 65536 cell values (corrupted or not).
-- **Probe-bypass fast-path correction**: the main MWE. Dual
-  self-correcting gadgets where clean cells skip the full barrel-shifter
-  via a parity probe + EX-conditional branch. Per-gadget layout:
-  blank → bypass → handler → code rows → blank → stomach → waste.
-  NOP filler uses payload 1017 (2-bit data-error safe).
+- **Rewind-loop sweep** (v4): the main MWE. Replaces ping-pong with
+  top-down rewind loop for uniform sweep frequency. Every scan row
+  is corrected every S sweeps (no 2× boundary exposure). 16-op rewind
+  handler with `&` re-entry gate. Quantitative analysis shows 33%
+  shorter worst-case gap and ~14% longer MTTF vs ping-pong.
+  See `programs/sweep-model.py`.
+- **Probe-bypass fast-path correction**: dual self-correcting gadgets
+  where clean cells skip the full barrel-shifter via a parity probe +
+  EX-conditional branch. Per-gadget layout (R+7 rows):
+  boundary → bypass → return → handler → code rows → boundary → stomach → waste.
+  Boundary rows use 0xFFFF (shown as `~`). NOP filler uses payload 1017
+  (2-bit data-error safe).
 - **Reversible waste cleanup**: WastePool provides virtual infinite
   clean zeros via LIFO swap. Fully reversible — step_back restores
   dirty values from the pool.
 - **IX momentum scanning** (v1.10-v1.12): horizontal (`A`/`B`/`U`) and
-  vertical (`C`/`D`/`O`) momentum ops enable serpentine ping-pong
-  scanning without hardcoded movement.
+  vertical (`C`/`D`/`O`) momentum ops enable serpentine scanning with
+  top-down rewind loop.
 - **d_min=4 opcode encoding**: [11,6,4] linear code maps all 62 opcodes
   to payloads with minimum Hamming distance 4. Single data-bit errors
   execute the *correct* opcode — not NOP, not a wrong opcode.
@@ -301,7 +315,7 @@ This is active research software. The language design is at v1.13
 
 Next steps: cross-gadget consultation for double-bit errors, reversible
 fuel/compression (replacing the EX cleanup cheat), adaptive sweep
-boundaries via IX probe.
+boundaries via IX + 0xFFFF boundary cell probe.
 
 ## License
 
