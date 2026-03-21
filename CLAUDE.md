@@ -49,9 +49,17 @@ fb2d is a 2D reversible esoteric language where:
   with dirty working-area cells). NoisePool provides deterministic,
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
-- **`programs/probe-bypass-demo.py`** — Probe-bypass dual-gadget builder
-  and test suite. Builds `probe-bypass-w99.fb2d` (the main working example).
-  Run tests: `python3 programs/probe-bypass-demo.py`
+- **`programs/immunity-gadgets-v4-loop.py`** — Rewind-loop dual-gadget
+  builder and test suite (★ current MWE). Builds
+  `immunity-gadgets-v4-loop-w99.fb2d`. R+7 layout with uniform top-down
+  sweep. Run tests: `python3 programs/immunity-gadgets-v4-loop.py`
+- **`programs/immunity-gadgets-v3-bypass.py`** — Previous probe-bypass
+  dual-gadget builder (ping-pong sweep). Superseded by v4 but kept for
+  reference and comparison.
+- **`programs/sweep-model.py`** — Analytical + Monte Carlo comparison of
+  ping-pong vs rewind-loop sweep strategies. Computes worst-case gaps,
+  MTTF, crossover points, gadget-size sensitivity.
+  Run: `python3 programs/sweep-model.py`
 - **`programs/`** — Example .fb2d state files and .ifb source files.
   `load`/`save` in fb2d.py defaults to this directory.
 
@@ -72,21 +80,23 @@ fb2d is a 2D reversible esoteric language where:
 
 ## Minimal Working Example
 
-**`programs/probe-bypass-w99.fb2d`** — Two mutually-correcting Hamming(16,11)
-gadgets on a 20×99 grid with probe-bypass parity skip. Load in the GUI:
+**`programs/immunity-gadgets-v4-loop-w99.fb2d`** — Two mutually-correcting
+Hamming(16,11) gadgets on a 22×99 grid with probe-bypass parity skip and
+top-down rewind loop for uniform sweep frequency. Load in the GUI:
 
 ```bash
 python3 fb2d_server.py
-# Open http://localhost:8000, load probe-bypass-w99
+# Open http://localhost:5001, load immunity-gadgets-v4-loop-w99
 # Enable noise (seed 42, 50 flips/1M), watch corrections in real-time
 ```
 
-Each gadget's IX scans the other's code+handler+bypass rows. Clean cells
-(~95%) take a 28-op bypass; dirty cells get full 358-op Hamming correction.
-Waste cleanup is auto-enabled. NOP filler (payload 1017, shown as `o` in
-GUI) is 2-bit-error safe — the 64th codeword of the [11,6,4] opcode code.
+Each gadget's IX scans the other's code+handler+return+bypass rows.
+Clean cells (~95%) take a 28-op bypass; dirty cells get full 358-op
+Hamming correction. Boundary rows use 0xFFFF (shown as `~`). NOP filler
+(payload 1017, shown as `o` in GUI) is 2-bit-error safe — the 64th
+codeword of the [11,6,4] opcode code. Waste cleanup is auto-enabled.
 
-Build and test: `python3 programs/probe-bypass-demo.py`
+Build and test: `python3 programs/immunity-gadgets-v4-loop.py`
 
 ## ISA Summary (v1.12, 62 opcodes + NOP)
 
@@ -181,12 +191,13 @@ test), retreats (`B`), advances vertically (`C`), flips direction (`U`).
 | `D` | 61 | Retreat IX opposite `ix_vdir` — inverse: `C` |
 | `O` | 62 | Flip `ix_vdir` via XOR 2 (N↔S, E↔W) — self-inverse |
 
-Per-IP field `ix_vdir` (defaults to `DIR_S`). Enables ping-pong
-bounded scanning: after horizontal boundary, `C` advances IX vertically.
-A vertical boundary test (`m T ? T m` on code row) detects when IX
-leaves the code+handler area. If boundary: `D O C` (retreat, flip, re-
-advance) bounces IX back. IX ping-pongs between first code row and
-handler row without ever entering stomach/waste rows.
+Per-IP field `ix_vdir` (defaults to `DIR_S`). Used for vertical IX
+movement in both sweep strategies. In v3 ping-pong: `C` advances IX
+after horizontal boundary, `D O C` bounces at vertical boundaries.
+In v4 rewind loop: `C` advances IX south from top boundary back into
+the scan area after the rewind completes; `D` retreats IX during the
+upward rewind loop. Boundary detection uses 0xFFFF cells (shown as
+`~`), tested via `m T : ? ; T m` (`:` wraps payload 2047→0).
 
 ### Reversibility Pairs
 - `+` / `-` are inverses
@@ -300,8 +311,14 @@ output x            // write to EX trail, zero var
 ## Running Tests
 
 ```bash
-# Probe-bypass dual-gadget tests (layout, cycle length, no-error, single-error):
-python3 programs/probe-bypass-demo.py
+# Rewind-loop dual-gadget tests (★ main MWE — layout, cycle, correction):
+python3 programs/immunity-gadgets-v4-loop.py
+
+# Sweep strategy comparison (analytical + Monte Carlo):
+python3 programs/sweep-model.py
+
+# Previous probe-bypass tests (ping-pong sweep, for comparison):
+python3 programs/immunity-gadgets-v3-bypass.py
 
 # Compiler tests (11 tests including factorial, nested loops, stream I/O):
 python3 ifbc.py --test-all
@@ -312,7 +329,7 @@ python3 test_pools.py
 # Carry arithmetic demo (10 tests including multi-byte carry):
 python3 programs/carry-demo.py
 
-# Interactive GUI (load probe-bypass-w99 for the main example):
+# Interactive GUI (load immunity-gadgets-v4-loop-w99 for the main example):
 python3 fb2d_server.py
 ```
 
@@ -321,22 +338,54 @@ python3 fb2d_server.py
 The long-term goal: an agent on the torus that resists its own degradation
 by noise. The architecture has several layers:
 
-### Grid Layout (Probe-Bypass, per gadget)
+### Grid Layout (v4 Rewind Loop, per gadget, R+7 rows)
 
 ```
-Row 0:        BLANK (zeros — top IX boundary, future -1 border cells)
+Row 0:        BOUNDARY ROW (0xFFFF cells, shown as ~ in GUI/REPL)
 Row 1:        BYPASS ROW (NOP filler, bypass ops going West)
-Row 2:        HANDLER ROW (NOP filler, boundary handlers going East)
-Rows 3..R+2:  CODE ROWS (boustrophedon, correction gadget)
-Row R+3:      BLANK (zeros — bottom IX boundary, future -1 border cells)
-Row R+4:      STOMACH (working area: 9 fixed cells for H0, H1, CL)
-Row R+5:      WASTE ROW (EX roams East, eats zeros, deposits waste)
+Row 2:        RETURN ROW (NOP filler, rewind loop return path)
+Row 3:        HANDLER ROW (NOP filler, boundary handlers going East)
+Rows 4..R+3:  CODE ROWS (boustrophedon, correction gadget)
+Row R+4:      BOUNDARY ROW (0xFFFF cells, shown as ~)
+Row R+5:      STOMACH (working area: 9 fixed cells for H0, H1, CL)
+Row R+6:      WASTE ROW (EX roams East, eats zeros, deposits waste)
 ```
 
 Two gadgets (A and B) stacked vertically. Each IP runs its own gadget's
-code; each IP's IX scans the other gadget's bypass+handler+code rows.
+code; each IP's IX scans the other gadget's bypass+return+handler+code
+rows (R+3 scan rows). Boundary rows are 0xFFFF (payload 2047), shown
+as `~` in the GUI — not a valid opcode, testable via `m T : ? ; T m`
+(`:` wraps payload 2047→0, `?` fires on zero payload).
+
 The agent corrects single-bit errors via Hamming(16,11) SECDED.
 Each correction consumes ~2 clean waste cells (PA, signal).
+
+### Sweep Strategies: Rewind Loop vs Ping-Pong
+
+Two vertical sweep strategies have been implemented and compared:
+
+**v3 Ping-pong** (`/ D O ; X \` handler, R+6 layout): IX bounces
+between top and bottom, reversing direction at each boundary. Simple
+(6-op handler) but creates non-uniform coverage: boundary rows wait
+up to (2S−1) sweeps between corrections while interior rows wait ≤S.
+
+**v4 Rewind loop** (`/ D & B D A m T : % ; T m C ; \` handler, R+7
+layout): on hitting the bottom boundary, IX loops back to the top
+row-by-row, then resumes downward. Uniform coverage: every row visited
+every S sweeps. Costs 13 extra ops and one additional row (return row).
+
+Quantitative comparison (`programs/sweep-model.py`):
+- Worst-case gap: v3 = 160K steps (2S−1=11 sweeps), v4 = 120K steps
+  (S=7 sweeps). v4 is 33% better on worst case.
+- MTTF (mean time to first uncorrectable error): v4 is ~14% longer,
+  robust across all noise rates (1e-9 to 1e-6) and grid widths.
+- The rewind overhead (86 steps) is <0.1% of cycle time.
+- Crossover: v4 wins up to +105 extra ops; current overhead is +13.
+- The advantage approaches 2× for deeper gadgets (more code rows).
+
+The rewind loop is strictly better for resilience. The `&` re-entry
+gate uses the `;` signal convention: first entry has [CL]=0 (& is NOP,
+transparent), return row sets [CL]≠0 via `;` so `&` fires on re-entry.
 
 ### Fuel → Zeros → Corrections
 
@@ -416,11 +465,13 @@ range check using existing ops. For now, hardcode sweep ranges.
    Interleaved round-robin: `step_all()` steps each IP in order.
    Per-IP state: ip_row, ip_col, ip_dir, h0, h1, ix, cl, ex.
    Grid is shared. REPL: `ip`, `addip`, `rmip` commands.
-5b. ~~IX vertical momentum (C/D/O) for ping-pong bounded scanning.~~ ✓
-    IX ping-pongs between bypass row and last code row (inclusive).
-    Blank (zero) rows above bypass and below code serve as boundaries.
-    Vertical boundary test (m T ? T m on code row) + bounce handler
-    (/ D O ; X \) on handler row. Uses ; (not :) for & merge visibility.
+5b. ~~IX vertical momentum (C/D/O) for bounded scanning.~~ ✓
+    Originally ping-pong (`/ D O ; X \`), now upgraded to top-down
+    rewind loop (`/ D & B D A m T : % ; T m C ; \`) in v4. Uniform
+    sweep frequency — every row visited every S sweeps, no 2× edge
+    exposure. 0xFFFF boundary rows (shown as `~`) replace blank rows.
+    Boundary test: `m T : ? ; T m` (`:` wraps payload 2047→0).
+    See `programs/sweep-model.py` for quantitative comparison.
 6. ~~Simulated noise: verify mutual correction under random bit flips.~~ ✓
    Deterministic noise via NoisePool (seed-based, rate in flips/1M rounds).
    d_min=4 opcode encoding ensures single data-bit flips → NOP (not wrong
@@ -452,19 +503,26 @@ range check using existing ops. For now, hardcode sweep ranges.
    (syndrome=0), XOR it in as the correction. Natural extension toward
    replication — consult all cells = spawn a replica.
 9. ~~Probe-bypass parity skip for clean-cell fast path.~~ ✓
-   `programs/probe-bypass-demo.py`. Checks overall parity before full
-   correction. Clean cells (syndrome=0) branch to a 28-op bypass row;
-   dirty cells get full 358-op Hamming correction. 65% step savings.
-   Layout per gadget (R+6 rows): blank/bypass/handler/code×R/blank/
-   stomach/waste.  Key discoveries:
+   Checks overall parity before full correction. Clean cells (syndrome=0)
+   branch to a 28-op bypass row; dirty cells get full 358-op Hamming
+   correction. 57% step savings (v4). Key discoveries:
    (a) `;` not `:` for signaling — `:` (0→1) invisible to DATA_MASK
    since bit 0 is a parity position. `;` (0→0xFFFF) sets all bits.
    (b) Bypass must undo Phase A+B's 15 `:` increments (15 `;` ops).
-   (c) Bounce handler `/ D O ; X \` — no C (avoids double vertical move).
-   (d) NOP filler payload 1017: 64th codeword of [11,6,4] code, both
+   (c) NOP filler payload 1017: 64th codeword of [11,6,4] code, both
    1-bit and 2-bit data-error safe (all decode to NOP). Payload 15 was
    unsafe (8/11 single-bit flips → real opcodes N/n/e/w).
-   (e) `z` swaps bit0 of [H0] with [H1], not [EX] (ISA doc corrected).
+   (d) `z` swaps bit0 of [H0] with [H1], not [EX] (ISA doc corrected).
+9b. ~~Top-down rewind loop for uniform sweep frequency.~~ ✓
+   `programs/immunity-gadgets-v4-loop.py`. Replaces v3's ping-pong
+   bounce with a rewind loop: on hitting bottom boundary, IX loops
+   row-by-row back to top, then resumes downward. R+7 layout adds
+   return row. 16-op handler: `/ D & B D A m T : % ; T m C ; \`.
+   `&` re-entry gate: first entry CL=0 (NOP), return row sets CL≠0
+   via `;` so `&` fires on subsequent iterations. `C` at end advances
+   IX from top boundary back into scan area.
+   Effectiveness: 33% better worst-case gap, ~14% longer MTTF,
+   robust across all noise rates and grid widths. See sweep-model.py.
 10. **[NEXT]** Compression: XOR-of-identical-pairs to replace infinite-
    zero reservoir with finite fuel. Two identical cells XOR to zero
    (fuel for EX). Reversible: the non-zero residual is waste.
@@ -472,10 +530,11 @@ range check using existing ops. For now, hardcode sweep ranges.
     string determines when to swap two random bits on the grid.
     Deterministic at micro-level (reversible), stochastic-looking at
     macro-level. Same mechanism could serve as reversible waste sink.
-12. Non-zero boundary cells: payload 2047 (0xFFFF) as boundary marker.
-    Not a valid opcode (NOP). Testable with `+ ? -` (3 ops). Enables
-    agents in non-zero soup where zero ≠ empty. Replaces zero-testing
-    for adaptive boundary detection.
+12. ~~Non-zero boundary cells: 0xFFFF as boundary marker.~~ ✓
+    Payload 2047 (0xFFFF), shown as `~` in GUI/REPL. Not a valid opcode
+    (decodes to NOP). Testable with `m T : ? ; T m` (`:` wraps payload
+    2047→0, `?` fires on zero). Used in v4 rewind loop for IX boundary
+    detection. Enables agents in non-zero soup where zero ≠ empty.
 13. Adaptive sweep boundaries via IX + boundary cell probe.
 14. Non-zero background: agents metabolize compressible data for energy.
 
@@ -523,15 +582,26 @@ range check using existing ops. For now, hardcode sweep ranges.
   The bypass must undo all CL increments from Phase A+B (15 `;` ops)
   plus one more `;` for merge-gate signaling. The "stomach" (working
   area) has 9 fixed cells; GP ("the mouth") roams the waste row.
-- **Blank boundary rows**: zero-filled rows above bypass and below code
-  serve as H2 vertical boundaries. Future: -1 border cells (payload
-  2047) for adaptive boundary detection in non-zero environments.
+- **0xFFFF boundary rows** (replacing blank rows): boundary rows use
+  0xFFFF (payload 2047, shown as `~`). Tested via `m T : ? ; T m` —
+  `:` wraps payload 2047→0, `?` fires on zero. Works in non-zero
+  environments where zero cells are not reliably empty. Previous design
+  used blank (zero) rows, which was fragile on non-zero backgrounds.
 - **GP → EX, H2 → IX rename**: GP (garbage pointer) renamed to EX
   (exteroceptor) — the external-facing head that roams the environment.
   H2 (scan head) renamed to IX (interoceptor) — the internal-facing
   head that scans for and corrects errors. Both are two-character names
   matching H0, H1, CL convention. The biological metaphor: perception
   (EX) vs interoception (IX). Opcode chars unchanged.
+- **Rewind loop vs ping-pong (v4)**: top-down rewind loop replaces
+  ping-pong vertical bounce. Ping-pong's worst-case gap scales as
+  (2S−1) sweeps (boundary rows wait nearly twice as long as interior).
+  Rewind loop: every row has gap = S sweeps (uniform). Cost: 13 extra
+  ops (373 vs 360), 1 extra scan row (return row), 28 more clean-path
+  steps. Benefit: 33% shorter worst-case gap → ~14% longer MTTF.
+  The `&` re-entry gate solved the first-vs-subsequent iteration
+  problem: first entry has CL=0 so `&` is NOP; return row sets CL≠0.
+  Crossover at +105 extra ops — well above current +13.
 - **NOP guards for reversibility (v1.13)**: two new guard classes added.
   (1) IP-cell write guard: data ops that write to the IP's own
   instruction cell are NOP, preventing step_back from reading a modified
