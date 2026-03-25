@@ -172,11 +172,11 @@
   </style>
 </head>
 <body>
-<h1 id="fb2d-instruction-set-architecture-v1.10">fb2d Instruction Set
-Architecture (v1.10)</h1>
-<p>59 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
+<h1 id="fb2d-instruction-set-architecture-v1.14">fb2d Instruction Set
+Architecture (v1.14)</h1>
+<p>62 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
 <code>payload(cell)</code> (the 11 data bits of the Hamming(16,11)
-codeword) as the opcode. Payloads corresponding to opcodes 1-56 (or
+codeword) as the opcode. Payloads corresponding to opcodes 1-62 (or
 within Hamming distance 1 of such a payload) execute that opcode;
 everything else is NOP.</p>
 <h2 id="cell-format">Cell Format</h2>
@@ -293,8 +293,10 @@ X</li>
 </table>
 <p>Mirror geometry:</p>
 <ul>
-<li><code>/</code> maps E↔︎N, S↔︎W</li>
-<li><code>\</code> maps E↔︎S, N↔︎W</li>
+<li><code>/</code> maps E<span class="math inline">↔︎</span>N, S<span
+class="math inline">↔︎</span>W</li>
+<li><code>\</code> maps E<span class="math inline">↔︎</span>S, N<span
+class="math inline">↔︎</span>W</li>
 </ul>
 <p>Conditional mirrors test whether any data bit in [CL] is set
 (<code>[CL] &amp; DATA_MASK</code>). Parity bits are ignored.</p>
@@ -581,7 +583,7 @@ positions, suitable for 16-bit cells)</li>
 <li><strong><code>z</code></strong> swaps raw bit 0 of [H0] with raw bit
 0 of [EX] — used to extract single syndrome/parity bits</li>
 </ul>
-<h2 id="gp-garbage-pointer-ops-8-opcodes">GP (Garbage Pointer) Ops (8
+<h2 id="ex-exteroceptor-ops-8-opcodes">EX (Exteroceptor) Ops (8
 opcodes)</h2>
 <table>
 <colgroup>
@@ -664,7 +666,8 @@ toward <code>(</code>.</li>
 <p>On re-entry, <code>(</code> sees nonzero [EX] and reflects (exits).
 The reverse path uses <code>Q</code> to erase the breadcrumb, restoring
 [EX] to 0.</p>
-<h2 id="h2-scan-head-ops-4-opcodes">H2 Interoceptor Ops (4 opcodes)</h2>
+<h2 id="ix-interoceptor-ops-4-opcodes">IX Interoceptor Ops (4
+opcodes)</h2>
 <p>IX is a programmable interoceptor for cross-gadget correction. In the
 dual-gadget architecture, each gadget’s IX points at the other gadget’s
 code cells. The copy-down pattern: <code>m</code> copies a remote
@@ -730,13 +733,20 @@ payload, since the remote cell is still the original value)</li>
 with [IX] to test a remote cell’s value with conditional mirrors
 (<code>?</code>/<code>%</code>), then <code>V</code> again to
 restore.</p>
-<h2 id="h2-momentum-ops-3-opcodes">H2 Momentum Ops (3 opcodes)</h2>
-<p>IX momentum ops give IX a persistent direction (<code>ix_dir</code>,
-per-IP, defaults to East). This enables serpentine scanning: IX sweeps
-east across a row, detects a boundary via <code>V</code>, then retreats,
-moves south, flips direction, and sweeps west — systematic row-by-row
-coverage without coprimality constraints.</p>
+<h2 id="ix-horizontal-momentum-ops-3-opcodes">IX Horizontal Momentum Ops
+(3 opcodes)</h2>
+<p>IX momentum ops give IX a persistent horizontal direction
+(<code>ix_dir</code>, per-IP, defaults to East). This enables serpentine
+scanning: IX sweeps east across a row, detects a boundary, then
+retreats, moves vertically, flips direction, and sweeps west —
+systematic row-by-row coverage without coprimality constraints.</p>
 <table>
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 25%" />
+<col style="width: 37%" />
+<col style="width: 25%" />
+</colgroup>
 <thead>
 <tr>
 <th>Op</th>
@@ -761,21 +771,81 @@ coverage without coprimality constraints.</p>
 <tr>
 <td><code>U</code></td>
 <td>59</td>
-<td>Flip <code>ix_dir</code> via XOR 2 (E↔︎W, N↔︎S)</td>
+<td>Flip <code>ix_dir</code> via XOR 2 (E<span
+class="math inline">↔︎</span>W, N<span
+class="math inline">↔︎</span>S)</td>
 <td>self</td>
 </tr>
 </tbody>
 </table>
-<p>The serpentine boundary detection pattern:</p>
+<p>The horizontal boundary detection pattern (local-only, no remote
+write):</p>
 <ol type="1">
 <li><code>A</code> — advance IX in current direction</li>
-<li><code>V</code> — swap [CL]↔︎[IX] to test the new cell</li>
+<li><code>m</code> — copy [IX] to local [H0] via XOR (H0 was 0)</li>
+<li><code>T</code> — move value to CL for testing</li>
 <li><code>?</code> — if [CL]==0 (zero cell = boundary), redirect to
 handler</li>
-<li><code>V</code> — restore [CL]↔︎[IX]</li>
-<li>Handler: <code>V B h U</code> — restore, retreat, move south, flip
-direction</li>
+<li><code>T</code> — restore CL, <code>m</code> — restore H0 (on
+non-boundary path)</li>
+<li>Handler: <code>/ B C U : \</code> — retreat, advance vertically,
+flip, signal</li>
 </ol>
+<h2 id="ix-vertical-momentum-ops-3-opcodes">IX Vertical Momentum Ops (3
+opcodes)</h2>
+<p>Per-IP field <code>ix_vdir</code> (defaults to South). Enables
+ping-pong bounded scanning: after a horizontal boundary, <code>C</code>
+advances IX vertically. A vertical boundary test detects when IX leaves
+the code+handler area. On vertical boundary: <code>D O C</code> bounces
+IX back (retreat, flip, re-advance). IX ping-pongs between the first
+code row and handler row without entering stomach/waste rows.</p>
+<table>
+<colgroup>
+<col style="width: 11%" />
+<col style="width: 25%" />
+<col style="width: 37%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>Op</th>
+<th>Payload</th>
+<th>Description</th>
+<th>Inverse</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>C</code></td>
+<td>60</td>
+<td>Advance IX one step in <code>ix_vdir</code></td>
+<td><code>D</code></td>
+</tr>
+<tr>
+<td><code>D</code></td>
+<td>61</td>
+<td>Retreat IX one step opposite <code>ix_vdir</code></td>
+<td><code>C</code></td>
+</tr>
+<tr>
+<td><code>O</code></td>
+<td>62</td>
+<td>Flip <code>ix_vdir</code> via XOR 2 (N<span
+class="math inline">↔︎</span>S, E<span
+class="math inline">↔︎</span>W)</td>
+<td>self</td>
+</tr>
+</tbody>
+</table>
+<p>Vertical boundary test pattern (on last code row, between merge
+gates):</p>
+<pre><code>T Z ]        deposit handler signal to waste row
+m T ? T m    test [IX] after vertical advance</code></pre>
+<p>If [IX]=0 (outside code+handler area): <code>?</code> fires, IP drops
+to bounce sub-handler: <code>/ D O C : \</code> (retreat, flip ix_vdir,
+re-advance, signal).</p>
+<p>Full ping-pong scan (5 rows, W=99): rows 7→8→9→10→11→10→9→8→7→8… ~864
+cycles per full down-up sweep.</p>
 <h2 id="reversibility-pairs">Reversibility Pairs</h2>
 <p>Every opcode has a unique inverse (itself or another opcode):</p>
 <table>
@@ -870,22 +940,69 @@ direction</li>
 <tr>
 <td><code>A</code>/<code>B</code></td>
 <td><code>B</code>/<code>A</code></td>
-<td>IX momentum advance / retreat</td>
+<td>IX horizontal momentum advance / retreat</td>
+</tr>
+<tr>
+<td><code>C</code>/<code>D</code></td>
+<td><code>D</code>/<code>C</code></td>
+<td>IX vertical momentum advance / retreat</td>
 </tr>
 </tbody>
 </table>
 <p>Self-inverse ops: <code>X</code>, <code>F</code>, <code>G</code>,
 <code>T</code>, <code>K</code>, <code>Z</code>, <code>x</code>,
 <code>f</code>, <code>z</code>, <code>Y</code>, <code>m</code>,
-<code>j</code>, <code>V</code>, <code>U</code></p>
+<code>j</code>, <code>V</code>, <code>U</code>, <code>O</code></p>
 <p>Mirrors (<code>/</code>, <code>\</code>, <code>%</code>,
 <code>?</code>, <code>&amp;</code>, <code>!</code>, <code>(</code>,
 <code>)</code>, <code>#</code>, <code>$</code>) are self-inverse: the IP
 direction mapping is its own inverse — running the IP backward through a
 mirror reflects it the same way.</p>
 <h2 id="nop">NOP</h2>
-<p>Any payload not corresponding to opcodes 1-59 (and not within Hamming
+<p>Any payload not corresponding to opcodes 1-62 (and not within Hamming
 distance 1 of such a payload) is a NOP: the IP advances without side
 effects. The canonical “empty cell” is raw value 0 (payload 0).</p>
+<h2 id="special-cell-values">Special Cell Values</h2>
+<p>Two non-opcode cell values have architectural significance:</p>
+<table>
+<colgroup>
+<col style="width: 19%" />
+<col style="width: 21%" />
+<col style="width: 26%" />
+<col style="width: 31%" />
+</colgroup>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Payload</th>
+<th>Raw Value</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>o</code></td>
+<td>1017</td>
+<td>0x7E8E</td>
+<td><strong>NOP filler</strong>. The 64th (unused) codeword of the
+[11,6,4] opcode code. As a true codeword, it has d_min=4 from all opcode
+codewords: all 1-bit AND 2-bit data errors still decode to NOP (0/55
+two-bit pairs produce a real opcode). Used for padding on code rows,
+bypass rows, return rows, and handler rows. Data-bit distance 8 from
+zero (robust boundary detection).</td>
+</tr>
+<tr>
+<td><code>~</code></td>
+<td>2047</td>
+<td>0xFFFF</td>
+<td><strong>Boundary marker</strong>. All bits set. Decodes to NOP (not
+within Hamming distance 1 of any opcode). Used for IX scan boundary rows
+(top and bottom) and boundary columns (col 0 and col W-1). Detected via
+<code>m T : ? ; T m</code> — <code>:</code> wraps payload 2047→0,
+<code>?</code> fires on zero. Enables agents in non-zero environments
+where zero cells are not reliably empty.</td>
+</tr>
+</tbody>
+</table>
 </body>
 </html>

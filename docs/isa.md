@@ -63,8 +63,8 @@ All heads point to cells on the same toroidal grid as the IP.
 
 Mirror geometry:
 
-- `/` maps E↔N, S↔W
-- `\` maps E↔S, N↔W
+- `/` maps E$\leftrightarrow$N, S$\leftrightarrow$W
+- `\` maps E$\leftrightarrow$S, N$\leftrightarrow$W
 
 Conditional mirrors test whether any data bit in [CL] is set
 (`[CL] & DATA_MASK`). Parity bits are ignored.
@@ -218,7 +218,7 @@ without coprimality constraints.
 |----|---------|-------------|---------|
 | `A` | 57 | Advance IX one step in `ix_dir` | `B` |
 | `B` | 58 | Retreat IX one step opposite `ix_dir` | `A` |
-| `U` | 59 | Flip `ix_dir` via XOR 2 (E↔W, N↔S) | self |
+| `U` | 59 | Flip `ix_dir` via XOR 2 (E$\leftrightarrow$W, N$\leftrightarrow$S) | self |
 
 The horizontal boundary detection pattern (local-only, no remote write):
 
@@ -242,7 +242,7 @@ stomach/waste rows.
 |----|---------|-------------|---------|
 | `C` | 60 | Advance IX one step in `ix_vdir` | `D` |
 | `D` | 61 | Retreat IX one step opposite `ix_vdir` | `C` |
-| `O` | 62 | Flip `ix_vdir` via XOR 2 (N↔S, E↔W) | self |
+| `O` | 62 | Flip `ix_vdir` via XOR 2 (N$\leftrightarrow$S, E$\leftrightarrow$W) | self |
 
 Vertical boundary test pattern (on last code row, between merge gates):
 

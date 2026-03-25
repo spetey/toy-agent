@@ -85,7 +85,8 @@ Hamming(16,11) gadgets on a 22×99 grid with probe-bypass parity skip and
 top-down rewind loop for uniform sweep frequency. Load in the GUI:
 
 ```bash
-python3 fb2d_server.py
+python3 fb2d_server.py          # default port 5001
+python3 fb2d_server.py 5002     # second instance on different port
 # Open http://localhost:5001, load immunity-gadgets-v4-loop-w99
 # Enable noise (seed 42, 50 flips/1M), watch corrections in real-time
 ```
@@ -156,7 +157,7 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `)` | 35 | \ reflect if [EX] == 0 |
 | `$` | 37 | / reflect if [EX] != 0 |
 | `#` | 36 | / reflect if [EX] == 0 |
-| `K` | 33 | swap(CL_register, GP_register) |
+| `K` | 33 | swap(CL_register, EX_register) |
 | `Z` | 38 | swap([H0], [EX]) — byte-level EX swap |
 
 ### IX (Interoceptor) Ops (v1.9)
@@ -340,7 +341,8 @@ python3 programs/carry-demo.py
 python3 test_reversibility.py
 
 # Interactive GUI (load immunity-gadgets-v4-loop-w99 for the main example):
-python3 fb2d_server.py
+python3 fb2d_server.py              # port 5001 (default)
+python3 fb2d_server.py 5002         # run a second instance on a different port
 ```
 
 ## Self-Correcting Agent Architecture (Design Sketch)

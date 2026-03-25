@@ -65,6 +65,8 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 #editControls button:disabled { opacity: 0.4; cursor: default; }
 #btnModeToggle.editActive { background: #e94560; }
 #selInfo { color: #4488ff; font-size: 12px; }
+.head-place-btn { padding: 3px 6px !important; font-size: 11px !important; font-weight: bold; min-width: 24px; }
+.head-place-btn.active { outline: 2px solid #ff6; outline-offset: 1px; }
 
 /* Opcode picker */
 #opcodePicker { position: absolute; background: #1a1a2e; border: 1px solid #7b2cbf; border-radius: 8px; padding: 10px; z-index: 250; display: none; max-height: 480px; overflow-y: auto; }
@@ -136,6 +138,15 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
     <span style="color:#555">|</span>
     <button id="btnSave" title="Save to file">Save</button>
     <span id="selInfo"></span>
+    <span style="color:#555">|</span>
+    <span style="color:#aaa; font-size:11px;">Place:</span>
+    <button class="head-place-btn" data-head="ip" style="color:#ff6b6b" title="Place IP (click grid)">IP</button>
+    <button class="head-place-btn" data-head="h0" style="color:#00ced1" title="Place H0 (click grid)">H0</button>
+    <button class="head-place-btn" data-head="h1" style="color:#32cd32" title="Place H1 (click grid)">H1</button>
+    <button class="head-place-btn" data-head="cl" style="color:#da70d6" title="Place CL (click grid)">CL</button>
+    <button class="head-place-btn" data-head="ix" style="color:#4da6ff" title="Place IX (click grid)">IX</button>
+    <button class="head-place-btn" data-head="ex" style="color:#ffd700" title="Place EX (click grid)">EX</button>
+    <span id="placingLabel" style="display:none; color:#ff6; font-size:11px; margin-left:4px;">Click a cell...</span>
   </div>
   <span style="color:#555">|</span>
   <button id="btnNoise" title="Toggle noise injection (N)">&#x26A1; Noise</button>
@@ -429,6 +440,7 @@ let editSelecting = false; // currently dragging a selection
 let editSelStart = null;
 let clipboardInfo = null; // {width, height, loaded}
 let pasteMode = false; // waiting for click to paste
+let placingHead = null; // head name being placed: 'ip','h0','h1','cl','ix','ex'
 
 // Canvas
 const canvas = document.getElementById('gridCanvas');
@@ -446,6 +458,11 @@ async function loadFileList() {
   const files = await api('files');
   const sel = document.getElementById('fileSelect');
   sel.innerHTML = '<option value="">-- load file --</option>';
+  // "New program" option at the top
+  const newOpt = document.createElement('option');
+  newOpt.value = '__new__';
+  newOpt.textContent = '+ New program...';
+  sel.appendChild(newOpt);
   for (const f of files) {
     const opt = document.createElement('option');
     opt.value = f;
@@ -465,6 +482,64 @@ async function loadFile(filename) {
   zoomFit();
   updateStatus();
   render();
+}
+
+function showNewProgramDialog() {
+  // Create modal overlay
+  const overlay = document.createElement('div');
+  overlay.id = 'newProgramOverlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  const dialog = document.createElement('div');
+  dialog.style.cssText = 'background:#1e1e2e;border:1px solid #555;border-radius:8px;padding:20px;min-width:280px;color:#cdd6f4;font-family:monospace';
+  dialog.innerHTML = `
+    <h3 style="margin:0 0 12px 0;font-size:14px">New Program</h3>
+    <label style="display:block;margin-bottom:8px">
+      Rows: <input id="newRows" type="number" value="10" min="1" max="1000"
+        style="width:60px;background:#313244;color:#cdd6f4;border:1px solid #555;padding:3px 6px;border-radius:3px">
+    </label>
+    <label style="display:block;margin-bottom:14px">
+      Cols: <input id="newCols" type="number" value="20" min="1" max="2000"
+        style="width:60px;background:#313244;color:#cdd6f4;border:1px solid #555;padding:3px 6px;border-radius:3px">
+    </label>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="newCancel" style="padding:4px 12px;background:#313244;color:#cdd6f4;border:1px solid #555;border-radius:3px;cursor:pointer">Cancel</button>
+      <button id="newCreate" style="padding:4px 12px;background:#89b4fa;color:#1e1e2e;border:none;border-radius:3px;cursor:pointer;font-weight:bold">Create</button>
+    </div>
+  `;
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  const rowsInput = document.getElementById('newRows');
+  const colsInput = document.getElementById('newCols');
+  rowsInput.focus();
+  rowsInput.select();
+
+  function close() { overlay.remove(); }
+
+  document.getElementById('newCancel').addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  async function create() {
+    const rows = parseInt(rowsInput.value) || 10;
+    const cols = parseInt(colsInput.value) || 20;
+    close();
+    state = await api('new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({rows, cols})
+    });
+    currentFile = '';
+    annotations = {cells: {}, regions: []};
+    document.getElementById('fileSelect').value = '';
+    zoomFit();
+    updateStatus();
+    render();
+  }
+
+  document.getElementById('newCreate').addEventListener('click', create);
+  // Enter key in either input triggers create
+  rowsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); if (e.key === 'Escape') close(); });
+  colsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') create(); if (e.key === 'Escape') close(); });
 }
 
 async function loadAnnotations() {
@@ -1113,6 +1188,12 @@ canvas.addEventListener('mousedown', (e) => {
       const cell = canvasToGrid(mx, my);
       if (!cell) return;
 
+      // If placing a head, place it and return
+      if (placingHead) {
+        placeHead(placingHead, cell.r, cell.c, e.clientX, e.clientY);
+        return;
+      }
+
       // If in paste mode, paste at click location
       if (pasteMode && clipboardInfo && clipboardInfo.loaded) {
         doPaste(cell.r, cell.c);
@@ -1373,7 +1454,9 @@ function toggleEditMode() {
     wrap.classList.remove('editMode');
     editSelection = null;
     pasteMode = false;
+    placingHead = null;
     closeOpcodePicker();
+    cancelPlacing();
   }
   updateEditButtons();
   render();
@@ -1557,7 +1640,12 @@ const OPCODE_GROUPS = [
   { label: 'EX Mirrors', ops: [[34,'('], [35,')'], [36,'#'], [37,'$']] },
   { label: 'IX Move', ops: [[49,'H'], [50,'h'], [51,'a'], [52,'d']] },
   { label: 'IX Data', ops: [[53,'m'], [54,'M'], [55,'j'], [56,'V']] },
-  { label: 'IX Momentum', ops: [[57,'A'], [58,'B'], [59,'U']] },
+  { label: 'IX H-Momentum', ops: [[57,'A'], [58,'B'], [59,'U']] },
+  { label: 'IX V-Momentum', ops: [[60,'C'], [61,'D'], [62,'O']] },
+  { label: 'Special', special: [
+    { payload: 1017, ch: 'o', name: 'NOP filler' },
+    { payload: 2047, ch: '~', name: 'Boundary (0xFFFF)' },
+  ]},
 ];
 
 let pickerCell = null;
@@ -1570,17 +1658,28 @@ function buildOpcodePicker() {
   let html = `<div class="op-header"><span style="font-size:11px;color:#888;">Set opcode</span><button id="pickerToggleMode">${modeLabel}</button></div>`;
   for (const group of OPCODE_GROUPS) {
     html += `<div class="op-group"><div class="op-group-label">${group.label}</div><div class="op-grid">`;
-    for (const [code, ch] of group.ops) {
-      const name = OPCODE_NAMES[code] || 'NOP';
-      const display = code === 0 ? '\u00b7' : ch;
-      if (pickerVerbose) {
-        html += `<button class="op-btn" data-code="${code}" title="${name} (${code})"><b>${display}</b> <span class="op-label">${name}</span></button>`;
-      } else {
-        html += `<button class="op-btn" data-code="${code}" title="${name} (${code})">${display}</button>`;
+    if (group.special) {
+      for (const s of group.special) {
+        if (pickerVerbose) {
+          html += `<button class="op-btn" data-payload="${s.payload}" title="${s.name} (payload ${s.payload})"><b>${s.ch}</b> <span class="op-label">${s.name}</span></button>`;
+        } else {
+          html += `<button class="op-btn" data-payload="${s.payload}" title="${s.name} (payload ${s.payload})">${s.ch}</button>`;
+        }
+      }
+    } else {
+      for (const [code, ch] of group.ops) {
+        const name = OPCODE_NAMES[code] || 'NOP';
+        const display = code === 0 ? '\u00b7' : ch;
+        if (pickerVerbose) {
+          html += `<button class="op-btn" data-code="${code}" title="${name} (${code})"><b>${display}</b> <span class="op-label">${name}</span></button>`;
+        } else {
+          html += `<button class="op-btn" data-code="${code}" title="${name} (${code})">${display}</button>`;
+        }
       }
     }
     html += '</div></div>';
   }
+  html += '<div class="op-raw"><span style="color:#888;font-size:11px">Payload:</span><input type="number" id="payloadValueInput" min="0" max="2047" placeholder="0-2047"><button id="payloadValueSet">Set</button></div>';
   html += '<div class="op-raw"><span style="color:#888;font-size:11px">Raw:</span><input type="number" id="rawValueInput" min="0" max="65535" placeholder="0-65535"><button id="rawValueSet">Set</button></div>';
   picker.innerHTML = html;
 
@@ -1605,11 +1704,23 @@ function buildOpcodePicker() {
   picker.addEventListener('click', (e) => {
     const btn = e.target.closest('.op-btn');
     if (btn && pickerCell) {
-      const code = parseInt(btn.dataset.code);
-      // Encode the opcode as a valid Hamming codeword
-      setCell(pickerCell.r, pickerCell.c, hammingEncode(OPCODE_PAYLOADS[code]));
+      if (btn.dataset.payload !== undefined) {
+        // Special button (NOP filler, boundary) — encode payload directly
+        setCell(pickerCell.r, pickerCell.c, hammingEncode(parseInt(btn.dataset.payload)));
+      } else {
+        const code = parseInt(btn.dataset.code);
+        // Encode the opcode as a valid Hamming codeword
+        setCell(pickerCell.r, pickerCell.c, hammingEncode(OPCODE_PAYLOADS[code]));
+      }
       closeOpcodePicker();
       return;
+    }
+    if (e.target.id === 'payloadValueSet') {
+      const val = parseInt(document.getElementById('payloadValueInput').value);
+      if (pickerCell && !isNaN(val) && val >= 0 && val <= 2047) {
+        setCell(pickerCell.r, pickerCell.c, hammingEncode(val));
+        closeOpcodePicker();
+      }
     }
     if (e.target.id === 'rawValueSet') {
       const val = parseInt(document.getElementById('rawValueInput').value);
@@ -1620,8 +1731,11 @@ function buildOpcodePicker() {
     }
   });
 
-  // Enter key in raw input
+  // Enter key in inputs
   picker.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.id === 'payloadValueInput') {
+      document.getElementById('payloadValueSet').click();
+    }
     if (e.key === 'Enter' && e.target.id === 'rawValueInput') {
       document.getElementById('rawValueSet').click();
     }
@@ -1645,11 +1759,16 @@ function showOpcodePicker(r, c, px, py) {
   picker.style.top = top + 'px';
   picker.style.display = 'block';
 
-  // Highlight current value (compare opcode via nearest-codeword lookup)
+  // Highlight current value
   const flat = r * state.cols + c;
-  const currentOpcode = PAYLOAD_TO_OPCODE_NEAREST[cellToPayload(state.grid[flat])];
+  const currentPayload = cellToPayload(state.grid[flat]);
+  const currentOpcode = PAYLOAD_TO_OPCODE_NEAREST[currentPayload];
   picker.querySelectorAll('.op-btn').forEach(b => {
-    b.classList.toggle('selected', parseInt(b.dataset.code) === currentOpcode);
+    if (b.dataset.payload !== undefined) {
+      b.classList.toggle('selected', parseInt(b.dataset.payload) === currentPayload);
+    } else {
+      b.classList.toggle('selected', parseInt(b.dataset.code) === currentOpcode);
+    }
   });
 }
 
@@ -1825,7 +1944,11 @@ function updateGpCleanupStats(st) {
 
 // ── Button handlers ────────────────────────────────────────────
 document.getElementById('fileSelect').addEventListener('change', (e) => {
-  if (e.target.value) {
+  if (e.target.value === '__new__') {
+    e.target.value = '';  // reset dropdown
+    if (playing) stopPlay();
+    showNewProgramDialog();
+  } else if (e.target.value) {
     if (playing) stopPlay();
     loadFile(e.target.value);
   }
@@ -1899,6 +2022,177 @@ document.getElementById('btnPaste').addEventListener('click', enterPasteMode);
 document.getElementById('btnDelSel').addEventListener('click', doDeleteSelection);
 document.getElementById('btnSave').addEventListener('click', doSave);
 
+// Head placement buttons
+document.querySelectorAll('.head-place-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const head = btn.dataset.head;
+    if (placingHead === head) {
+      // Toggle off
+      cancelPlacing();
+    } else {
+      cancelPlacing();
+      placingHead = head;
+      btn.classList.add('active');
+      document.getElementById('placingLabel').style.display = '';
+      document.getElementById('placingLabel').textContent =
+        head === 'ip' ? 'Click cell for IP...' : `Click cell for ${head.toUpperCase()}...`;
+    }
+  });
+});
+
+function cancelPlacing() {
+  placingHead = null;
+  document.querySelectorAll('.head-place-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('placingLabel').style.display = 'none';
+}
+
+async function placeHead(head, row, col, px, py) {
+  const ipIdx = state.active_ip || 0;
+  const body = { ip: ipIdx, head, row, col };
+
+  // For IP, IX: show direction picker after placing
+  if (head === 'ip' || head === 'ix') {
+    // Place head first (position only)
+    state = await api('sethead', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    cancelPlacing();
+    updateStatus();
+    render();
+    // Then show direction picker
+    const dirField = head === 'ip' ? 'ip_dir' : 'ix_dir';
+    const label = head === 'ip' ? 'IP direction' : 'IX momentum';
+    showDirPicker(ipIdx, head, row, col, dirField, label, px, py);
+    return;
+  }
+
+  state = await api('sethead', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  cancelPlacing();
+  updateStatus();
+  render();
+}
+
+function showDirPicker(ipIdx, head, row, col, dirField, label, px, py) {
+  closeDirPicker();
+  const picker = document.createElement('div');
+  picker.id = 'dirPicker';
+  picker.style.cssText = `position:fixed;z-index:9999;background:#1e1e2e;border:1px solid #555;
+    border-radius:6px;padding:8px;font-family:monospace;color:#cdd6f4;font-size:13px`;
+  picker.style.left = (px + 10) + 'px';
+  picker.style.top = (py - 40) + 'px';
+
+  const arrows = [
+    { dir: 0, ch: '\u2191', label: 'N' },
+    { dir: 1, ch: '\u2192', label: 'E' },
+    { dir: 2, ch: '\u2193', label: 'S' },
+    { dir: 3, ch: '\u2190', label: 'W' },
+  ];
+
+  // Get current direction
+  const ip = state.ips[ipIdx];
+  const curDir = ip[dirField] !== undefined ? ip[dirField] : 1;
+
+  let html = `<div style="font-size:11px;color:#aaa;margin-bottom:6px">${label}</div>`;
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;width:84px">';
+  html += '<div></div>';
+  html += dirBtn(arrows[0], curDir);  // N top center
+  html += '<div></div>';
+  html += dirBtn(arrows[3], curDir);  // W left
+  html += '<div></div>';
+  html += dirBtn(arrows[1], curDir);  // E right
+  html += '<div></div>';
+  html += dirBtn(arrows[2], curDir);  // S bottom center
+  html += '<div></div>';
+  html += '</div>';
+
+  // If this is IX, also show IX vertical momentum
+  if (head === 'ix') {
+    const curVDir = ip.ix_vdir !== undefined ? ip.ix_vdir : 2;
+    html += '<div style="font-size:11px;color:#aaa;margin:8px 0 6px">IX vertical</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px;width:84px">';
+    html += '<div></div>';
+    html += dirBtn(arrows[0], curVDir, 'v');  // N
+    html += '<div></div>';
+    html += dirBtn(arrows[3], curVDir, 'v');  // W
+    html += '<div></div>';
+    html += dirBtn(arrows[1], curVDir, 'v');  // E
+    html += '<div></div>';
+    html += dirBtn(arrows[2], curVDir, 'v');  // S
+    html += '<div></div>';
+    html += '</div>';
+  }
+
+  picker.innerHTML = html;
+  document.body.appendChild(picker);
+
+  // Keep picker on screen
+  const rect = picker.getBoundingClientRect();
+  if (rect.right > window.innerWidth) picker.style.left = (window.innerWidth - rect.width - 8) + 'px';
+  if (rect.bottom > window.innerHeight) picker.style.top = (window.innerHeight - rect.height - 8) + 'px';
+
+  // Click handlers
+  picker.querySelectorAll('.dir-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const dir = parseInt(btn.dataset.dir);
+      const vflag = btn.dataset.vflag;
+      const field = vflag === 'v' ? 'ix_vdir' : dirField;
+      const body = { ip: ipIdx, head, row, col };
+      body[field] = dir;
+      state = await api('sethead', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      // If IX and we just set horizontal dir, keep picker open for vertical
+      if (head === 'ix' && vflag !== 'v') {
+        // Update current highlight
+        const ip = state.ips[ipIdx];
+        closeDirPicker();
+        showDirPicker(ipIdx, head, row, col, dirField, label, px, py);
+        return;
+      }
+      closeDirPicker();
+      updateStatus();
+      render();
+    });
+  });
+
+  // Click outside to close
+  setTimeout(() => {
+    document.addEventListener('mousedown', dirPickerOutsideClick);
+  }, 0);
+}
+
+function dirBtn(arrow, curDir, vflag) {
+  const sel = arrow.dir === curDir;
+  const bg = sel ? '#89b4fa' : '#313244';
+  const fg = sel ? '#1e1e2e' : '#cdd6f4';
+  const vattr = vflag ? ` data-vflag="${vflag}"` : '';
+  return `<button class="dir-btn" data-dir="${arrow.dir}"${vattr}
+    style="background:${bg};color:${fg};border:none;border-radius:3px;
+    padding:4px;font-size:16px;cursor:pointer;line-height:1"
+    title="${arrow.label}">${arrow.ch}</button>`;
+}
+
+function closeDirPicker() {
+  const el = document.getElementById('dirPicker');
+  if (el) el.remove();
+  document.removeEventListener('mousedown', dirPickerOutsideClick);
+}
+
+function dirPickerOutsideClick(e) {
+  const picker = document.getElementById('dirPicker');
+  if (picker && !picker.contains(e.target)) {
+    closeDirPicker();
+  }
+}
+
 document.getElementById('btnNoise').addEventListener('click', toggleNoise);
 document.getElementById('noiseRate').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
 document.getElementById('noiseType').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
@@ -1962,7 +2256,8 @@ document.addEventListener('keydown', (e) => {
     closeAnnPopup();
     closeRegionPopup();
     closeOpcodePicker();
-    if (editMode) { editSelection = null; pasteMode = false; updateEditButtons(); render(); }
+    closeDirPicker();
+    if (editMode) { editSelection = null; pasteMode = false; cancelPlacing(); updateEditButtons(); render(); }
   }
 });
 

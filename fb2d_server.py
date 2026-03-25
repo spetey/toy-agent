@@ -195,6 +195,38 @@ def get_state():
     return jsonify(serialize_state())
 
 
+@app.route('/api/new', methods=['POST'])
+def new_program():
+    """Create a blank grid with the specified dimensions."""
+    global current_file, _step_all_count, waste_cleanup_enabled
+    data = request.get_json(force=True)
+    rows = int(data.get('rows', 10))
+    cols = int(data.get('cols', 10))
+    if rows < 1 or cols < 1 or rows > 1000 or cols > 2000:
+        abort(400, 'Invalid dimensions (max 1000x2000)')
+    sim.rows = rows
+    sim.cols = cols
+    sim.grid_size = rows * cols
+    sim.grid = [0] * sim.grid_size
+    sim.step_count = 0
+    # Reset to single IP at (0,0) going East
+    sim.ips = [{
+        'ip_row': 0, 'ip_col': 0, 'ip_dir': 1,  # DIR_E = 1
+        'h0': 0, 'h1': 0, 'ix': 0, 'ix_dir': 1, 'ix_vdir': 2,  # DIR_S = 2
+        'cl': 0, 'ex': 0,
+    }]
+    sim.n_ips = 1
+    sim.active_ip = 0
+    sim._load_active(0)
+    current_file = ''
+    _step_all_count = 0
+    noise_pool.reset()
+    waste_pool.reset()
+    _waste_cleanup_log.clear()
+    waste_cleanup_enabled = False
+    return jsonify(serialize_state())
+
+
 @app.route('/api/load', methods=['POST'])
 def load_file():
     global current_file, _step_all_count, waste_cleanup_enabled
@@ -437,6 +469,39 @@ def add_ip():
     return jsonify(result)
 
 
+@app.route('/api/sethead', methods=['POST'])
+def set_head():
+    """Set a head position or IP state for the given IP index."""
+    data = request.get_json(force=True)
+    ip_idx = int(data.get('ip', 0))
+    if not (0 <= ip_idx < sim.n_ips):
+        abort(400, f'Invalid IP index: {ip_idx}')
+    sim._save_active()
+    ipstate = sim.ips[ip_idx]
+    # Set head by name to flat address (row * cols + col)
+    head = data.get('head', '')
+    if head in ('h0', 'h1', 'ix', 'cl', 'ex'):
+        row = int(data['row'])
+        col = int(data['col'])
+        if 0 <= row < sim.rows and 0 <= col < sim.cols:
+            ipstate[head] = row * sim.cols + col
+    elif head == 'ip':
+        row = int(data['row'])
+        col = int(data['col'])
+        if 0 <= row < sim.rows and 0 <= col < sim.cols:
+            ipstate['ip_row'] = row
+            ipstate['ip_col'] = col
+    # Optional: set direction fields
+    if 'ip_dir' in data:
+        ipstate['ip_dir'] = int(data['ip_dir']) % 4
+    if 'ix_dir' in data:
+        ipstate['ix_dir'] = int(data['ix_dir']) % 4
+    if 'ix_vdir' in data:
+        ipstate['ix_vdir'] = int(data['ix_vdir']) % 4
+    sim._load_active(sim.active_ip)
+    return jsonify(serialize_state())
+
+
 @app.route('/api/rmip', methods=['POST'])
 def remove_ip():
     data = request.get_json(force=True)
@@ -669,6 +734,8 @@ def load_snapshot():
 
 
 if __name__ == '__main__':
+    import sys
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 5001
     print(f'fb2d GUI server — programs dir: {PROGRAMS_DIR}')
-    print(f'Open http://localhost:5001')
-    app.run(debug=True, use_reloader=False, port=5001)
+    print(f'Open http://localhost:{port}')
+    app.run(debug=True, use_reloader=False, port=port)
