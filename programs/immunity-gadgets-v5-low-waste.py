@@ -940,24 +940,49 @@ def test_cycle_length(width=99):
 
 
 def _cheat_clear_waste(sim, layout):
-    """Zero waste rows for infinite-zeros mode.
+    """Rolling waste cleanup for v5 EX-dirty invariant.
 
-    v5: preserve the cell EX is currently sitting on.  The )P technique
-    relies on [EX] being dirty in neutral state; clearing it would break
-    the ) merge invariant.
+    Instead of zeroing the entire waste row every step, clear half
+    the row at a time based on EX position:
+      - When EX column >= 90% of width: clear first half (cols 0..W/2-1).
+        EX is about to wrap; ensures clean cells waiting at col 0+.
+      - When EX column <= 10% of width: clear second half (cols W/2..W-1).
+        EX has just wrapped; clears the old trail behind it.
+
+    Most steps neither threshold is hit, so nothing is cleared — the
+    dirty trail is preserved.  Never clears the cell EX is sitting on
+    (preserves the )P dirty invariant).
     """
     W = layout['width']
-    # Collect all EX positions (IP0 and IP1)
-    ex_flats = set()
-    for ip_state in sim.ips:
-        ex_flats.add(ip_state['ex'])
+    half = W // 2
+    threshold_high = int(W * 0.9)
+    threshold_low = int(W * 0.1)
 
-    for waste_row in [layout['ga_waste'], layout['gb_waste']]:
+    # Map each waste row to its IP's EX position
+    waste_rows = [
+        (layout['ga_waste'], sim.ips[0]['ex']),
+        (layout['gb_waste'], sim.ips[1]['ex']),
+    ]
+
+    for waste_row, ex_flat in waste_rows:
         base = waste_row * W
-        for c in range(W):
-            flat = base + c
-            if flat not in ex_flats:
-                sim.grid[flat] = 0
+        ex_col = ex_flat - base
+        # Only act if EX is actually on this waste row
+        if ex_col < 0 or ex_col >= W:
+            continue
+
+        if ex_col >= threshold_high:
+            # EX near right edge — clear first half (ahead after wrap)
+            for c in range(half):
+                flat = base + c
+                if flat != ex_flat:
+                    sim.grid[flat] = 0
+        elif ex_col <= threshold_low:
+            # EX near left edge — clear second half (old trail behind)
+            for c in range(half, W):
+                flat = base + c
+                if flat != ex_flat:
+                    sim.grid[flat] = 0
 
 
 def test_no_error(width=99):
