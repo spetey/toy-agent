@@ -43,7 +43,7 @@ pip install flask          # one-time setup
 python3 fb2d_server.py     # starts on http://localhost:5001
 ```
 
-1. Load **immunity-gadgets-v4-loop-w99** from the dropdown
+1. Load **immunity-gadgets-v5-low-waste-w100** from the dropdown
 2. Enable waste cleanup (click the "Waste" button or press `W`)
 3. Enable noise — press `N`, set rate to ~50 flips/1M rounds, seed 42
 4. Press Space to play
@@ -52,12 +52,16 @@ Watch: IP0 (red) corrects gadget B's code via IX (blue), IP1 (orange)
 corrects gadget A simultaneously. Clean cells (NOP filler `o`) take the
 bypass shortcut. Dirty cells (yellow = 1-bit error) get full Hamming
 correction. Boundary rows (`~` = 0xFFFF) mark the IX scan boundaries.
-Green cells on the waste row show consumed zeros.
+Green cells on the waste row show the EX trail — all non-zero (solid
+waste trail, no blanks).
 
 ### Tests
 
 ```bash
-# Immunity gadgets v4 — rewind-loop dual correction (★ start here)
+# Immunity gadgets v5 — low-EX-waste dual correction (★ start here)
+python3 programs/immunity-gadgets-v5-low-waste.py
+
+# Previous version (v4 rewind-loop, for comparison)
 python3 programs/immunity-gadgets-v4-loop.py
 
 # Sweep strategy comparison — ping-pong vs rewind loop
@@ -82,7 +86,7 @@ python3 test_reversibility.py
 python3 fb2d.py
 
 # Inside the simulator:
-#   load immunity-gadgets-v4-loop-w99      — load the main demo
+#   load immunity-gadgets-v5-low-waste-w100 — load the main demo
 #   run 1000    — run 1000 steps forward
 #   back 1000   — run 1000 steps backward (perfectly reversed)
 #   show        — display the grid
@@ -158,7 +162,15 @@ The **probe-bypass** variant adds a fast path: before running the full
 barrel-shifter, a parity probe tests whether the cell has any error at
 all. Clean cells (overall parity = 0) branch to a bypass row that undoes
 the probe and skips correction entirely. Only dirty cells pay the full
-correction cost (~65% step savings).
+correction cost (~58% step savings).
+
+The **v5 low-waste** architecture minimizes EX (waste trail) consumption.
+EX sits on a dirty cell in neutral state; the main merge uses `(` (fire
+on [EX]!=0) so bypass paths consume zero EX cells. The rewind loop uses
+`(` re-entry with `P`-based signaling, eliminating CL accumulation. Phase
+G deposits both EV and PA via `+Z]+Z]` — the `+` guarantees non-zero
+trail cells (no blanks), enabling a solid waste trail for future
+metabolism. Net: 0 EX cells per clean scan, 3 per correction.
 
 See `docs/barrel-shifter-correction.md` for algorithm details.
 
@@ -272,7 +284,9 @@ pools.py                         Reversible waste pool + noise pool
 test_pools.py                    Pool tests (waste, noise, integration)
 test_reversibility.py            Exhaustive opcode reversibility proof
 programs/                        Example programs and demos
-  immunity-gadgets-v4-loop.py        Rewind-loop dual gadgets + tests (★ MWE)
+  immunity-gadgets-v5-low-waste.py    Low-EX-waste dual gadgets + tests (★ MWE)
+  immunity-gadgets-v5-low-waste-w100.fb2d  Loadable state file for v5 demo
+  immunity-gadgets-v4-loop.py        Rewind-loop dual gadgets + tests (prev.)
   immunity-gadgets-v4-loop-w99.fb2d  Loadable state file for v4 demo
   sweep-model.py                     Ping-pong vs rewind-loop comparison model
   immunity-gadgets-v3-bypass.py      Probe-bypass dual gadgets (ping-pong, prev.)
@@ -309,21 +323,25 @@ This is active research software. The language design is at v1.14
   guard. Data ops that would write to the IP's instruction cell are NOP;
   G is NOP when the cell value exceeds grid size. Payload arithmetic is
   bijective on all 65536 cell values (corrupted or not).
-- **Rewind-loop sweep** (v4): the main MWE. Replaces ping-pong with
-  top-down rewind loop for uniform sweep frequency. Every scan row
-  is corrected every S sweeps (no 2× boundary exposure). 16-op rewind
-  handler with `&` re-entry gate. Quantitative analysis shows 33%
-  shorter worst-case gap and ~14% longer MTTF vs ping-pong.
-  See `programs/sweep-model.py`.
-- **Probe-bypass fast-path correction**: dual self-correcting gadgets
-  where clean cells skip the full barrel-shifter via a parity probe +
-  EX-conditional branch. Per-gadget layout (R+7 rows):
+- **Low-EX-waste correction** (v5, ★ current MWE): the EX head sits on
+  a dirty cell in neutral state. Clean cells consume zero EX cells
+  (bypass just uncomputes the stomach). Corrections consume 3 cells.
+  Key techniques: `(` main merge (fires on dirty EX for bypass, NOP for
+  correction's clean EX), `(` rewind loop re-entry with `P`-based
+  signaling (no CL accumulation), `+Z]+Z]` Phase G (solid non-zero
+  waste trail). 374 ops, W=100, 58% clean-path speedup.
+- **Rewind-loop sweep** (v4): replaces ping-pong with top-down rewind
+  loop for uniform sweep frequency. Every scan row is corrected every S
+  sweeps. 33% shorter worst-case gap, ~14% longer MTTF vs ping-pong.
+- **Probe-bypass fast-path correction**: clean cells skip the full
+  barrel-shifter via a parity probe. Per-gadget layout (R+7 rows):
   boundary → bypass → return → handler → code rows → boundary → stomach → waste.
-  Boundary rows use 0xFFFF (shown as `~`). NOP filler uses payload 1017
+  Boundary rows use 0xFFFF (`~`). NOP filler uses payload 1017
   (2-bit data-error safe).
-- **Reversible waste cleanup**: WastePool provides virtual infinite
-  clean zeros via LIFO swap. Fully reversible — step_back restores
-  dirty values from the pool.
+- **Reversible waste cleanup**: WastePool provides virtual clean zeros
+  via LIFO swap. v5 uses rolling cleanup (clear half the waste row when
+  EX crosses 90%/10% thresholds) instead of zeroing everything every
+  step, preserving the dirty trail.
 - **IX momentum scanning** (v1.10-v1.12): horizontal (`A`/`B`/`U`) and
   vertical (`C`/`D`/`O`) momentum ops enable serpentine scanning with
   top-down rewind loop.
@@ -334,8 +352,9 @@ This is active research software. The language design is at v1.14
   independent heads per IP, full reversibility.
 
 Next steps: cross-gadget consultation for double-bit errors, reversible
-fuel/compression (replacing the EX cleanup cheat), adaptive sweep
-boundaries via IX + 0xFFFF boundary cell probe.
+fuel/compression (metabolism — the agent earns its zeros by compressing
+environmental data), adaptive sweep boundaries via IX + 0xFFFF boundary
+cell probe.
 
 ## License
 

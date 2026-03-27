@@ -141,10 +141,60 @@ Combined with Hamming SECDED correction, the system sustains ~1 error
 per sweep indefinitely. Tested stable for 28+ sweeps under continuous
 noise injection.
 
+## v4: Rewind-Loop Sweep
+
+The ping-pong vertical sweep (IX bounces top-to-bottom-to-top) had a
+non-uniform coverage problem: boundary rows waited up to (2S−1) sweeps
+between corrections while interior rows waited ≤S. The rewind-loop
+replaces this with a top-down sweep: at the bottom boundary, IX loops
+row-by-row back to the top, then resumes downward. Every row is visited
+every S sweeps — uniform coverage. The `&` re-entry gate solved the
+first-vs-subsequent iteration problem: first entry has CL=0 (NOP),
+return row sets CL≠0 via `;`. Quantitative comparison: 33% shorter
+worst-case gap, ~14% longer MTTF. The rewind overhead (86 steps) is
+<0.1% of cycle time.
+
+## v5: Low-EX-Waste Architecture
+
+The critical insight for metabolism: every clean zero consumed by the
+EX trail is a resource the agent must eventually earn by compressing
+environmental data. In v4, even clean cells consumed EX zeros (for the
+bypass Z deposit and merge signal). v5 eliminates this waste.
+
+Key techniques:
+
+1. **EX-dirty invariant**: EX sits on a dirty cell in neutral state.
+   The main merge at col 2 uses `(` (\ if [EX]!=0): bypass arrives
+   South with dirty EX (fires S→E), correction arrives East with clean
+   EX from Phase G (NOP). Bypass just uncomputes the stomach — zero EX
+   consumption.
+
+2. **`(` rewind loop**: the return row signals re-entry via `P` (dirty
+   the EX cell) instead of `;` (CL accumulation). No CL dirt
+   accumulates across iterations, so no T Z ] deposit is needed at
+   exit. CWL stays clean throughout. 17 ops (was 18 in v4).
+
+3. **`+Z]+Z]` Phase G**: deposits both EV and PA waste. The `+` before
+   each Z bumps payload by 1, guaranteeing non-zero trail cells — no
+   blanks in the wake. PA must be deposited: a PA=1 residual from
+   bit-0 errors causes Phase B z to transfer bit0 into EV on the next
+   cycle, and j then writes [IX]^=1, actively corrupting a clean cell.
+
+4. **Rolling waste cleanup**: the GUI server clears half the waste row
+   at 90%/10% EX position thresholds instead of zeroing everything
+   every step. The dirty trail is preserved between cleanups.
+
+Net EX budget: 0 cells per clean scan, 3 per correction, 1-2 per
+boundary. At typical error rates (~5% of cells), average consumption
+is ~0.2 cells per scan step — down from ~2 in v4.
+
+P-wrapping safety: with 2P per non-boundary cycle (even step from odd
+start), the payload stays odd and never hits 0. Width < 1024 is safe.
+
 ## Where It Stands
 
-The mutual correction demo represents the core proof of concept: two
+The v5 low-waste architecture is the current proof of concept: two
 agents on a shared grid, each correcting the other's code, resilient to
-continuous noise. What remains is closing the resource loop — replacing
-the infinite zero reservoir with fuel compression, so the system truly
-sustains itself.
+continuous noise, with near-zero resource consumption on clean cells.
+What remains is closing the resource loop — metabolism, where the agent
+earns its clean zeros by compressing environmental data into fuel.
