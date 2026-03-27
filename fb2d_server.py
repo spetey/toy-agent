@@ -87,12 +87,17 @@ def _get_working_rows():
 
 
 def _apply_waste_cleanup_forward(step):
-    """Zero all non-zero cells on working rows. Runs after step_all.
+    """Rolling waste cleanup on EX rows.  Runs after step_all.
 
-    Every dirty cell is swapped into the waste pool (value stored,
-    cell zeroed). This maintains the invariant that working rows are
-    clean at the start of each round — all heads (H0, H1, CL, EX)
-    find zeros when they need scratch space.
+    Instead of zeroing every cell every step (which breaks the v5
+    EX-dirty invariant), uses position-based rolling cleanup:
+      - When EX column >= 90% of width: clear first half (cols 0..W/2-1).
+        EX is about to wrap; ensures clean cells waiting at col 0+.
+      - When EX column <= 10% of width: clear second half (cols W/2..W-1).
+        EX has just wrapped; clears the old trail behind it.
+    Most steps neither threshold is hit, so the dirty trail is preserved.
+    Never clears the cell EX is currently sitting on (preserves the
+    v5 )P dirty invariant; harmless for v4).
 
     Fully reversible: _undo_waste_cleanup restores dirty values.
     """
@@ -100,16 +105,45 @@ def _apply_waste_cleanup_forward(step):
         return 0
 
     W = sim.cols
-    working_rows = _get_working_rows()
+    half = W // 2
+    threshold_high = int(W * 0.9)
+    threshold_low = int(W * 0.1)
+
+    # Collect EX positions to protect
+    sim._save_active()
+    ex_flats = set()
+    for ip in sim.ips:
+        ex_flats.add(ip['ex'])
+
     cleaned = []
-    for row in working_rows:
+    for row in _get_working_rows():
         base = row * W
-        for c in range(W):
+        # Find which IP's EX is on this row
+        ex_col = None
+        for ip in sim.ips:
+            if ip['ex'] // W == row:
+                ex_col = ip['ex'] % W
+                break
+        if ex_col is None:
+            continue
+
+        # Determine which half to clear based on EX position
+        if ex_col >= threshold_high:
+            clear_range = range(half)           # first half
+        elif ex_col <= threshold_low:
+            clear_range = range(half, W)        # second half
+        else:
+            continue                            # no cleanup this step
+
+        for c in clear_range:
             flat = base + c
+            if flat in ex_flats:
+                continue                        # never clear EX's cell
             val = sim.grid[flat]
             if val != 0:
                 cleaned.append((flat, val))
                 sim.grid[flat] = waste_pool.consume(val)
+
     if cleaned:
         _waste_cleanup_log[step] = cleaned
     return len(cleaned)
