@@ -49,10 +49,21 @@ fb2d is a 2D reversible esoteric language where:
   with dirty working-area cells). NoisePool provides deterministic,
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
+- **`programs/immunity-gadgets-v5-low-waste.py`** — Low-EX-waste
+  dual-gadget builder and test suite (★ current MWE). Builds
+  `immunity-gadgets-v5-low-waste-w100.fb2d`. Key ideas: (1) EX sits
+  on a dirty cell in neutral state; `(` at main merge fires on
+  [EX]!=0 for bypass, NOPs for correction (clean EX from Phase G).
+  (2) Rewind loop uses `(` re-entry with P-based signaling instead
+  of `&` with CL accumulation — no T Z ] deposit needed, CWL stays
+  clean. (3) Bypass does zero EX consumption (just uncomputes stomach).
+  (4) Phase G `+Z]+Z]` deposits EV+PA with `+` ensuring non-zero
+  trail (no blanks). 374 ops, W=100, 58% clean-path speedup.
+  Run tests: `python3 programs/immunity-gadgets-v5-low-waste.py`
 - **`programs/immunity-gadgets-v4-loop.py`** — Rewind-loop dual-gadget
-  builder and test suite (★ current MWE). Builds
-  `immunity-gadgets-v4-loop-w99.fb2d`. R+7 layout with uniform top-down
-  sweep. Run tests: `python3 programs/immunity-gadgets-v4-loop.py`
+  builder and test suite. Builds `immunity-gadgets-v4-loop-w99.fb2d`.
+  R+7 layout with uniform top-down sweep. Superseded by v5 but kept
+  for reference. Run tests: `python3 programs/immunity-gadgets-v4-loop.py`
 - **`programs/immunity-gadgets-v3-bypass.py`** — Previous probe-bypass
   dual-gadget builder (ping-pong sweep). Superseded by v4 but kept for
   reference and comparison.
@@ -80,14 +91,14 @@ fb2d is a 2D reversible esoteric language where:
 
 ## Minimal Working Example
 
-**`programs/immunity-gadgets-v4-loop-w99.fb2d`** — Two mutually-correcting
-Hamming(16,11) gadgets on a 22×99 grid with probe-bypass parity skip and
-top-down rewind loop for uniform sweep frequency. Load in the GUI:
+**`programs/immunity-gadgets-v5-low-waste-w100.fb2d`** — Two mutually-correcting
+Hamming(16,11) gadgets on a 22×100 grid with probe-bypass parity skip,
+top-down rewind loop, and )P low-EX-waste conditional advance. Load in the GUI:
 
 ```bash
 python3 fb2d_server.py          # default port 5001
 python3 fb2d_server.py 5002     # second instance on different port
-# Open http://localhost:5001, load immunity-gadgets-v4-loop-w99
+# Open http://localhost:5001, load immunity-gadgets-v5-low-waste-w100
 # Enable noise (seed 42, 50 flips/1M), watch corrections in real-time
 ```
 
@@ -97,7 +108,7 @@ Hamming correction. Boundary rows use 0xFFFF (shown as `~`). NOP filler
 (payload 1017, shown as `o` in GUI) is 2-bit-error safe — the 64th
 codeword of the [11,6,4] opcode code. Waste cleanup is auto-enabled.
 
-Build and test: `python3 programs/immunity-gadgets-v4-loop.py`
+Build and test: `python3 programs/immunity-gadgets-v5-low-waste.py`
 
 ## ISA Summary (v1.14, 62 opcodes + NOP)
 
@@ -319,7 +330,10 @@ output x            // write to EX trail, zero var
 ## Running Tests
 
 ```bash
-# Rewind-loop dual-gadget tests (★ main MWE — layout, cycle, correction):
+# Low-EX-waste dual-gadget tests (★ main MWE — layout, cycle, correction):
+python3 programs/immunity-gadgets-v5-low-waste.py
+
+# Previous rewind-loop dual-gadget tests (v4, for comparison):
 python3 programs/immunity-gadgets-v4-loop.py
 
 # Sweep strategy comparison (analytical + Monte Carlo):
@@ -535,6 +549,34 @@ range check using existing ops. For now, hardcode sweep ranges.
    IX from top boundary back into scan area.
    Effectiveness: 33% better worst-case gap, ~14% longer MTTF,
    robust across all noise rates and grid widths. See sweep-model.py.
+9c. ~~Low-EX-waste )P conditional advance.~~ ✓
+   `programs/immunity-gadgets-v5-low-waste.py`. Replaces CL-based `&`
+   merge gates and `T Z ]` waste deposits with EX-based `)` merges
+   and `P` dirty-marking. Invariant: EX sits on a dirty cell in
+   neutral state. Handler/bypass paths include `]` to advance EX
+   to clean cell; `)` fires on [EX]==0 (S→E merge); `P` re-dirts.
+   Non-handler path: `)` NOP (EX dirty), `P` harmlessly increments.
+   Key changes from v4: horizontal handler `/ ] ; T m B C U \`
+   (9 ops, includes test undo), rewind handler 17 ops using `(`
+   re-entry with P-based signaling (`/ D ] ( B D A m T : % ; T m
+   C ] \`): return row does `; T m P` instead of `; T m ;` — no CL
+   accumulation across iterations, CWL stays clean, no T Z ] deposit
+   needed at exit. Main merge `(` at col 2 (\ if [EX]!=0): bypass
+   arrives South with dirty EX (fires S→E), correction arrives East
+   with clean EX from Phase G (NOP). Bypass does zero EX consumption
+   (just uncomputes stomach — PA=0 for clean cells). Phase G `+Z]+Z]`
+   deposits both EV and PA; `+` before each Z bumps payload by 1 to
+   guarantee non-zero trail cells (no blanks). PA MUST be deposited:
+   PA=1 residual (from bit-0 errors) causes false-positive correction
+   on next cycle that actively corrupts via j [IX]^=1.
+   374 ops, W=100, 58% clean-path savings. Zero EX consumption on
+   non-boundary non-correction steps.
+   **P-wrapping**: for the full gadget, not a concern — Phase G / bypass
+   resets EX each cycle (max payload ~4). For standalone boundary
+   scanners (manual-boundary-low-garbage): with 2 P per cycle (even
+   step), payload stays odd → never hits 0. Adding a 3rd P (coprime
+   step 3) would visit all values including 0. Width < 1024 is safe
+   for horizontal boundary resets (even payload wraps after ~1023 steps).
 10. **[NEXT]** Compression: XOR-of-identical-pairs to replace infinite-
    zero reservoir with finite fuel. Two identical cells XOR to zero
    (fuel for EX). Reversible: the non-zero residual is waste.
