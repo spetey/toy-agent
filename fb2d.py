@@ -117,7 +117,7 @@ OPCODES = {
     'm':  53,  # [H0] ^= [IX]  (raw 16-bit XOR, self-inverse, copy-in/uncompute)
     'I':  54,  # [H0] ^= syndrome_5bit_mapped([IX])  (self-inverse)
     'j':  55,  # [IX] ^= [H0]  (raw 16-bit write-back, self-inverse)
-    'V':  56,  # swap([CL], [IX])  (test bridge, self-inverse)
+    'V':  56,  # [H0] ^= (1 << syndrome_4bit([IX]))  (correction mask, self-inverse)
     # ── IX momentum operations (v1.10) ──
     'A':  57,  # advance IX in ix_dir  (inverse: B)
     'B':  58,  # retreat IX opposite ix_dir  (inverse: A)
@@ -339,6 +339,29 @@ for _v in range(65536):
     if _p_all: _mask |= (1 << 9)   # p_all → d4 (bit 9)
     SYNDROME_XOR_MASK[_v] = _mask
 del _v, _s, _i, _p_all, _mask
+
+# Precompute CORRECTION_XOR_MASK: for each 16-bit cell value, the raw
+# 16-bit correction mask = 1 << hamming_syndrome_4bit(cell).
+# Used by the V opcode:  [H0] ^= CORRECTION_XOR_MASK[grid[IX]]
+#
+# In standard-form Hamming(16,11), the 4-bit syndrome value IS the bit
+# position of a single-bit error.  So 1 << syndrome is the correction
+# mask that flips exactly the right bit.
+#
+# For syndrome=0: mask = 1 (bit 0 = overall parity bit).  This correctly
+# handles bit-0-only errors (syndrome=0, p_all=1).  For clean cells
+# (syndrome=0, p_all=0), the pre-syndrome filter I catches them before
+# V is reached, so V never runs on clean cells.
+#
+# Self-inverse: XOR-based.  NOP when H0 == IX.
+CORRECTION_XOR_MASK = [0] * 65536
+for _v in range(65536):
+    _s = 0
+    for _i in range(4):
+        if _popcount(_v & _SYNDROME_MASKS[_i]) & 1:
+            _s |= (1 << _i)
+    CORRECTION_XOR_MASK[_v] = 1 << _s
+del _v, _s, _i
 
 # ─── ANSI Color Codes ─────────────────────────────────────────────────
 
@@ -690,10 +713,9 @@ class FB2DSimulator:
             if self.ix != self.h0 and self.ix != flat_ip:
                 self.grid[self.ix] = self.grid[self.ix] ^ self.grid[self.h0]
 
-        elif opcode == 56:   # V swap([CL], [IX])  (test bridge, self-inverse)
-            if self.cl != flat_ip and self.ix != flat_ip:
-                self.grid[self.cl], self.grid[self.ix] = \
-                    self.grid[self.ix], self.grid[self.cl]
+        elif opcode == 56:   # V [H0] ^= (1 << syndrome_4bit([IX]))  (correction mask)
+            if self.h0 != flat_ip and self.h0 != self.ix:
+                self.grid[self.h0] ^= CORRECTION_XOR_MASK[self.grid[self.ix]]
 
         # ── IX momentum operations (v1.10) ──
         elif opcode == 57:   # A advance IX in ix_dir
@@ -924,10 +946,9 @@ class FB2DSimulator:
             if self.ix != self.h0 and self.ix != prev_flat:
                 self.grid[self.ix] = self.grid[self.ix] ^ self.grid[self.h0]
 
-        elif opcode == 56:   # V swap is self-inverse
-            if self.cl != prev_flat and self.ix != prev_flat:
-                self.grid[self.cl], self.grid[self.ix] = \
-                    self.grid[self.ix], self.grid[self.cl]
+        elif opcode == 56:   # V correction mask is self-inverse (XOR)
+            if self.h0 != prev_flat and self.h0 != self.ix:
+                self.grid[self.h0] ^= CORRECTION_XOR_MASK[self.grid[self.ix]]
 
         # ── IX momentum undo (v1.10) ──
         elif opcode == 57:   # A was advance, undo = retreat

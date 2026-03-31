@@ -132,6 +132,30 @@ with payload 1017 continue to decode to NOP (opcode 0) with full
 d_min=4 protection: all 1-bit AND 2-bit data errors still decode to
 NOP (0/55 bad).
 
+## `V` Opcode — Correction Mask (v1.15)
+
+`V` replaces the unused `swap([CL],[IX])` at opcode 56. It computes the
+Hamming correction mask directly from [IX]:
+
+```
+V:  [H0] ^= (1 << hamming_syndrome_4bit([IX]))
+```
+
+In standard-form Hamming(16,11), the 4-bit syndrome IS the bit position
+of a single-bit error. So `1 << syndrome` is the exact correction mask.
+
+**What it replaces:** Phases C + D + C' in the correction path:
+- Phase C: syndrome computation via 16+ Y ops (~60 ops)
+- Phase D: barrel shifter to convert syndrome → bit mask (~40 ops)
+- Phase C': uncompute syndrome (~60 ops)
+- Total replaced: ~160 ops → 1 op
+
+**Safety:** The pre-syndrome filter (I) guarantees only 1-bit errors
+reach V. 2-bit errors go to copy-over, clean cells bypass entirely.
+
+**Result:** Gadget shrinks from 379 to 147 ops (61% reduction).
+Correction cycle drops from 394 to 198 steps (2x faster sweeps).
+
 ## Files Modified
 
 - `fb2d.py`: Replace M with I in OPCODES, OPCODE_PAYLOADS, step(),

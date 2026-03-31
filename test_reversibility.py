@@ -76,7 +76,7 @@ OPCODE_SPECS = [
     (53, 'm',  ['h0', 'ix'],        ['h0']),
     (54, 'I',  ['h0', 'ix'],        ['h0']),   # syndrome inspect (replaced M)
     (55, 'j',  ['h0', 'ix'],        ['ix']),
-    (56, 'V',  ['cl', 'ix'],        ['cl', 'ix']),
+    (56, 'V',  ['h0', 'ix'],        ['h0']),   # correction mask (replaced swap)
 ]
 
 
