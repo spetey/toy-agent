@@ -110,7 +110,7 @@ codeword of the [11,6,4] opcode code. Waste cleanup is auto-enabled.
 
 Build and test: `python3 programs/immunity-gadgets-v5-low-waste.py`
 
-## ISA Summary (v1.14, 62 opcodes + NOP)
+## ISA Summary (v1.15, 62 opcodes + NOP)
 
 ### Mirrors
 | Op | Code | Meaning |
@@ -175,7 +175,7 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | Op | Code | Meaning |
 |----|------|---------|
 | `m` | 53 | [H0] ^= [IX] — raw 16-bit XOR (self-inverse, copy-in/uncompute) |
-| `M` | 54 | payload(H0) -= payload(IX) — Δp payload subtract |
+| `I` | 54 | [H0] ^= syndrome_5bit([IX]) — syndrome inspect (self-inverse) |
 | `j` | 55 | [IX] ^= [H0] — write-back (raw 16-bit, self-inverse) |
 | `V` | 56 | swap([CL], [IX]) — test bridge (self-inverse) |
 
@@ -222,7 +222,7 @@ upward rewind loop. Boundary detection uses 0xFFFF cells (shown as
 - `C` / `D` are inverses (IX vertical momentum advance/retreat)
 - `H`/`h`, `a`/`d` are inverses (IX head movement)
 - `N`/`S`, `E`/`W`, etc. are inverses (all head movement pairs)
-- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`, `j`, `V`, `U`, `O` are self-inverse
+- `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`, `I`, `j`, `V`, `U`, `O` are self-inverse
 
 ### Reversibility Invariants and NOP Guards (v1.13)
 
@@ -237,7 +237,7 @@ some operations become non-bijective (e.g., `[H0] ^= [H1]` with H0==H1
 always gives 0, losing the original value). These are NOP when the
 aliasing occurs:
 - `x`, `.`, `,`, `Y`: NOP when H0 == H1
-- `m`, `M`: NOP when H0 == IX
+- `m`, `I`: NOP when H0 == IX
 - `j`: NOP when IX == H0
 - `F`: NOP when CL == H0 or CL == H1
 - `f`: NOP when CL == H0 or CL == H1
@@ -254,7 +254,7 @@ the IP is currently sitting on, it changes the opcode that `step_back()`
 will later read. step_back would then undo the wrong operation. Guard:
 any grid write whose target address == the IP's flat position is NOP.
 This applies to all data ops that modify grid cells (+, -, ., ,, X, F,
-G, T, P, Q, Z, x, r, l, f, z, R, L, Y, :, ;, m, M, j, V). Head
+G, T, P, Q, Z, x, r, l, f, z, R, L, Y, :, ;, m, I, j, V). Head
 movement ops and mirrors don't write to the grid, so they need no guard.
 
 **G value guard** (v1.13): `G` (swap H1 register with grid[H0]) is NOP
@@ -262,7 +262,7 @@ when `grid[H0] >= grid_size`. Without this, the modulo clamp
 `h1 % grid_size` loses information, making the swap irreversible.
 
 **Why payload arithmetic is already bijective**: the Δp operations
-(+, -, ., ,, :, ;, P, Q, M) work by extracting data bits directly from
+(+, -, ., ,, :, ;, P, Q) work by extracting data bits directly from
 fixed bit positions (DATA_MASK), NOT by guessing the nearest valid
 codeword. The XOR flip pattern changes both the data bits and the
 matching parity bits. Any error pattern in the parity bits is carried
@@ -459,8 +459,7 @@ Solution: **copy-down pattern** using the IX interoceptor.
   code cells (eventually with adaptive boundary detection).
 - `m` copies [IX] to a local EX-row cell (since it's zero).
 - All correction logic runs locally on the EX row (H0, H1, CL, EX).
-- `M` uncomputes the local copy (before writing back, so remote is still
-  original and the subtraction cleanly zeroes).
+- `m` uncomputes the local copy (XOR again with unchanged remote zeroes it).
 - `j` writes the correction mask back: [IX] ^= [H0].
 - `V` enables boundary detection: swap [CL] ↔ [IX] to test remote cells
   with conditional mirrors.
@@ -519,7 +518,7 @@ range check using existing ops. For now, hardcode sweep ranges.
    Guard added to all grid-writing ops in both step() and step_back().
    Not triggered in normal gadget operation (heads on stomach, IP on code
    rows), but prevents irreversibility during cascading failures.
-   Note: Δp operations (+, -, ., ,, :, ;, P, Q, M) were confirmed to be
+   Note: Δp operations (+, -, ., ,, :, ;, P, Q) were confirmed to be
    already bijective on ALL 65536 cell values because `_CELL_TO_PAYLOAD`
    extracts raw data bits (not nearest-codeword payloads). The error
    syndrome is preserved through arithmetic — no fix was needed.
@@ -608,7 +607,7 @@ range check using existing ops. For now, hardcode sweep ranges.
   scanning pattern should be in gadget code, not hardware; (b) agents need
   to detect boundaries adaptively, not assume a fixed sweep topology;
   (c) programmable H2 + `V` test bridge enables future boundary detection.
-  Key insight: copy-down pattern (`m`/`M`/`j`) means only H2 touches
+  Key insight: copy-down pattern (`m`/`j`) means only H2 touches
   remote rows, eliminating the H0 shuttle problem entirely.
 - **Nearest-codeword payload decoding**: the d_min=4 opcode encoding
   ([11,6,4] linear code) is now used as an error-CORRECTING code, not

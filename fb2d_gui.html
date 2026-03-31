@@ -326,7 +326,7 @@ const OPCODE_CHARS = {
   44:'R', 45:'L', 46:'Y',
   47:':', 48:';',
   49:'H', 50:'h', 51:'a', 52:'d',
-  53:'m', 54:'M', 55:'j', 56:'V',
+  53:'m', 54:'I', 55:'j', 56:'V',
   57:'A', 58:'B', 59:'U',
   60:'C', 61:'D', 62:'O'
 };
@@ -381,7 +381,7 @@ const OPCODE_NAMES = {
   44:'rot right by [CL]', 45:'rot left by [CL]', 46:'XOR rot (fused)',
   47:'[CL]++', 48:'[CL]--',
   49:'IX North', 50:'IX South', 51:'IX East', 52:'IX West',
-  53:'[H0]^=[IX]', 54:'payload-=[IX]', 55:'[IX]^=[H0]', 56:'swap([CL],[IX])',
+  53:'[H0]^=[IX]', 54:'[H0]^=syn([IX])', 55:'[IX]^=[H0]', 56:'swap([CL],[IX])',
   57:'IX advance', 58:'IX retreat', 59:'IX flip dir',
   60:'IX v-advance', 61:'IX v-retreat', 62:'IX v-flip'
 };
@@ -1000,18 +1000,21 @@ function drawRulers(r0, r1, c0, c1) {
   }
 }
 
-// NOP filler: payload 1017 (cell 0x7e8e). The 64th codeword of the [11,6,4]
-// opcode code — a true codeword, not just in the correction ball. Both 1-bit
-// AND 2-bit data errors still decode to NOP (0/55 two-bit errors → real opcode).
-// Displayed as 'o' to distinguish from zero-payload NOP (·).
-// Data-bit distance 8 from zero, distance 3 from 2047 (boundary marker).
+// NOP filler: payload 1017 (cell 0x7E8E). The 64th codeword of the [11,6,4]
+// opcode code. Both 1-bit AND 2-bit data errors still decode to NOP.
+// The I opcode (syndrome inspect) replaces the unused M opcode at code 54
+// (payload 54), so payload 1017 stays available as NOP filler.
 const NOP_FILLER_PAYLOAD = 1017;
+// Precompute set of payloads that are NOP filler or 1-bit-damaged NOP filler.
+// All decode to NOP (opcode 0) thanks to d_min=4 encoding.
+const NOP_FILLER_PAYLOADS = new Set([NOP_FILLER_PAYLOAD]);
+for (let bit = 0; bit < 11; bit++) NOP_FILLER_PAYLOADS.add(NOP_FILLER_PAYLOAD ^ (1 << bit));
 
 function cellChar(val) {
   const payload = cellToPayload(val);
   const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
-  // Show NOP filler as 'o' to distinguish from true NOP (payload 0)
-  if (opcode === 0 && payload === NOP_FILLER_PAYLOAD) return 'o';
+  // Show NOP filler as 'o' — including 1-bit-damaged copies (still decode to NOP)
+  if (opcode === 0 && NOP_FILLER_PAYLOADS.has(payload)) return 'o';
   // Show boundary marker (payload 2047 = 0xFFFF) as '~'
   if (opcode === 0 && payload === 2047) return '~';
   if (opcode in OPCODE_CHARS) return OPCODE_CHARS[opcode];
@@ -1263,6 +1266,7 @@ canvas.addEventListener('mousemove', (e) => {
     const opcode = PAYLOAD_TO_OPCODE_NEAREST[payload];
     const name = (opcode === 0 && payload === 2047) ? 'boundary'
                : (opcode === 0 && payload === NOP_FILLER_PAYLOAD) ? 'NOP filler'
+               : (opcode === 0 && NOP_FILLER_PAYLOADS.has(payload)) ? 'NOP filler (damaged)'
                : OPCODE_NAMES[opcode] || (opcode === 0 ? 'NOP' : `op${opcode}`);
     const { syn, pAll } = hammingSyndrome(val);
     const synStr = syn === 0 && pAll === 0 ? 'ok' : `syn=${syn}${pAll ? '!' : ''}`;
@@ -1639,9 +1643,10 @@ const OPCODE_GROUPS = [
   { label: 'EX Data', ops: [[27,'P'], [28,'Q'], [33,'K'], [38,'Z']] },
   { label: 'EX Mirrors', ops: [[34,'('], [35,')'], [36,'#'], [37,'$']] },
   { label: 'IX Move', ops: [[49,'H'], [50,'h'], [51,'a'], [52,'d']] },
-  { label: 'IX Data', ops: [[53,'m'], [54,'M'], [55,'j'], [56,'V']] },
+  { label: 'IX Data', ops: [[53,'m'], [55,'j'], [56,'V']] },
   { label: 'IX H-Momentum', ops: [[57,'A'], [58,'B'], [59,'U']] },
   { label: 'IX V-Momentum', ops: [[60,'C'], [61,'D'], [62,'O']] },
+  { label: 'IX Syndrome', ops: [[54,'I']] },
   { label: 'Special', special: [
     { payload: 1017, ch: 'o', name: 'NOP filler' },
     { payload: 2047, ch: '~', name: 'Boundary (0xFFFF)' },

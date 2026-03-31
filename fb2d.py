@@ -2,7 +2,8 @@
 """
 F***brain 2D Grid Simulator v1
 Authored or modified by Claude
-Version: 2026-03-16 v1.12 — IX vertical momentum ops (C/D/O) for ping-pong scan
+Version: 2026-03-30 v1.15 — Syndrome inspect op (I) for pre-syndrome filter
+                            v1.12: IX vertical momentum ops (C/D/O) for ping-pong scan
                             v1.11: head-overlap NOP guards for true reversibility
                             v1.10: IX momentum ops (A/B/U)
                             v1.9: IX interoceptor for cross-gadget correction
@@ -114,7 +115,7 @@ OPCODES = {
     'a':  51,  # IX move East  (inverse: d)
     'd':  52,  # IX move West  (inverse: a)
     'm':  53,  # [H0] ^= [IX]  (raw 16-bit XOR, self-inverse, copy-in/uncompute)
-    'M':  54,  # payload(H0) -= payload(IX) with Δp  (inverse: see notes)
+    'I':  54,  # [H0] ^= syndrome_5bit_mapped([IX])  (self-inverse)
     'j':  55,  # [IX] ^= [H0]  (raw 16-bit write-back, self-inverse)
     'V':  56,  # swap([CL], [IX])  (test bridge, self-inverse)
     # ── IX momentum operations (v1.10) ──
@@ -307,6 +308,37 @@ for _p in range(2048):
     DEC_XOR[_p] = PAYLOAD_FLIP_TO_CELL_FLIP[_p ^ _new]
 
 del _pf, _cf, _i, _p, _new
+
+# Precompute SYNDROME_XOR_MASK: for each 16-bit cell value, the raw 16-bit
+# XOR mask that encodes the 4-bit Hamming syndrome + overall parity into
+# DATA_MASK positions.  Used by the I opcode:
+#   [H0] ^= SYNDROME_XOR_MASK[grid[IX]]
+#
+# 5 bits mapped to data positions (all in DATA_MASK):
+#   s0 → bit 3  (d0)    s1 → bit 5  (d1)    s2 → bit 6  (d2)
+#   s3 → bit 7  (d3)    p_all → bit 9  (d4)
+#
+# payload(result) ≠ 0 iff [IX] has ANY error, including bit-0-only
+# (syndrome=0, p_all=1).  This closes the gap that a 4-bit-only test
+# would have: bit 0 is the overall parity position, not covered by the
+# 4-bit syndrome.  Including p_all means all SECDED error classes are
+# caught by the pre-syndrome filter.
+SYNDROME_XOR_MASK = [0] * 65536
+for _v in range(65536):
+    _s = 0
+    for _i in range(4):
+        if _popcount(_v & _SYNDROME_MASKS[_i]) & 1:
+            _s |= (1 << _i)
+    _p_all = _popcount(_v) & 1
+    # Map 5 bits to data positions
+    _mask = 0
+    if _s & 1: _mask |= (1 << 3)   # s0 → d0 (bit 3)
+    if _s & 2: _mask |= (1 << 5)   # s1 → d1 (bit 5)
+    if _s & 4: _mask |= (1 << 6)   # s2 → d2 (bit 6)
+    if _s & 8: _mask |= (1 << 7)   # s3 → d3 (bit 7)
+    if _p_all: _mask |= (1 << 9)   # p_all → d4 (bit 9)
+    SYNDROME_XOR_MASK[_v] = _mask
+del _v, _s, _i, _p_all, _mask
 
 # ─── ANSI Color Codes ─────────────────────────────────────────────────
 
@@ -650,12 +682,9 @@ class FB2DSimulator:
             if self.h0 != self.ix and self.h0 != flat_ip:
                 self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.ix]
 
-        elif opcode == 54:   # M payload(H0) -= payload(IX) with Δp (uncompute)
-            if self.h0 != self.ix and self.h0 != flat_ip:
-                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-                _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.ix]])) & PAYLOAD_MASK
-                _fl = _op ^ _np
-                self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+        elif opcode == 54:   # I [H0] ^= syndrome_5bit_mapped([IX]) (self-inverse)
+            if self.h0 != flat_ip and self.h0 != self.ix:
+                self.grid[self.h0] ^= SYNDROME_XOR_MASK[self.grid[self.ix]]
 
         elif opcode == 55:   # j [IX] ^= [H0]  (raw 16-bit write-back, self-inverse)
             if self.ix != self.h0 and self.ix != flat_ip:
@@ -686,7 +715,7 @@ class FB2DSimulator:
         elif opcode == 62:   # O flip ix_vdir (N↔S, E↔W, self-inverse)
             self.ix_vdir = self.ix_vdir ^ 2
 
-        # else: NOP (0 or 63–2047 payload)
+        # else: NOP (0 or unrecognized payload)
 
         # ── Trace output ──
         if self.trace:
@@ -887,12 +916,9 @@ class FB2DSimulator:
             if self.h0 != self.ix and self.h0 != prev_flat:
                 self.grid[self.h0] = self.grid[self.h0] ^ self.grid[self.ix]
 
-        elif opcode == 54:   # M was -=, undo += (Δp add)
-            if self.h0 != self.ix and self.h0 != prev_flat:
-                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-                _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.ix]])) & PAYLOAD_MASK
-                _fl = _op ^ _np
-                self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
+        elif opcode == 54:   # I is self-inverse (XOR)
+            if self.h0 != prev_flat and self.h0 != self.ix:
+                self.grid[self.h0] ^= SYNDROME_XOR_MASK[self.grid[self.ix]]
 
         elif opcode == 55:   # j XOR is self-inverse
             if self.ix != self.h0 and self.ix != prev_flat:
@@ -1122,6 +1148,9 @@ class FB2DSimulator:
             # is displayed as ~ to distinguish from regular NOP.
             if opcode == 0 and payload == 2047:
                 return '~'
+            # NOP filler: payload 1017 displayed as 'o'.
+            if opcode == 0 and payload == 1017:
+                return 'o'
             return OPCODE_TO_CHAR[opcode]
         if value < 100:
             return f'{value:2d}'
