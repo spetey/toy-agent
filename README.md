@@ -26,13 +26,13 @@ in turn based on brainfuck. (fuckbrain = reversible brainfuck.)
   Corrects 1-bit errors, detects 2-bit errors. The IP reads the payload
   (data bits) as the opcode. Arithmetic ops automatically maintain the
   Hamming invariant.
-- **Self-correcting**: a Hamming correction gadget detects and corrects
-  single-bit errors in any cell via the IX copy-down pattern. Two gadgets
-  can correct each other's code simultaneously (mutual correction). The
-  probe-bypass architecture adds a fast path: clean cells (parity=0) skip
-  the full barrel-shifter correction, reducing per-cell cost. NOP filler
-  cells use payload 1017 (the 64th codeword of the [11,6,4] code), which
-  is immune to both 1-bit and 2-bit data errors.
+- **Self-correcting**: two gadgets correct each other's code simultaneously
+  via the IX copy-down pattern. The v8 architecture uses two specialized
+  opcodes (`I` and `V`) to replace 160 ops of syndrome computation with
+  2 ops, shrinking the gadget to 147 ops. A pre-syndrome filter (`I T ?`)
+  lets 95% of cells bypass correction in ~84 steps, while 2-bit errors
+  get copy-over correction via IX round-trip to the partner's own copy.
+  MTTF is 4.8–6.8× longer than v5 under noise.
 
 ## Quick Start
 
@@ -43,29 +43,31 @@ pip install flask          # one-time setup
 python3 fb2d_server.py     # starts on http://localhost:5001
 ```
 
-1. Load **immunity-gadgets-v5-low-waste-w100** from the dropdown
+1. Load **immunity-gadgets-v8-correction-mask-w101** from the dropdown
 2. Enable waste cleanup (click the "Waste" button or press `W`)
 3. Enable noise — press `N`, set rate to ~50 flips/1M rounds, seed 42
 4. Press Space to play
 
 Watch: IP0 (red) corrects gadget B's code via IX (blue), IP1 (orange)
 corrects gadget A simultaneously. Clean cells (NOP filler `o`) take the
-bypass shortcut. Dirty cells (yellow = 1-bit error) get full Hamming
-correction. Boundary rows (`~` = 0xFFFF) mark the IX scan boundaries.
-Green cells on the waste row show the EX trail — all non-zero (solid
-waste trail, no blanks).
+pre-syndrome bypass. Dirty cells (yellow = 1-bit error) get single-op `V`
+correction. Red cells (2-bit error) get copy-over from partner. Boundary
+rows (`~` = 0xFFFF) mark the IX scan boundaries.
 
 ### Tests
 
 ```bash
-# Immunity gadgets v5 — low-EX-waste dual correction (★ start here)
+# Immunity gadgets v8 — I+V opcodes, 147-op gadget (★ start here)
+python3 programs/immunity-gadgets-v8-correction-mask.py
+
+# v7 — I opcode only, 379-op gadget (pre-V, for comparison)
+python3 programs/immunity-gadgets-v7-syndrome-inspect.py
+
+# v5 — baseline low-EX-waste dual correction (374 ops)
 python3 programs/immunity-gadgets-v5-low-waste.py
 
-# Previous version (v4 rewind-loop, for comparison)
-python3 programs/immunity-gadgets-v4-loop.py
-
-# Sweep strategy comparison — ping-pong vs rewind loop
-python3 programs/sweep-model.py
+# v5 vs v7 MTTF comparison under noise
+python3 programs/compare-v5-v7.py
 
 # Compiler tests (16 tests: factorial, nested loops, stream I/O, reversal)
 python3 ifbc.py --test-all
@@ -109,8 +111,8 @@ change each IP's direction. Each IP has five independent heads:
 
 Code and data share the same surface (von Neumann architecture). The
 ISA has 62 opcodes (byte-level arithmetic, bit-level operations, head
-movement, mirrors, EX operations, IX scan ops, and IX momentum ops
-for serpentine scanning with top-down rewind loop). See
+movement, mirrors, EX operations, IX scan/syndrome/correction ops, and
+IX momentum ops for serpentine scanning with top-down rewind loop). See
 [`docs/isa.md`](docs/isa.md) for the full ISA reference.
 
 ### 16-Bit Cells
@@ -146,33 +148,36 @@ Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
 
 ### Hamming Correction Gadget
 
-The IX copy-down correction gadget corrects single-bit errors:
+The correction architecture has evolved through several versions:
 
-1. `m` copies a remote codeword to local EX scratch (via IX interoceptor)
-2. Compute overall parity and syndrome via Y (fused rotate-XOR)
-3. Build a 1-hot correction mask using a barrel shifter
-4. `m` uncomputes the local copy, `j` writes the correction mask back
-5. All heads advance — ready for the next codeword
+**v5 (baseline, 374 ops)**: IX copy-down pattern with probe-bypass. `m`
+copies a remote codeword locally, Y ops compute syndrome, a barrel
+shifter builds the correction mask, `j` writes it back. Clean cells
+(parity=0) bypass to save ~58% of steps. Low-waste EX design: 0 cells
+per clean scan, 3 per correction.
 
-Only IX touches remote data; all other heads stay local. This enables
-**mutual correction**: two gadgets on separate IPs, each correcting the
-other's code via IX.
+**v7 (379 ops)**: Adds the `I` opcode (syndrome inspect). A pre-syndrome
+filter `I T ?` tests [IX]'s integrity *before* copy-in. Clean cells
+(syndrome=0 AND p_all=0) skip the entire correction pipeline in ~84
+steps. 2-bit errors get copy-over correction via IX round-trip to the
+gadget's own corresponding cell. 2.6× longer MTTF than v5 at 200
+flips/1M noise.
 
-The **probe-bypass** variant adds a fast path: before running the full
-barrel-shifter, a parity probe tests whether the cell has any error at
-all. Clean cells (overall parity = 0) branch to a bypass row that undoes
-the probe and skips correction entirely. Only dirty cells pay the full
-correction cost (~58% step savings).
+**v8 (147 ops, ★ current)**: Adds the `V` opcode (correction mask).
+Replaces Phase C (syndrome computation, ~60 ops) + Phase D (barrel
+shifter, ~40 ops) + Phase C' (uncompute, ~60 ops) with a single `V`
+that computes `1 << syndrome([IX])` — the exact correction mask. The
+gadget is 61% smaller than v5, correction sweeps are 2× faster, and
+MTTF is **4.8–6.8× longer** than v5 under noise.
 
-The **v5 low-waste** architecture minimizes EX (waste trail) consumption.
-EX sits on a dirty cell in neutral state; the main merge uses `(` (fire
-on [EX]!=0) so bypass paths consume zero EX cells. The rewind loop uses
-`(` re-entry with `P`-based signaling, eliminating CL accumulation. Phase
-G deposits both EV and PA via `+Z]+Z]` — the `+` guarantees non-zero
-trail cells (no blanks), enabling a solid waste trail for future
-metabolism. Net: 0 EX cells per clean scan, 3 per correction.
+| Version | Ops | Clean path | Dirty path | 2-bit fix | MTTF vs v5 |
+|---------|-----|------------|------------|-----------|------------|
+| v5 | 374 | 162 steps | 390 steps | No | 1× |
+| v7 | 379 | 84 steps | 394 steps | Yes | 2.6× |
+| v8 | 147 | 84 steps | 198 steps | Yes | 4.8–6.8× |
 
-See `docs/barrel-shifter-correction.md` for algorithm details.
+See [`docs/i-opcode-design.md`](docs/i-opcode-design.md) for the I and V
+opcode design, and [`docs/isa.md`](docs/isa.md) for the full ISA reference.
 
 ### Reversibility
 

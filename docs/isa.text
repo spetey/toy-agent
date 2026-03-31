@@ -1,9 +1,13 @@
-# fb2d Instruction Set Architecture (v1.14)
+# fb2d Instruction Set Architecture (v1.15)
 
 62 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
 `payload(cell)` (the 11 data bits of the Hamming(16,11) codeword) as
 the opcode. Payloads corresponding to opcodes 1-62 (or within Hamming
 distance 1 of such a payload) execute that opcode; everything else is NOP.
+
+v1.15 changes: `I` (syndrome inspect) replaces the unused `M` (payload
+subtract via IX) at opcode 54. `M` was completely superseded by `m` (raw
+XOR) in the copy-down architecture.
 
 ## Cell Format
 
@@ -16,8 +20,8 @@ Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
 
 - **Payload**: 11 data bits → opcode or value (0-2047)
 - **Parity**: 5 check bits at positions 0, 1, 2, 4, 8
-- Arithmetic ops (+, -, ., ,, :, ;, P, Q, M) maintain the Hamming invariant
-- Bit-level ops (r, l, R, L, Y, x, z, f, m, j) operate on all 16 raw bits
+- Arithmetic ops (+, -, ., ,, :, ;, P, Q) maintain the Hamming invariant
+- Bit-level ops (r, l, R, L, Y, x, z, f, m, j, I) operate on all 16 raw bits
 
 ## Opcode Encoding
 
@@ -178,33 +182,53 @@ path uses `Q` to erase the breadcrumb, restoring [EX] to 0.
 IX is a programmable interoceptor for cross-gadget correction. In the
 dual-gadget architecture, each gadget's IX points at the other gadget's
 code cells. The copy-down pattern: `m` copies a remote codeword to a
-local EX cell, correction runs locally, then `j` writes the correction
+local cell, correction runs locally, then `j` writes the correction
 mask back to the remote cell.
 
 | Op | Payload | Description | Inverse |
 |----|---------|-------------|---------|
 | `m` | 53 | [H0] ^= [IX] — raw 16-bit XOR (copy-in / uncompute) | self |
-| `M` | 54 | payload([H0]) -= payload([IX]) (mod 2048, with parity fixup) | — |
+| `I` | 54 | [H0] ^= syndrome_5bit([IX]) — syndrome inspect | self |
 | `j` | 55 | [IX] ^= [H0] — raw 16-bit write-back | self |
-| `V` | 56 | swap([CL], [IX]) — test bridge (full 16-bit) | self |
+| `V` | 56 | [H0] ^= (1 << syndrome_4bit([IX])) — correction mask | self |
 
-`m` and `j` operate on raw 16-bit cell values (like bit-level ops).
-`M` operates on payloads and maintains the Hamming invariant (like
-byte-level arithmetic). `V` is a full 16-bit swap.
+`m`, `I`, `j`, and `V` all operate on raw 16-bit cell values (like
+bit-level ops).
+
+**`I` (syndrome inspect, v1.15)**: Computes the 4-bit Hamming syndrome
+AND overall parity of [IX], maps all 5 result bits to DATA_MASK positions,
+and XORs them into [H0]:
+
+- s0 → bit 3 (d0), s1 → bit 5 (d1), s2 → bit 6 (d2), s3 → bit 7 (d3)
+- p_all → bit 9 (d4)
+
+Result: `payload([H0]) != 0` iff [IX] has *any* error — including bit-0-only
+errors (syndrome=0, p_all=1). Self-inverse (XOR). NOP when H0 == IX.
+
+`I` enables a **pre-syndrome filter**: before copying in the remote cell,
+test its integrity with `I T ?`. Clean cells (syndrome=0, p_all=0) bypass
+the entire correction pipeline in ~8 ops instead of ~70. Cells with errors
+continue to the full correction path. This replaces 123 ops of Phase C
+syndrome computation on the bypass path with a single opcode.
 
 The copy-down pattern for correcting a remote cell:
 
 1. `m` — copy remote codeword [IX] into local zero cell via XOR
-2. Run correction logic locally (H0, H1, CL, EX on the EX row)
-3. `M` — uncompute local copy (payload subtract zeroes the payload,
-   since the remote cell is still the original value)
+2. Run correction logic locally (H0, H1, CL, EX on the stomach row)
+3. `m` — uncompute local copy (XOR again zeroes the cell)
 4. `j` — write correction mask back: [IX] ^= [H0]
 
 Only IX touches remote rows; all other heads stay local.
 
-`V` (test bridge) enables boundary detection: swap [CL] with [IX] to
-test a remote cell's value with conditional mirrors (`?`/`%`), then `V`
-again to restore.
+**`V` (correction mask, v1.15)**: Computes `1 << hamming_syndrome_4bit([IX])`
+and XORs it into [H0]. In standard-form Hamming(16,11), the 4-bit syndrome
+IS the error bit position, so `1 << syndrome` is the exact single-bit
+correction mask. Self-inverse (XOR). NOP when H0 == IX.
+
+`V` replaces Phases C+D+C' (~160 ops of syndrome computation, barrel
+shifting, and uncompute) with a single opcode. The pre-syndrome filter (`I`)
+guarantees only 1-bit errors reach `V` — 2-bit errors go to copy-over,
+clean cells bypass entirely. Shrinks the gadget from 379 to 147 ops.
 
 ## IX Horizontal Momentum Ops (3 opcodes)
 
@@ -283,7 +307,7 @@ Every opcode has a unique inverse (itself or another opcode):
 | `C`/`D` | `D`/`C` | IX vertical momentum advance / retreat |
 
 Self-inverse ops: `X`, `F`, `G`, `T`, `K`, `Z`, `x`, `f`, `z`, `Y`,
-`m`, `j`, `V`, `U`, `O`
+`m`, `I`, `j`, `V`, `U`, `O`
 
 Mirrors (`/`, `\`, `%`, `?`, `&`, `!`, `(`, `)`, `#`, `$`) are
 self-inverse: the IP direction mapping is its own inverse — running

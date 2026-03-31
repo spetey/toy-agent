@@ -190,10 +190,10 @@ mask back to the remote cell.
 | `m` | 53 | [H0] ^= [IX] — raw 16-bit XOR (copy-in / uncompute) | self |
 | `I` | 54 | [H0] ^= syndrome_5bit([IX]) — syndrome inspect | self |
 | `j` | 55 | [IX] ^= [H0] — raw 16-bit write-back | self |
-| `V` | 56 | swap([CL], [IX]) — test bridge (full 16-bit) | self |
+| `V` | 56 | [H0] ^= (1 << syndrome_4bit([IX])) — correction mask | self |
 
-`m`, `I`, and `j` operate on raw 16-bit cell values (like bit-level ops).
-`V` is a full 16-bit swap.
+`m`, `I`, `j`, and `V` all operate on raw 16-bit cell values (like
+bit-level ops).
 
 **`I` (syndrome inspect, v1.15)**: Computes the 4-bit Hamming syndrome
 AND overall parity of [IX], maps all 5 result bits to DATA_MASK positions,
@@ -220,9 +220,15 @@ The copy-down pattern for correcting a remote cell:
 
 Only IX touches remote rows; all other heads stay local.
 
-`V` (test bridge) enables boundary detection: swap [CL] with [IX] to
-test a remote cell's value with conditional mirrors (`?`/`%`), then `V`
-again to restore.
+**`V` (correction mask, v1.15)**: Computes `1 << hamming_syndrome_4bit([IX])`
+and XORs it into [H0]. In standard-form Hamming(16,11), the 4-bit syndrome
+IS the error bit position, so `1 << syndrome` is the exact single-bit
+correction mask. Self-inverse (XOR). NOP when H0 == IX.
+
+`V` replaces Phases C+D+C' (~160 ops of syndrome computation, barrel
+shifting, and uncompute) with a single opcode. The pre-syndrome filter (`I`)
+guarantees only 1-bit errors reach `V` — 2-bit errors go to copy-over,
+clean cells bypass entirely. Shrinks the gadget from 379 to 147 ops.
 
 ## IX Horizontal Momentum Ops (3 opcodes)
 

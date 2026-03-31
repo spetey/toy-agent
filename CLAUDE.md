@@ -177,7 +177,7 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `m` | 53 | [H0] ^= [IX] — raw 16-bit XOR (self-inverse, copy-in/uncompute) |
 | `I` | 54 | [H0] ^= syndrome_5bit([IX]) — syndrome inspect (self-inverse) |
 | `j` | 55 | [IX] ^= [H0] — write-back (raw 16-bit, self-inverse) |
-| `V` | 56 | swap([CL], [IX]) — test bridge (self-inverse) |
+| `V` | 56 | [H0] ^= (1 << syndrome_4bit([IX])) — correction mask (self-inverse) |
 
 IX is a programmable interoceptor for cross-gadget correction.
 In the dual-gadget architecture, each gadget's IX points at the
