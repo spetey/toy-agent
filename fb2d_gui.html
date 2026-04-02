@@ -16,6 +16,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
 #toolbar button.active { background: #e94560; }
 #btnNoise.active { background: #e17055; }
 #btnExCleanup.active { background: #00b894; }
+#btnFreeFood.active { background: #fdcb6e; color: #2d3436; }
 #stepDisplay { font-size: 13px; min-width: 90px; text-align: center; color: #aaa; }
 #speedSlider { width: 80px; accent-color: #533483; }
 #speedLabel { font-size: 11px; color: #888; min-width: 50px; }
@@ -170,6 +171,8 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
   </div>
   <button id="btnExCleanup" title="Reversible waste cleanup (clean cells EX leaves behind)">&#x267B; Waste</button>
   <span id="exCleanupStats" style="color:#55efc4; font-size:11px; display:none;"></span>
+  <button id="btnFreeFood" title="Auto-refill fuel on EX row when food runs low">&#x1F354; Food</button>
+  <span id="freeFoodStats" style="color:#fdcb6e; font-size:11px; display:none;"></span>
   <span style="color:#555">|</span>
   <button id="btnSnapshotSave" title="Download snapshot (deterministic replay)">&#x1F4BE; Snapshot</button>
   <button id="btnSnapshotLoad" title="Load snapshot from file">&#x1F4C2; Load Snap</button>
@@ -602,6 +605,7 @@ async function refreshState() {
   updateStatus();
   updateNoiseStats(state);
   updateGpCleanupStats(state);
+  updateFreeFoodStats(state);
   render();
 }
 
@@ -609,6 +613,7 @@ function afterStep() {
   updateStatus();
   updateNoiseStats(state);
   updateGpCleanupStats(state);
+  updateFreeFoodStats(state);
   followIP();
   render();
 }
@@ -1947,6 +1952,48 @@ function updateGpCleanupStats(st) {
   }
 }
 
+// ── Free food (metabolism testing) ────────────────────────────
+let freeFoodEnabled = false;
+
+async function toggleFreeFood() {
+  freeFoodEnabled = !freeFoodEnabled;
+  const btn = document.getElementById('btnFreeFood');
+  const stats = document.getElementById('freeFoodStats');
+  if (freeFoodEnabled) {
+    btn.classList.add('active');
+    stats.style.display = '';
+    stats.textContent = 'bite=15';
+  } else {
+    btn.classList.remove('active');
+    stats.style.display = 'none';
+  }
+  await api('free_food', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ enabled: freeFoodEnabled })
+  });
+}
+
+function updateFreeFoodStats(st) {
+  if (!st) return;
+  const el = document.getElementById('freeFoodStats');
+  if (el && st.free_food_enabled) {
+    el.textContent = `bite=${st.free_food_bite_size || 15}`;
+    el.style.display = '';
+  } else if (el) {
+    el.style.display = 'none';
+  }
+  if (st.free_food_enabled !== undefined && st.free_food_enabled !== freeFoodEnabled) {
+    freeFoodEnabled = st.free_food_enabled;
+    const btn = document.getElementById('btnFreeFood');
+    if (freeFoodEnabled) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  }
+}
+
 // ── Button handlers ────────────────────────────────────────────
 document.getElementById('fileSelect').addEventListener('change', (e) => {
   if (e.target.value === '__new__') {
@@ -2204,6 +2251,7 @@ document.getElementById('noiseType').addEventListener('change', () => { if (nois
 document.getElementById('noiseSeed').addEventListener('change', () => { if (noiseEnabled) sendNoiseConfig(); });
 
 document.getElementById('btnExCleanup').addEventListener('click', toggleExCleanup);
+document.getElementById('btnFreeFood').addEventListener('click', toggleFreeFood);
 
 document.getElementById('btnSnapshotSave').addEventListener('click', doSnapshotSave);
 document.getElementById('btnSnapshotLoad').addEventListener('click', () => {

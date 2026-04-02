@@ -29,6 +29,9 @@ noise_pool = NoisePool(seed=42, flips_per_1M=0.0)
 
 noise_enabled = False
 waste_cleanup_enabled = False
+free_food_enabled = False
+free_food_bite_size = 15
+free_food_payloads = [189, 250, 380, 639]  # A, B, C, D
 
 # Track which step_all count we're on (for pool indexing).
 # This is separate from sim.step_count which counts per-IP steps.
@@ -159,22 +162,222 @@ def _undo_waste_cleanup(step):
     return len(cleaned)
 
 
-def _step_all_forward():
-    """One forward round with reversible noise + waste cleanup.
+# ── Free food (non-reversible cheat for metabolism testing) ────────
 
-    Order: step all IPs, then apply noise, then clean working rows.
+_free_food_log = {}
+
+def _apply_free_food(step):
+    """Refill fuel when the east-end food is running low.
+
+    Detection (no EX dependency — just looks at the row):
+    1. Count contiguous non-zero cells at the EAST end of the row.
+       If this count <= bite_size, trigger.
+    2. Find contiguous non-zero cells at the WEST end of the row.
+       This is the garbage trail.
+
+    Action: clear all west-end garbage EXCEPT the last cell (which
+    EX may be sitting on), and fill those cells with continuing food.
+
+    Example (bite=6):
+      Before: G G G G G G G . . . . . D D D D D .
+      After:  A A A A A A G . . . . . D D D D D .
+    """
+    if not free_food_enabled:
+        return 0
+
+    from fb2d import hamming_encode, _CELL_TO_PAYLOAD
+
+    W = sim.cols
+    bite = free_food_bite_size
+    payloads = free_food_payloads
+    food_payload_set = set(payloads)
+
+    sim._save_active()
+    changes = []
+
+    # Collect EX positions to protect
+    ex_flats = set()
+    for ip in sim.ips:
+        ex_flats.add(ip['ex'])
+
+    for ip in sim.ips:
+        row = ip['ex'] // W
+        base = row * W
+
+        # Count contiguous FOOD cells (any food payload — the whole
+        # AAABBBCCCDDD block counts as one stretch). Find the longest
+        # such stretch, including wrapping around the row ends.
+        # Also track the last food payload for rotation continuation.
+        is_food = [False] * W
+        last_food_payload = None
+        for c in range(W):
+            val = sim.grid[base + c]
+            if val != 0:
+                p = _CELL_TO_PAYLOAD[val]
+                if p in food_payload_set:
+                    is_food[c] = True
+                    last_food_payload = p
+
+        # Find longest contiguous food stretch (with wrapping)
+        max_food_stretch = 0
+        cur = 0
+        # Scan twice to handle wrapping
+        for c in list(range(W)) + list(range(W)):
+            if is_food[c]:
+                cur += 1
+                if cur > max_food_stretch:
+                    max_food_stretch = cur
+                if cur >= W:
+                    break  # entire row is food
+            else:
+                cur = 0
+
+        if max_food_stretch >= 2 * bite:
+            continue  # plenty of food
+
+        # Trigger: longest contiguous food run < 2*bite.
+        # Replace only GARBAGE cells (non-zero cells that aren't part of
+        # a food run) with continuing food. Leave food runs and zeros alone.
+
+        # Identify which cells are part of food runs vs garbage.
+        # A food run = contiguous cells with the same food payload (>=2 cells).
+        is_food_run = [False] * W
+        run_start = None
+        run_payload = None
+
+        def _close_run(end_col):
+            """Mark cells [run_start..end_col) as food if run >= 2."""
+            if run_start is not None and end_col - run_start >= 2:
+                for rc in range(run_start, end_col):
+                    is_food_run[rc] = True
+
+        for c in range(W):
+            val = sim.grid[base + c]
+            p = _CELL_TO_PAYLOAD[val] if val != 0 else None
+            if p is not None and p in food_payload_set and p == run_payload:
+                pass  # extend current run
+            else:
+                _close_run(c)  # close previous run
+                if p is not None and p in food_payload_set:
+                    run_start = c
+                    run_payload = p
+                else:
+                    run_start = None
+                    run_payload = None
+        _close_run(W)  # close final run
+
+        # Find garbage cells: non-zero AND not part of a food run
+        garbage_cols = [c for c in range(W)
+                        if sim.grid[base + c] != 0 and not is_food_run[c]]
+        if len(garbage_cols) < 2:
+            continue  # not enough garbage to replace
+
+        # Find the last food cell (easternmost in the contiguous food block)
+        # and determine where to continue the pattern from.
+        # Walk east from food cells to find where food ends and garbage begins.
+        last_food_col = -1
+        last_food_p = None
+        # Scan the food stretch to find its eastern end
+        for c in range(W):
+            if is_food[c]:
+                last_food_col = c
+                last_food_p = _CELL_TO_PAYLOAD[sim.grid[base + c]]
+
+        # Figure out how many cells of the current bite remain.
+        # Count backwards from last_food_col to find how many cells of
+        # last_food_p there are at the tail of the food stretch.
+        tail_count = 0
+        if last_food_col >= 0 and last_food_p is not None:
+            c = last_food_col
+            while c >= 0 and _CELL_TO_PAYLOAD[sim.grid[base + c]] == last_food_p:
+                tail_count += 1
+                c -= 1
+
+        # Determine starting payload and remaining count in current bite
+        if last_food_p is not None and last_food_p in payloads:
+            bite_idx = payloads.index(last_food_p)
+            remaining_in_bite = bite - (tail_count % bite)
+            if remaining_in_bite == bite:
+                # Tail was exactly a multiple of bite, move to next
+                bite_idx = (bite_idx + 1) % len(payloads)
+                remaining_in_bite = bite
+        else:
+            bite_idx = 0
+            remaining_in_bite = bite
+
+        # Fill garbage cells east of the food, wrapping around, continuing
+        # the food pattern. Skip the last garbage cell (EX may be on it).
+        # Order: start from the first garbage cell after the food stretch.
+        first_garbage_after_food = None
+        for gc in garbage_cols:
+            if last_food_col < 0 or gc > last_food_col:
+                first_garbage_after_food = gc
+                break
+        # If no garbage after food, wrap to the first garbage cell
+        if first_garbage_after_food is None:
+            first_garbage_after_food = garbage_cols[0]
+
+        # Build ordered list: garbage east of food first, then wrap
+        ordered_garbage = []
+        idx = garbage_cols.index(first_garbage_after_food)
+        for i in range(len(garbage_cols)):
+            ordered_garbage.append(garbage_cols[(idx + i) % len(garbage_cols)])
+        # Remove the last garbage cell (keep it for EX)
+        last_garbage = garbage_cols[-1]
+        ordered_garbage = [c for c in ordered_garbage if c != last_garbage]
+
+        row_changes = []
+        count_in_bite = 0
+        for c in ordered_garbage:
+            flat = base + c
+            if flat in ex_flats:
+                continue
+            old_val = sim.grid[flat]
+            new_val = hamming_encode(payloads[bite_idx])
+            if old_val != new_val:
+                row_changes.append((flat, old_val))
+                sim.grid[flat] = new_val
+            remaining_in_bite -= 1
+            if remaining_in_bite <= 0:
+                bite_idx = (bite_idx + 1) % len(payloads)
+                remaining_in_bite = bite
+
+        changes.extend(row_changes)
+
+    if changes:
+        _free_food_log[step] = changes
+    return len(changes)
+
+
+def _undo_free_food(step):
+    """Undo free food changes at this step."""
+    changes = _free_food_log.pop(step, None)
+    if not changes:
+        return 0
+    for flat, old_val in reversed(changes):
+        sim.grid[flat] = old_val
+    return len(changes)
+
+
+def _step_all_forward():
+    """One forward round with reversible noise + waste cleanup + free food.
+
+    Order: step all IPs, then apply noise, then clean working rows,
+    then refill food if needed.
     """
     global _step_all_count
     sim.step_all()
     _apply_noise_forward(_step_all_count)
     _apply_waste_cleanup_forward(_step_all_count)
+    _apply_free_food(_step_all_count)
     _step_all_count += 1
 
 
 def _step_all_backward():
-    """Reverse one round: undo waste, undo noise, undo steps."""
+    """Reverse one round: undo food, undo waste, undo noise, undo steps."""
     global _step_all_count
     _step_all_count -= 1
+    _undo_free_food(_step_all_count)
     _undo_waste_cleanup(_step_all_count)
     _undo_noise(_step_all_count)
     sim.step_back_all()
@@ -215,6 +418,9 @@ def serialize_state():
         'waste_cleanup_enabled': waste_cleanup_enabled,
         'waste_pool_pointer': waste_pool.pointer,
         'waste_pool_swaps': waste_pool.total_swaps,
+        # Free food state
+        'free_food_enabled': free_food_enabled,
+        'free_food_bite_size': free_food_bite_size,
     }
     return result
 
@@ -232,7 +438,7 @@ def get_state():
 @app.route('/api/new', methods=['POST'])
 def new_program():
     """Create a blank grid with the specified dimensions."""
-    global current_file, _step_all_count, waste_cleanup_enabled
+    global current_file, _step_all_count, waste_cleanup_enabled, free_food_enabled
     data = request.get_json(force=True)
     rows = int(data.get('rows', 10))
     cols = int(data.get('cols', 10))
@@ -257,13 +463,15 @@ def new_program():
     noise_pool.reset()
     waste_pool.reset()
     _waste_cleanup_log.clear()
+    _free_food_log.clear()
     waste_cleanup_enabled = False
+    free_food_enabled = False
     return jsonify(serialize_state())
 
 
 @app.route('/api/load', methods=['POST'])
 def load_file():
-    global current_file, _step_all_count, waste_cleanup_enabled
+    global current_file, _step_all_count, waste_cleanup_enabled, free_food_enabled
     data = request.get_json(force=True)
     filename = data.get('filename', '')
     # Sanitize: only allow filenames, no path traversal
@@ -280,8 +488,10 @@ def load_file():
     noise_pool.configure(n_code_rows=sim.rows, grid_cols=sim.cols)
     waste_pool.reset()
     _waste_cleanup_log.clear()
-    # Read waste_cleanup hint from state file (default off)
+    _free_food_log.clear()
+    # Read hints from state file (default off)
     waste_cleanup_enabled = _read_state_hint(path, 'waste_cleanup')
+    free_food_enabled = _read_state_hint(path, 'free_food')
     return jsonify(serialize_state())
 
 
@@ -305,7 +515,9 @@ def reset_state():
     noise_pool.configure(n_code_rows=sim.rows, grid_cols=sim.cols)
     waste_pool.reset()
     _waste_cleanup_log.clear()
+    _free_food_log.clear()
     waste_cleanup_enabled = _read_state_hint(path, 'waste_cleanup')
+    free_food_enabled = _read_state_hint(path, 'free_food')
     return jsonify(serialize_state())
 
 
@@ -635,6 +847,7 @@ def set_waste_cleanup():
         if new_enabled and not waste_cleanup_enabled:
             waste_pool.reset()
             _waste_cleanup_log.clear()
+            _free_food_log.clear()
         waste_cleanup_enabled = new_enabled
     print(f'[waste-pool] config: enabled={waste_cleanup_enabled}'
           f' pool_ptr={waste_pool.pointer}')
@@ -649,6 +862,25 @@ def set_waste_cleanup():
 def set_gp_cleanup():
     """Legacy endpoint — redirects to waste_cleanup."""
     return set_waste_cleanup()
+
+
+@app.route('/api/free_food', methods=['POST'])
+def set_free_food():
+    global free_food_enabled, free_food_bite_size
+    data = request.get_json(force=True)
+    if 'enabled' in data:
+        new_enabled = bool(data['enabled'])
+        if new_enabled and not free_food_enabled:
+            _free_food_log.clear()
+        free_food_enabled = new_enabled
+    if 'bite_size' in data:
+        free_food_bite_size = max(1, int(data['bite_size']))
+    print(f'[free-food] config: enabled={free_food_enabled}'
+          f' bite_size={free_food_bite_size}')
+    return jsonify({
+        'enabled': free_food_enabled,
+        'bite_size': free_food_bite_size,
+    })
 
 
 # ── Snapshot routes ───────────────────────────────────────────────
@@ -706,7 +938,7 @@ def load_snapshot():
     if needed, loads it, configures pools, then replays forward to
     the target step count. Returns the final state.
     """
-    global current_file, _step_all_count, noise_enabled, waste_cleanup_enabled
+    global current_file, _step_all_count, noise_enabled, waste_cleanup_enabled, free_food_enabled
 
     data = request.get_json(force=True)
     version = data.get('version', 1)
@@ -755,6 +987,7 @@ def load_snapshot():
 
     waste_pool.reset()
     _waste_cleanup_log.clear()
+    _free_food_log.clear()
     waste_cleanup_enabled = bool(waste_enabled)
 
     # Step 3: Replay forward to target step
