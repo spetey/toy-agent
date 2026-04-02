@@ -49,14 +49,25 @@ fb2d is a 2D reversible esoteric language where:
   with dirty working-area cells). NoisePool provides deterministic,
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
+- **`programs/agent-v1.py`** — Self-fueling agent: dual immunity gadget
+  + metabolism (★ current flagship). Combines v8 SECDED correction with
+  XOR-based metabolism that compresses duplicate fuel runs into zeros.
+  R+11 layout per gadget (3 metabolism rows below the correction code).
+  The metabolism phase runs after each correction cycle: advance-to-fuel
+  (`)`/`]`/`Z`/`T`/`?` loop), reference swap (`Z`/`X`/`Z`/`]`), compression
+  (`&`/`:`/`]`/`Z`/`x`/`T`/`?` loop), walk-back (`)`/`[`/`Z`/`T`/`?` loop).
+  Produces N-1 zeros from N identical fuel cells, consumes 2 per cycle.
+  Build: `python3 programs/agent-v1.py`
 - **`programs/immunity-gadgets-v8-correction-mask.py`** — Correction-mask
-  dual-gadget builder and test suite (★ current MWE). 147 ops, R+8 layout.
-  Key ideas: (1) `I` opcode (syndrome inspect) tests syndrome([IX])
-  without copy-in — clean cells bypass everything. (2) `V` opcode
-  (correction mask) computes `[H0] ^= (1 << syndrome_4bit([IX]))`.
-  (3) Copy-over row handles 2-bit errors via partner cell consultation.
-  (4) Three-way merge at col 2 via EX discrimination ($, P, ().
+  dual-gadget builder (v8, 147 ops, R+8 layout). Superseded by agent-v1
+  for the full agent but still the reference for pure immunity testing.
   Run tests: `python3 programs/immunity-gadgets-v8-correction-mask.py`
+- **`programs/metabolism-v1.py`** — Standalone metabolism loop tests
+  (compression, walk-back, advance-to-fuel, ref swap, full cycle,
+  reversibility). Run tests: `python3 programs/metabolism-v1.py`
+- **`programs/metabolism-v1-manual.fb2d`** — Hand-built metabolism
+  prototype with chained loops using `&` (CL-gated) and `)` (EX-gated)
+  conditional re-entry gates. The design reference for agent-v1.
 - **`programs/immunity-gadgets-v5-low-waste.py`** — Low-EX-waste
   dual-gadget builder (v5, 374 ops). Superseded by v8 but kept for
   reference. Run tests: `python3 programs/immunity-gadgets-v5-low-waste.py`
@@ -91,24 +102,37 @@ fb2d is a 2D reversible esoteric language where:
 
 ## Minimal Working Example
 
-**`programs/immunity-gadgets-v8-correction-mask-w88.fb2d`** — Two mutually-
-correcting Hamming(16,11) gadgets with `I` (pre-syndrome filter) and `V`
-(correction mask) opcodes. 147 ops per gadget, R+8 layout. Clean cells
-bypass via `I` without any copy-in; 1-bit errors get Hamming SECDED
-correction; 2-bit errors get copy-over from the partner gadget. Load:
+**`programs/agent-v1-w88.fb2d`** — Self-fueling agent: two mutually-
+correcting Hamming(16,11) gadgets with XOR-based metabolism. Each gadget
+corrects the other's code via `I` (pre-syndrome filter) and `V`
+(correction mask) opcodes, and fuels itself by compressing duplicate
+runs on its EX row into zeros. R+11 layout per gadget (26×88 grid).
 
 ```bash
 python3 fb2d_server.py          # default port 5001
-python3 fb2d_server.py 5002     # second instance on different port
-# Open http://localhost:5001, load immunity-gadgets-v8-correction-mask-w88
-# Enable noise (seed 42, 50 flips/1M), watch corrections in real-time
+# Open http://localhost:5001, load agent-v1-w88
+# Click "Food" button to enable free-food cheat (auto-refill fuel)
+# Enable noise (seed 42, 200 flips/1M), watch corrections + metabolism
 ```
 
-Each gadget's IX scans the other's code+handler+return+bypass+copy-over
-rows. Boundary rows use 0xFFFF (shown as `~`). NOP filler (payload 1017,
-shown as `o` in GUI) is 2-bit-error safe. Waste cleanup is auto-enabled.
+**How it works**: Each IP runs correction code (boustrophedon rows),
+then drops south into metabolism rows. EX walks east through fuel,
+XORing each cell against a reference in H1. Matches become zeros;
+mismatches trigger walk-back. The corridor returns the IP north to
+the correction code for the next cycle.
 
-Build and test: `python3 programs/immunity-gadgets-v8-correction-mask.py`
+**Free food cheat** (🍔 button): monitors the EX/fuel row. When the
+longest contiguous stretch of food cells drops below 2× bite_size
+(default 15), all garbage cells (non-food, non-zero) get replaced
+with continuing food in the A/B/C/D rotation pattern, picking up
+where the existing food left off. The last garbage cell is preserved
+(EX may be sitting on it). Zeros are never touched.
+
+**Immunity-only MWE**: `programs/immunity-gadgets-v8-correction-mask-w88.fb2d`
+(v8, 147 ops per gadget, R+8 layout). Load with waste cleanup enabled.
+
+Build agent: `python3 programs/agent-v1.py`
+Build v8: `python3 programs/immunity-gadgets-v8-correction-mask.py`
 
 ## ISA Summary (v1.15, 62 opcodes + NOP)
 
@@ -330,7 +354,13 @@ output x            // write to EX trail, zero var
 ## Running Tests
 
 ```bash
-# Correction-mask dual-gadget tests (★ main MWE — v8, 147 ops, I+V opcodes):
+# Self-fueling agent (★ flagship — immunity + metabolism):
+python3 programs/agent-v1.py
+
+# Metabolism standalone tests (compression loop, walk-back, full cycle):
+python3 programs/metabolism-v1.py
+
+# Correction-mask dual-gadget tests (v8, 147 ops, I+V opcodes):
 python3 programs/immunity-gadgets-v8-correction-mask.py
 
 # Pre-syndrome filter tests (v7, I opcode):
@@ -589,11 +619,17 @@ range check using existing ops. For now, hardcode sweep ranges.
    step), payload stays odd → never hits 0. Adding a 3rd P (coprime
    step 3) would visit all values including 0. Width < 1024 is safe
    for horizontal boundary resets (even payload wraps after ~1023 steps).
-10. **[NEXT]** Metabolism/compression: replace infinite-zero reservoir
-    (WastePool) with a finite fuel source. Core idea: XOR-of-identical-
-    pairs — two identical cells XOR to zero (fuel for EX). Reversible:
-    the non-zero residual is waste. This is the "other half" of the
-    agent: immunity keeps the code intact, metabolism keeps it fueled.
+10. ~~Metabolism/compression: replace infinite-zero reservoir with
+    finite fuel.~~ ✓ Agent-v1 combines immunity + metabolism.
+    XOR-of-identical-runs: EX walks east through fuel, XORs each cell
+    against a reference in H1. Matches → zeros (fuel for correction).
+    Mismatches → walk-back to last dirty cell. Conditional re-entry
+    gates: `)` (EX-gated) for advance/walk-back, `&` (CL-gated) for
+    compression loop. `:` accumulator tracks iterations; 2 zeros
+    consumed per metabolism cycle (accumulator + old reference dump).
+    R+11 layout per gadget (3 metabolism rows: return, main, corridor).
+    GUI "free food" cheat auto-refills fuel when contiguous food
+    stretch < 2× bite_size. `programs/agent-v1.py`.
 11. Reversible noise injection (multibaker-map style): a stored iid
     string determines when to swap two random bits on the grid.
     Deterministic at micro-level (reversible), stochastic-looking at
