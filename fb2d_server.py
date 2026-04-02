@@ -327,7 +327,7 @@ def _apply_free_food(step):
         ordered_garbage = [c for c in ordered_garbage if c != last_garbage]
 
         row_changes = []
-        count_in_bite = 0
+        last_filled_flat = None
         for c in ordered_garbage:
             flat = base + c
             if flat in ex_flats:
@@ -337,10 +337,24 @@ def _apply_free_food(step):
             if old_val != new_val:
                 row_changes.append((flat, old_val))
                 sim.grid[flat] = new_val
+            last_filled_flat = flat
             remaining_in_bite -= 1
             if remaining_in_bite <= 0:
                 bite_idx = (bite_idx + 1) % len(payloads)
                 remaining_in_bite = bite
+
+        # Ensure the last filled cell differs from the preserved garbage
+        # cell. Otherwise the compressor sees them as one run and hits
+        # the zero buffer, causing the zero-in-fuel problem.
+        if last_filled_flat is not None:
+            last_filled_p = _CELL_TO_PAYLOAD[sim.grid[last_filled_flat]]
+            preserved_p = _CELL_TO_PAYLOAD[sim.grid[base + last_garbage]]
+            if last_filled_p == preserved_p and last_filled_flat not in ex_flats:
+                # Change to next payload in rotation
+                alt_idx = (payloads.index(last_filled_p) + 1) % len(payloads)
+                alt_val = hamming_encode(payloads[alt_idx])
+                row_changes.append((last_filled_flat, sim.grid[last_filled_flat]))
+                sim.grid[last_filled_flat] = alt_val
 
         changes.extend(row_changes)
 
