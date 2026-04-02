@@ -243,19 +243,49 @@ for _p in range(2048):
             _c |= (1 << _bp)
     _PAYLOAD_TO_CELL[_p] = _c
 
-_CELL_TO_PAYLOAD = [0] * 65536
+# Raw extraction (no correction): used internally by Δp arithmetic ops
+# which must preserve error patterns through arithmetic.
+_CELL_TO_PAYLOAD_RAW = [0] * 65536
 for _v in range(65536):
     _p = 0
     for _i, _bp in enumerate(DATA_POSITIONS):
         if (_v >> _bp) & 1:
             _p |= (1 << _i)
+    _CELL_TO_PAYLOAD_RAW[_v] = _p
+
+# Inline-ECC extraction: correct single-bit errors before extracting payload.
+# For each cell value, compute syndrome + p_all. If single-bit error
+# (syndrome≠0, p_all=1), flip the indicated bit, then extract.
+# 2-bit errors (syndrome≠0, p_all=0) and valid codewords (syndrome=0)
+# are extracted as-is (no correction possible or needed).
+_CELL_TO_PAYLOAD = [0] * 65536
+for _v in range(65536):
+    _corrected = _v
+    # Compute syndrome
+    _s = 0
+    for _i in range(4):
+        if _popcount(_v & _SYNDROME_MASKS[_i]) & 1:
+            _s |= (1 << _i)
+    _p_all = _popcount(_v) & 1
+    # Single-bit error: syndrome = bit position, p_all = 1
+    if _s != 0 and _p_all == 1:
+        _corrected = _v ^ (1 << _s)  # flip the error bit
+    # Extract payload from corrected value
+    _p = 0
+    for _i, _bp in enumerate(DATA_POSITIONS):
+        if (_corrected >> _bp) & 1:
+            _p |= (1 << _i)
     _CELL_TO_PAYLOAD[_v] = _p
 
-del _p, _c, _i, _bp, _v
+del _p, _c, _i, _bp, _v, _corrected, _s, _p_all
 
 def cell_to_payload(cell):
-    """Extract the 11-bit payload from a standard-form Hamming codeword."""
+    """Extract the 11-bit payload with inline ECC (single-bit correction)."""
     return _CELL_TO_PAYLOAD[cell & CELL_MASK]
+
+def cell_to_payload_raw(cell):
+    """Extract the 11-bit payload WITHOUT correction (raw data bits)."""
+    return _CELL_TO_PAYLOAD_RAW[cell & CELL_MASK]
 
 def hamming_encode(payload):
     """Encode an 11-bit payload into a 16-bit standard-form Hamming(16,11)
@@ -537,23 +567,23 @@ class FB2DSimulator:
 
         elif opcode == 15:   # + payload(H0)++ with Δp parity fixup
             if self.h0 != flat_ip:
-                self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
+                self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.h0]]]
 
         elif opcode == 16:   # - payload(H0)-- with Δp parity fixup
             if self.h0 != flat_ip:
-                self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
+                self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.h0]]]
 
         elif opcode == 17:   # . payload(H0) += payload(H1) with Δp
             if self.h0 != self.h1 and self.h0 != flat_ip:
-                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-                _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+                _op = _CELL_TO_PAYLOAD_RAW[self.grid[self.h0]]
+                _np = (_op + (_CELL_TO_PAYLOAD_RAW[self.grid[self.h1]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 18:   # , payload(H0) -= payload(H1) with Δp
             if self.h0 != self.h1 and self.h0 != flat_ip:
-                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-                _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+                _op = _CELL_TO_PAYLOAD_RAW[self.grid[self.h0]]
+                _np = (_op - (_CELL_TO_PAYLOAD_RAW[self.grid[self.h1]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
@@ -593,11 +623,11 @@ class FB2DSimulator:
         # ── EX (exteroceptor) operations ──
         elif opcode == 27:   # P payload(EX)++ with Δp parity fixup
             if self.ex != flat_ip:
-                self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
+                self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.ex]]]
 
         elif opcode == 28:   # Q payload(EX)-- with Δp parity fixup
             if self.ex != flat_ip:
-                self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
+                self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.ex]]]
 
         elif opcode == 29:   # ] EX East
             self.ex = self._move_head(self.ex, DIR_E)
@@ -690,11 +720,11 @@ class FB2DSimulator:
 
         elif opcode == 47:   # :  payload(CL)++ with Δp parity fixup
             if self.cl != flat_ip:
-                self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
+                self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.cl]]]
 
         elif opcode == 48:   # ;  payload(CL)-- with Δp parity fixup
             if self.cl != flat_ip:
-                self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
+                self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.cl]]]
 
         # ── IX (interoceptor) operations (v1.9) ──
         elif opcode in (49, 50, 51, 52):    # IX movement H/h/a/d
@@ -797,23 +827,23 @@ class FB2DSimulator:
 
         elif opcode == 15:   # was ++, undo -- (Δp dec)
             if self.h0 != prev_flat:
-                self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
+                self.grid[self.h0] ^= DEC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.h0]]]
 
         elif opcode == 16:   # was --, undo ++ (Δp inc)
             if self.h0 != prev_flat:
-                self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.h0]]]
+                self.grid[self.h0] ^= INC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.h0]]]
 
         elif opcode == 17:   # was +=, undo -= (Δp sub)
             if self.h0 != self.h1 and self.h0 != prev_flat:
-                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-                _np = (_op - (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+                _op = _CELL_TO_PAYLOAD_RAW[self.grid[self.h0]]
+                _np = (_op - (_CELL_TO_PAYLOAD_RAW[self.grid[self.h1]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
         elif opcode == 18:   # was -=, undo += (Δp add)
             if self.h0 != self.h1 and self.h0 != prev_flat:
-                _op = _CELL_TO_PAYLOAD[self.grid[self.h0]]
-                _np = (_op + (_CELL_TO_PAYLOAD[self.grid[self.h1]])) & PAYLOAD_MASK
+                _op = _CELL_TO_PAYLOAD_RAW[self.grid[self.h0]]
+                _np = (_op + (_CELL_TO_PAYLOAD_RAW[self.grid[self.h1]])) & PAYLOAD_MASK
                 _fl = _op ^ _np
                 self.grid[self.h0] ^= PAYLOAD_FLIP_TO_CELL_FLIP[_fl]
 
@@ -853,11 +883,11 @@ class FB2DSimulator:
         # ── EX (exteroceptor) undo operations ──
         elif opcode == 27:   # P was ++, undo -- (Δp dec)
             if self.ex != prev_flat:
-                self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
+                self.grid[self.ex] ^= DEC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.ex]]]
 
         elif opcode == 28:   # Q was --, undo ++ (Δp inc)
             if self.ex != prev_flat:
-                self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.ex]]]
+                self.grid[self.ex] ^= INC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.ex]]]
 
         elif opcode in (29, 30, 31, 32):  # EX movement, undo
             self.ex = self._move_head(self.ex, HEAD_MOVE_INVERSE[opcode])
@@ -924,11 +954,11 @@ class FB2DSimulator:
 
         elif opcode == 47:   # : was [CL]++, undo -- (Δp dec)
             if self.cl != prev_flat:
-                self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
+                self.grid[self.cl] ^= DEC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.cl]]]
 
         elif opcode == 48:   # ; was [CL]--, undo ++ (Δp inc)
             if self.cl != prev_flat:
-                self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD[self.grid[self.cl]]]
+                self.grid[self.cl] ^= INC_XOR[_CELL_TO_PAYLOAD_RAW[self.grid[self.cl]]]
 
         # ── IX (interoceptor) undo (v1.9) ──
         elif opcode in (49, 50, 51, 52):    # IX was moved, undo
