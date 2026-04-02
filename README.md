@@ -26,13 +26,12 @@ in turn based on brainfuck. (fuckbrain = reversible brainfuck.)
   Corrects 1-bit errors, detects 2-bit errors. The IP reads the payload
   (data bits) as the opcode. Arithmetic ops automatically maintain the
   Hamming invariant.
-- **Self-correcting**: two gadgets correct each other's code simultaneously
-  via the IX copy-down pattern. The v8 architecture uses two specialized
-  opcodes (`I` and `V`) to replace 160 ops of syndrome computation with
-  2 ops, shrinking the gadget to 147 ops. A pre-syndrome filter (`I T ?`)
-  lets 95% of cells bypass correction in ~84 steps, while 2-bit errors
-  get copy-over correction via IX round-trip to the partner's own copy.
-  MTTF is 4.8–6.8× longer than v5 under noise.
+- **Self-correcting + self-fueling**: two gadgets correct each other's
+  code via the IX copy-down pattern, using `I` (syndrome inspect) and `V`
+  (correction mask) opcodes — 147 ops per gadget. A metabolism phase
+  compresses duplicate fuel runs into zeros via XOR, replacing the
+  infinite zero reservoir with finite fuel. The agent resists noise
+  while earning its own energy.
 
 ## Quick Start
 
@@ -43,43 +42,46 @@ pip install flask          # one-time setup
 python3 fb2d_server.py     # starts on http://localhost:5001
 ```
 
-1. Load **immunity-gadgets-v8-correction-mask-w101** from the dropdown
-2. Enable waste cleanup (click the "Waste" button or press `W`)
-3. Enable noise — press `N`, set rate to ~50 flips/1M rounds, seed 42
+1. Load **agent-v1-w88** from the dropdown (the self-fueling agent)
+2. Click the **Food** button to enable the free-food cheat (auto-refill fuel)
+3. Enable noise — press `N`, set rate to ~200 flips/1M rounds, seed 42
 4. Press Space to play
 
-Watch: IP0 (red) corrects gadget B's code via IX (blue), IP1 (orange)
-corrects gadget A simultaneously. Clean cells (NOP filler `o`) take the
-pre-syndrome bypass. Dirty cells (yellow = 1-bit error) get single-op `V`
-correction. Red cells (2-bit error) get copy-over from partner. Boundary
-rows (`~` = 0xFFFF) mark the IX scan boundaries.
+Watch: two gadgets correct each other while metabolizing fuel. Each IP
+runs correction code (boustrophedon rows), then drops south into
+metabolism rows where EX walks east through fuel, XORing each cell
+against a reference. Matches become zeros (fuel for correction);
+mismatches trigger walk-back. The corridor returns the IP north to
+correction code for the next cycle.
+
+The **Food** button auto-refills fuel when the contiguous food stretch
+drops below 2× bite size (default 15). It replaces garbage cells with
+continuing food in the A/B/C/D rotation pattern, picking up where the
+existing food left off.
+
+For **immunity-only** testing: load **immunity-gadgets-v8-correction-mask-w88**
+and enable waste cleanup (`W` key) instead of food.
 
 ### Tests
 
 ```bash
-# Immunity gadgets v8 — I+V opcodes, 147-op gadget (★ start here)
+# Self-fueling agent (★ flagship — immunity + metabolism)
+python3 programs/agent-v1.py
+
+# Metabolism standalone tests (compression, walk-back, full cycle)
+python3 programs/metabolism-v1.py
+
+# Immunity gadgets v8 — I+V opcodes, 147-op gadget
 python3 programs/immunity-gadgets-v8-correction-mask.py
-
-# v7 — I opcode only, 379-op gadget (pre-V, for comparison)
-python3 programs/immunity-gadgets-v7-syndrome-inspect.py
-
-# v5 — baseline low-EX-waste dual correction (374 ops)
-python3 programs/immunity-gadgets-v5-low-waste.py
-
-# v5 vs v7 MTTF comparison under noise
-python3 programs/compare-v5-v7.py
 
 # Compiler tests (16 tests: factorial, nested loops, stream I/O, reversal)
 python3 ifbc.py --test-all
 
-# Carry arithmetic demo (multi-byte increment with carry propagation)
-python3 programs/carry-demo.py
+# Exhaustive reversibility proof (all opcodes × all head aliasings)
+python3 test_reversibility.py
 
 # Reversible pool tests (waste cleanup + noise injection)
 python3 test_pools.py
-
-# Exhaustive reversibility proof (all opcodes × all head aliasings)
-python3 test_reversibility.py
 ```
 
 ### CLI REPL
@@ -88,7 +90,7 @@ python3 test_reversibility.py
 python3 fb2d.py
 
 # Inside the simulator:
-#   load immunity-gadgets-v5-low-waste-w100 — load the main demo
+#   load agent-v1-w88              — load the self-fueling agent
 #   run 1000    — run 1000 steps forward
 #   back 1000   — run 1000 steps backward (perfectly reversed)
 #   show        — display the grid
@@ -289,77 +291,50 @@ pools.py                         Reversible waste pool + noise pool
 test_pools.py                    Pool tests (waste, noise, integration)
 test_reversibility.py            Exhaustive opcode reversibility proof
 programs/                        Example programs and demos
-  immunity-gadgets-v5-low-waste.py    Low-EX-waste dual gadgets + tests (★ MWE)
-  immunity-gadgets-v5-low-waste-w100.fb2d  Loadable state file for v5 demo
-  immunity-gadgets-v4-loop.py        Rewind-loop dual gadgets + tests (prev.)
-  immunity-gadgets-v4-loop-w99.fb2d  Loadable state file for v4 demo
-  sweep-model.py                     Ping-pong vs rewind-loop comparison model
-  immunity-gadgets-v3-bypass.py      Probe-bypass dual gadgets (ping-pong, prev.)
-  immunity-gadgets-v3-bypass-w99.fb2d  Loadable state file for v3
-  immunity-gadgets-v2-serpentine.py   Serpentine dual gadgets with IX momentum
-  immunity-gadgets-v2-serpentine-w99.fb2d
-  immunity-gadget-v1.py              Original mutual correction demo
-  dual-gadget-demo.py               IX copy-down correction gadget + tests
-  hamming-gadget-demo.py             Hamming(16,11) barrel-shifter gadget + tests
-  hamming.py                         Hamming(16,11) encode/decode/inject library
+  agent-v1.py                       Self-fueling agent builder (★ flagship)
+  agent-v1-w88.fb2d                 Loadable state: immunity + metabolism
+  metabolism-v1.py                   Standalone metabolism loop tests
+  metabolism-v1-manual.fb2d          Hand-built metabolism prototype
+  immunity-gadgets-v8-correction-mask.py  V-opcode dual gadgets (147 ops)
+  immunity-gadgets-v5-low-waste.py   Low-EX-waste dual gadgets (374 ops)
+  dual-gadget-demo.py               IX copy-down correction + GadgetBuilder
+  hamming.py                         Hamming(16,11) encode/decode/inject
+  sweep-model.py                     Ping-pong vs rewind-loop comparison
   carry-demo.py                      Multi-cell carry arithmetic demo
   factorial.ifb / factorial.fb2d     Factorial (compiled from ifb)
-  fibonacci.ifb / fibonacci.fb2d     Fibonacci (compiled from ifb)
 docs/                            Design documents
   isa.md                         ISA reference (62 opcodes, v1.14)
-  barrel-shifter-correction.md   Barrel-shifter correction algorithm walkthrough
   tc_proof_sketch.md             Turing completeness proof sketch
-  nested-loops-notes.md          Nested loop implementation notes
 CLAUDE.md                        Detailed project context for AI assistants
 ```
 
 ## Status
 
-This is active research software. The language design is at v1.14
+This is active research software. The language design is at v1.15
 (62 opcodes + NOP). Recent milestones:
 
-- **CL-overlap NOP guards** (v1.14): R, L, and Y use [CL] as a rotation
-  parameter and write to [H0]. When H0==CL, the write changes the
-  parameter step_back would read. Now NOP-guarded. Discovered via
-  round-trip testing at ~262K steps — the first point where noise
-  degradation caused H0 and CL to alias. Verified with 2M-step
-  round-trip (466 noise flips, 0 diffs).
-- **Reversibility NOP guards** (v1.13): IP-cell write guard and G value
-  guard. Data ops that would write to the IP's instruction cell are NOP;
-  G is NOP when the cell value exceeds grid size. Payload arithmetic is
-  bijective on all 65536 cell values (corrupted or not).
-- **Low-EX-waste correction** (v5, ★ current MWE): the EX head sits on
-  a dirty cell in neutral state. Clean cells consume zero EX cells
-  (bypass just uncomputes the stomach). Corrections consume 3 cells.
-  Key techniques: `(` main merge (fires on dirty EX for bypass, NOP for
-  correction's clean EX), `(` rewind loop re-entry with `P`-based
-  signaling (no CL accumulation), `+Z]+Z]` Phase G (solid non-zero
-  waste trail). 374 ops, W=100, 58% clean-path speedup.
-- **Rewind-loop sweep** (v4): replaces ping-pong with top-down rewind
-  loop for uniform sweep frequency. Every scan row is corrected every S
-  sweeps. 33% shorter worst-case gap, ~14% longer MTTF vs ping-pong.
-- **Probe-bypass fast-path correction**: clean cells skip the full
-  barrel-shifter via a parity probe. Per-gadget layout (R+7 rows):
-  boundary → bypass → return → handler → code rows → boundary → stomach → waste.
-  Boundary rows use 0xFFFF (`~`). NOP filler uses payload 1017
-  (2-bit data-error safe).
-- **Reversible waste cleanup**: WastePool provides virtual clean zeros
-  via LIFO swap. v5 uses rolling cleanup (clear half the waste row when
-  EX crosses 90%/10% thresholds) instead of zeroing everything every
-  step, preserving the dirty trail.
-- **IX momentum scanning** (v1.10-v1.12): horizontal (`A`/`B`/`U`) and
-  vertical (`C`/`D`/`O`) momentum ops enable serpentine scanning with
-  top-down rewind loop.
-- **d_min=4 opcode encoding**: [11,6,4] linear code maps all 62 opcodes
-  to payloads with minimum Hamming distance 4. Single data-bit errors
-  execute the *correct* opcode — not NOP, not a wrong opcode.
-- **Multi-IP support**: interleaved round-robin execution with
-  independent heads per IP, full reversibility.
+- **Self-fueling agent** (agent-v1, ★ current flagship): dual immunity
+  gadget with XOR-based metabolism. Each gadget corrects the other's
+  code via `I` (pre-syndrome filter) and `V` (correction mask), and
+  fuels itself by compressing duplicate fuel runs into zeros. R+11
+  layout per gadget. The metabolism phase runs after each correction
+  cycle: advance-to-fuel, reference swap, compression loop, walk-back.
+  Produces N-1 zeros from N identical fuel cells, consuming 2 per cycle.
+  GUI "free food" cheat auto-refills fuel for indefinite testing.
+- **V-opcode correction** (v8, 147 ops): replaces 160 ops of syndrome
+  computation with a single `V` opcode. 4.8-6.8x longer MTTF than v5.
+  Pre-syndrome filter (`I T ?`) lets 95% of cells bypass in ~84 steps.
+  Copy-over row handles 2-bit errors via partner cell consultation.
+- **Reversibility guards** (v1.13-v1.14): IP-cell write guard, G value
+  guard, CL-overlap guard. Payload arithmetic bijective on all 65536
+  cell values. Verified with 2M-step round-trip (466 noise flips, 0 diffs).
+- **d_min=4 opcode encoding**: [11,6,4] linear code ensures single
+  data-bit errors execute the correct opcode, not NOP or wrong opcode.
+- **Multi-IP support**: interleaved round-robin with independent heads,
+  full reversibility.
 
-Next steps: cross-gadget consultation for double-bit errors, reversible
-fuel/compression (metabolism — the agent earns its zeros by compressing
-environmental data), adaptive sweep boundaries via IX + 0xFFFF boundary
-cell probe.
+Next steps: adaptive sweep boundaries via IX + boundary cell probe,
+agents in non-zero background environments.
 
 ## License
 
