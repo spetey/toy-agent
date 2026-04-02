@@ -172,13 +172,17 @@
   </style>
 </head>
 <body>
-<h1 id="fb2d-instruction-set-architecture-v1.14">fb2d Instruction Set
-Architecture (v1.14)</h1>
+<h1 id="fb2d-instruction-set-architecture-v1.15">fb2d Instruction Set
+Architecture (v1.15)</h1>
 <p>62 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
 <code>payload(cell)</code> (the 11 data bits of the Hamming(16,11)
 codeword) as the opcode. Payloads corresponding to opcodes 1-62 (or
 within Hamming distance 1 of such a payload) execute that opcode;
 everything else is NOP.</p>
+<p>v1.15 changes: <code>I</code> (syndrome inspect) replaces the unused
+<code>M</code> (payload subtract via IX) at opcode 54. <code>M</code>
+was completely superseded by <code>m</code> (raw XOR) in the copy-down
+architecture.</p>
 <h2 id="cell-format">Cell Format</h2>
 <p>Each cell is a 16-bit Hamming(16,11) SECDED codeword:</p>
 <pre><code>Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
@@ -188,10 +192,10 @@ everything else is NOP.</p>
 (0-2047)</li>
 <li><strong>Parity</strong>: 5 check bits at positions 0, 1, 2, 4,
 8</li>
-<li>Arithmetic ops (+, -, ., ,, :, ;, P, Q, M) maintain the Hamming
+<li>Arithmetic ops (+, -, ., ,, :, ;, P, Q) maintain the Hamming
 invariant</li>
-<li>Bit-level ops (r, l, R, L, Y, x, z, f, m, j) operate on all 16 raw
-bits</li>
+<li>Bit-level ops (r, l, R, L, Y, x, z, f, m, j, I) operate on all 16
+raw bits</li>
 </ul>
 <h2 id="opcode-encoding">Opcode Encoding</h2>
 <p>Opcode payloads are drawn from an [11,6,4] linear code with minimum
@@ -671,8 +675,8 @@ opcodes)</h2>
 <p>IX is a programmable interoceptor for cross-gadget correction. In the
 dual-gadget architecture, each gadget’s IX points at the other gadget’s
 code cells. The copy-down pattern: <code>m</code> copies a remote
-codeword to a local EX cell, correction runs locally, then
-<code>j</code> writes the correction mask back to the remote cell.</p>
+codeword to a local cell, correction runs locally, then <code>j</code>
+writes the correction mask back to the remote cell.</p>
 <table>
 <colgroup>
 <col style="width: 11%" />
@@ -696,10 +700,10 @@ codeword to a local EX cell, correction runs locally, then
 <td>self</td>
 </tr>
 <tr>
-<td><code>M</code></td>
+<td><code>I</code></td>
 <td>54</td>
-<td>payload([H0]) -= payload([IX]) (mod 2048, with parity fixup)</td>
-<td>—</td>
+<td>[H0] ^= syndrome_5bit([IX]) — syndrome inspect</td>
+<td>self</td>
 </tr>
 <tr>
 <td><code>j</code></td>
@@ -710,29 +714,51 @@ codeword to a local EX cell, correction runs locally, then
 <tr>
 <td><code>V</code></td>
 <td>56</td>
-<td>swap([CL], [IX]) — test bridge (full 16-bit)</td>
+<td>[H0] ^= (1 &lt;&lt; syndrome_4bit([IX])) — correction mask</td>
 <td>self</td>
 </tr>
 </tbody>
 </table>
-<p><code>m</code> and <code>j</code> operate on raw 16-bit cell values
-(like bit-level ops). <code>M</code> operates on payloads and maintains
-the Hamming invariant (like byte-level arithmetic). <code>V</code> is a
-full 16-bit swap.</p>
+<p><code>m</code>, <code>I</code>, <code>j</code>, and <code>V</code>
+all operate on raw 16-bit cell values (like bit-level ops).</p>
+<p><strong><code>I</code> (syndrome inspect, v1.15)</strong>: Computes
+the 4-bit Hamming syndrome AND overall parity of [IX], maps all 5 result
+bits to DATA_MASK positions, and XORs them into [H0]:</p>
+<ul>
+<li>s0 → bit 3 (d0), s1 → bit 5 (d1), s2 → bit 6 (d2), s3 → bit 7
+(d3)</li>
+<li>p_all → bit 9 (d4)</li>
+</ul>
+<p>Result: <code>payload([H0]) != 0</code> iff [IX] has <em>any</em>
+error — including bit-0-only errors (syndrome=0, p_all=1). Self-inverse
+(XOR). NOP when H0 == IX.</p>
+<p><code>I</code> enables a <strong>pre-syndrome filter</strong>: before
+copying in the remote cell, test its integrity with <code>I T ?</code>.
+Clean cells (syndrome=0, p_all=0) bypass the entire correction pipeline
+in ~8 ops instead of ~70. Cells with errors continue to the full
+correction path. This replaces 123 ops of Phase C syndrome computation
+on the bypass path with a single opcode.</p>
 <p>The copy-down pattern for correcting a remote cell:</p>
 <ol type="1">
 <li><code>m</code> — copy remote codeword [IX] into local zero cell via
 XOR</li>
-<li>Run correction logic locally (H0, H1, CL, EX on the EX row)</li>
-<li><code>M</code> — uncompute local copy (payload subtract zeroes the
-payload, since the remote cell is still the original value)</li>
+<li>Run correction logic locally (H0, H1, CL, EX on the stomach
+row)</li>
+<li><code>m</code> — uncompute local copy (XOR again zeroes the
+cell)</li>
 <li><code>j</code> — write correction mask back: [IX] ^= [H0]</li>
 </ol>
 <p>Only IX touches remote rows; all other heads stay local.</p>
-<p><code>V</code> (test bridge) enables boundary detection: swap [CL]
-with [IX] to test a remote cell’s value with conditional mirrors
-(<code>?</code>/<code>%</code>), then <code>V</code> again to
-restore.</p>
+<p><strong><code>V</code> (correction mask, v1.15)</strong>: Computes
+<code>1 &lt;&lt; hamming_syndrome_4bit([IX])</code> and XORs it into
+[H0]. In standard-form Hamming(16,11), the 4-bit syndrome IS the error
+bit position, so <code>1 &lt;&lt; syndrome</code> is the exact
+single-bit correction mask. Self-inverse (XOR). NOP when H0 == IX.</p>
+<p><code>V</code> replaces Phases C+D+C’ (~160 ops of syndrome
+computation, barrel shifting, and uncompute) with a single opcode. The
+pre-syndrome filter (<code>I</code>) guarantees only 1-bit errors reach
+<code>V</code> — 2-bit errors go to copy-over, clean cells bypass
+entirely. Shrinks the gadget from 379 to 147 ops.</p>
 <h2 id="ix-horizontal-momentum-ops-3-opcodes">IX Horizontal Momentum Ops
 (3 opcodes)</h2>
 <p>IX momentum ops give IX a persistent horizontal direction
@@ -952,7 +978,8 @@ cycles per full down-up sweep.</p>
 <p>Self-inverse ops: <code>X</code>, <code>F</code>, <code>G</code>,
 <code>T</code>, <code>K</code>, <code>Z</code>, <code>x</code>,
 <code>f</code>, <code>z</code>, <code>Y</code>, <code>m</code>,
-<code>j</code>, <code>V</code>, <code>U</code>, <code>O</code></p>
+<code>I</code>, <code>j</code>, <code>V</code>, <code>U</code>,
+<code>O</code></p>
 <p>Mirrors (<code>/</code>, <code>\</code>, <code>%</code>,
 <code>?</code>, <code>&amp;</code>, <code>!</code>, <code>(</code>,
 <code>)</code>, <code>#</code>, <code>$</code>) are self-inverse: the IP

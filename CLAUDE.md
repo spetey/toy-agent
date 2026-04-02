@@ -49,17 +49,17 @@ fb2d is a 2D reversible esoteric language where:
   with dirty working-area cells). NoisePool provides deterministic,
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
+- **`programs/immunity-gadgets-v8-correction-mask.py`** — Correction-mask
+  dual-gadget builder and test suite (★ current MWE). 147 ops, R+8 layout.
+  Key ideas: (1) `I` opcode (syndrome inspect) tests syndrome([IX])
+  without copy-in — clean cells bypass everything. (2) `V` opcode
+  (correction mask) computes `[H0] ^= (1 << syndrome_4bit([IX]))`.
+  (3) Copy-over row handles 2-bit errors via partner cell consultation.
+  (4) Three-way merge at col 2 via EX discrimination ($, P, ().
+  Run tests: `python3 programs/immunity-gadgets-v8-correction-mask.py`
 - **`programs/immunity-gadgets-v5-low-waste.py`** — Low-EX-waste
-  dual-gadget builder and test suite (★ current MWE). Builds
-  `immunity-gadgets-v5-low-waste-w100.fb2d`. Key ideas: (1) EX sits
-  on a dirty cell in neutral state; `(` at main merge fires on
-  [EX]!=0 for bypass, NOPs for correction (clean EX from Phase G).
-  (2) Rewind loop uses `(` re-entry with P-based signaling instead
-  of `&` with CL accumulation — no T Z ] deposit needed, CWL stays
-  clean. (3) Bypass does zero EX consumption (just uncomputes stomach).
-  (4) Phase G `+Z]+Z]` deposits EV+PA with `+` ensuring non-zero
-  trail (no blanks). 374 ops, W=100, 58% clean-path speedup.
-  Run tests: `python3 programs/immunity-gadgets-v5-low-waste.py`
+  dual-gadget builder (v5, 374 ops). Superseded by v8 but kept for
+  reference. Run tests: `python3 programs/immunity-gadgets-v5-low-waste.py`
 - **`programs/immunity-gadgets-v4-loop.py`** — Rewind-loop dual-gadget
   builder and test suite. Builds `immunity-gadgets-v4-loop-w99.fb2d`.
   R+7 layout with uniform top-down sweep. Superseded by v5 but kept
@@ -91,24 +91,24 @@ fb2d is a 2D reversible esoteric language where:
 
 ## Minimal Working Example
 
-**`programs/immunity-gadgets-v5-low-waste-w100.fb2d`** — Two mutually-correcting
-Hamming(16,11) gadgets on a 22×100 grid with probe-bypass parity skip,
-top-down rewind loop, and )P low-EX-waste conditional advance. Load in the GUI:
+**`programs/immunity-gadgets-v8-correction-mask-w88.fb2d`** — Two mutually-
+correcting Hamming(16,11) gadgets with `I` (pre-syndrome filter) and `V`
+(correction mask) opcodes. 147 ops per gadget, R+8 layout. Clean cells
+bypass via `I` without any copy-in; 1-bit errors get Hamming SECDED
+correction; 2-bit errors get copy-over from the partner gadget. Load:
 
 ```bash
 python3 fb2d_server.py          # default port 5001
 python3 fb2d_server.py 5002     # second instance on different port
-# Open http://localhost:5001, load immunity-gadgets-v5-low-waste-w100
+# Open http://localhost:5001, load immunity-gadgets-v8-correction-mask-w88
 # Enable noise (seed 42, 50 flips/1M), watch corrections in real-time
 ```
 
-Each gadget's IX scans the other's code+handler+return+bypass rows.
-Clean cells (~95%) take a 28-op bypass; dirty cells get full 358-op
-Hamming correction. Boundary rows use 0xFFFF (shown as `~`). NOP filler
-(payload 1017, shown as `o` in GUI) is 2-bit-error safe — the 64th
-codeword of the [11,6,4] opcode code. Waste cleanup is auto-enabled.
+Each gadget's IX scans the other's code+handler+return+bypass+copy-over
+rows. Boundary rows use 0xFFFF (shown as `~`). NOP filler (payload 1017,
+shown as `o` in GUI) is 2-bit-error safe. Waste cleanup is auto-enabled.
 
-Build and test: `python3 programs/immunity-gadgets-v5-low-waste.py`
+Build and test: `python3 programs/immunity-gadgets-v8-correction-mask.py`
 
 ## ISA Summary (v1.15, 62 opcodes + NOP)
 
@@ -330,7 +330,13 @@ output x            // write to EX trail, zero var
 ## Running Tests
 
 ```bash
-# Low-EX-waste dual-gadget tests (★ main MWE — layout, cycle, correction):
+# Correction-mask dual-gadget tests (★ main MWE — v8, 147 ops, I+V opcodes):
+python3 programs/immunity-gadgets-v8-correction-mask.py
+
+# Pre-syndrome filter tests (v7, I opcode):
+python3 programs/immunity-gadgets-v7-syndrome-inspect.py
+
+# Low-EX-waste dual-gadget tests (v5, for comparison):
 python3 programs/immunity-gadgets-v5-low-waste.py
 
 # Previous rewind-loop dual-gadget tests (v4, for comparison):
@@ -364,26 +370,28 @@ python3 fb2d_server.py 5002         # run a second instance on a different port
 The long-term goal: an agent on the torus that resists its own degradation
 by noise. The architecture has several layers:
 
-### Grid Layout (v4 Rewind Loop, per gadget, R+7 rows)
+### Grid Layout (v8, per gadget, R+8 rows)
 
 ```
 Row 0:        BOUNDARY ROW (0xFFFF cells, shown as ~ in GUI/REPL)
-Row 1:        BYPASS ROW (NOP filler, bypass ops going West)
-Row 2:        RETURN ROW (NOP filler, rewind loop return path)
-Row 3:        HANDLER ROW (NOP filler, boundary handlers going East)
-Rows 4..R+3:  CODE ROWS (boustrophedon, correction gadget)
-Row R+4:      BOUNDARY ROW (0xFFFF cells, shown as ~)
-Row R+5:      STOMACH (working area: 9 fixed cells for H0, H1, CL)
-Row R+6:      WASTE ROW (EX roams East, eats zeros, deposits waste)
+Row 1:        COPY-OVER ROW (2-bit error correction via partner cell)
+Row 2:        CLEAN BYPASS ROW (pre-syndrome clean cell fast path)
+Row 3:        RETURN ROW (NOP filler, rewind loop return path)
+Row 4:        HANDLER ROW (NOP filler, boundary handlers going East)
+Rows 5..R+4:  CODE ROWS (boustrophedon, correction gadget)
+Row R+5:      BOUNDARY ROW (0xFFFF cells, shown as ~)
+Row R+6:      STOMACH (working area: 9 fixed cells for H0, H1, CL)
+Row R+7:      WASTE ROW (EX roams East, eats zeros, deposits waste)
 ```
 
 Two gadgets (A and B) stacked vertically. Each IP runs its own gadget's
-code; each IP's IX scans the other gadget's bypass+return+handler+code
-rows (R+3 scan rows). Boundary rows are 0xFFFF (payload 2047), shown
-as `~` in the GUI — not a valid opcode, testable via `m T : ? ; T m`
-(`:` wraps payload 2047→0, `?` fires on zero payload).
+code; each IP's IX scans the other gadget's copy-over+bypass+return+
+handler+code rows (R+4 scan rows). Boundary rows are 0xFFFF (payload
+2047), shown as `~` in the GUI — not a valid opcode, testable via
+`m T : ? ; T m` (`:` wraps payload 2047→0, `?` fires on zero payload).
 
-The agent corrects single-bit errors via Hamming(16,11) SECDED.
+The agent corrects single-bit errors via Hamming(16,11) SECDED and
+2-bit errors via copy-over from the partner gadget's own cell.
 Each correction consumes ~2 clean waste cells (PA, signal).
 
 ### Sweep Strategies: Rewind Loop vs Ping-Pong
@@ -522,11 +530,16 @@ range check using existing ops. For now, hardcode sweep ranges.
    already bijective on ALL 65536 cell values because `_CELL_TO_PAYLOAD`
    extracts raw data bits (not nearest-codeword payloads). The error
    syndrome is preserved through arithmetic — no fix was needed.
-8. **[NEXT]** Cross-gadget consultation for 2+-bit errors: when SECDED
-   detects an uncorrectable error (syndrome≠0, p_all=0), consult the
-   partner gadget's corresponding cell. If the partner copy is clean
-   (syndrome=0), XOR it in as the correction. Natural extension toward
-   replication — consult all cells = spawn a replica.
+8. ~~Cross-gadget consultation for 2+-bit errors.~~ ✓
+   v7 adds `I` opcode (syndrome inspect): tests syndrome([IX]) without
+   full copy-in. Clean cells bypass everything — no m, no Phase A/B.
+   v8 adds `V` opcode (correction mask): `[H0] ^= (1 << syndrome_4bit([IX]))`.
+   Copy-over row handles 2-bit errors: when probe fires (p_all=0,
+   syndrome≠0), IX round-trips to the gadget's OWN corresponding cell,
+   copies via m, computes error mask, writes back via j. R+8 layout
+   (one extra row vs v5). 147 ops (v8), down from 374 (v5).
+   `programs/immunity-gadgets-v7-syndrome-inspect.py` (I opcode),
+   `programs/immunity-gadgets-v8-correction-mask.py` (V opcode + copy-over).
 9. ~~Probe-bypass parity skip for clean-cell fast path.~~ ✓
    Checks overall parity before full correction. Clean cells (syndrome=0)
    branch to a 28-op bypass row; dirty cells get full 358-op Hamming
@@ -576,9 +589,11 @@ range check using existing ops. For now, hardcode sweep ranges.
    step), payload stays odd → never hits 0. Adding a 3rd P (coprime
    step 3) would visit all values including 0. Width < 1024 is safe
    for horizontal boundary resets (even payload wraps after ~1023 steps).
-10. **[NEXT]** Compression: XOR-of-identical-pairs to replace infinite-
-   zero reservoir with finite fuel. Two identical cells XOR to zero
-   (fuel for EX). Reversible: the non-zero residual is waste.
+10. **[NEXT]** Metabolism/compression: replace infinite-zero reservoir
+    (WastePool) with a finite fuel source. Core idea: XOR-of-identical-
+    pairs — two identical cells XOR to zero (fuel for EX). Reversible:
+    the non-zero residual is waste. This is the "other half" of the
+    agent: immunity keeps the code intact, metabolism keeps it fueled.
 11. Reversible noise injection (multibaker-map style): a stored iid
     string determines when to swap two random bits on the grid.
     Deterministic at micro-level (reversible), stochastic-looking at
