@@ -295,6 +295,19 @@ cell value — even on corrupted cells with multi-bit errors. Nearest-
 codeword decoding is only used for opcode dispatch (which instruction
 to execute), never for arithmetic.
 
+**Inline ECC** (v1.16): `_CELL_TO_PAYLOAD` corrects single-bit errors
+on read (computes syndrome, flips the indicated bit if syndrome≠0 and
+p_all=1, then extracts payload). The IP always reads the correct
+payload from corrupted cells, without waiting for the immunity gadget.
+Δp arithmetic ops (+, -, ., ,, :, ;, P, Q) use `_CELL_TO_PAYLOAD_RAW`
+(uncorrected extraction) to preserve bijection on all 65536 values.
+Empirical MTTF testing (10 trials at 100/200/300 flips/1M, 2M step
+cap) showed **no significant benefit** — the immunity gadget + [11,6,4]
+opcode code handle errors adequately without inline ECC. Merged for
+theoretical cleanliness (the IP reads the "true" payload), but if
+this is found to cause problems it can be reverted by replacing
+`_CELL_TO_PAYLOAD` with `_CELL_TO_PAYLOAD_RAW` everywhere.
+
 **Multi-IP reversibility**: `step_back_all()` undoes IPs in reverse
 order (last IP first). This ensures each IP's undo sees the grid state
 that existed immediately after that IP's forward step — because all
@@ -723,3 +736,12 @@ range check using existing ops. For now, hardcode sweep ranges.
   round-trip testing at 262207 steps — the first step where head
   degradation caused H0 and CL to alias the same cell. Verified with
   2M-step round-trip (466 noise flips, 1588 cells changed, 0 diffs).
+- **Inline ECC (v1.16)**: `_CELL_TO_PAYLOAD` now corrects single-bit
+  errors on read via Hamming syndrome. Motivation: the IP should read
+  the "true" payload, not a corrupted one. Δp arithmetic uses a separate
+  `_CELL_TO_PAYLOAD_RAW` table (uncorrected) for bijection. Empirical
+  MTTF comparison (10 trials × 3 noise rates, 2M cap) showed no
+  significant difference — the immunity gadget corrects errors fast
+  enough that the IP rarely encounters them, and the [11,6,4] opcode
+  code already handles most single-bit dispatch errors. Merged for
+  cleanliness; revert if found harmful.
