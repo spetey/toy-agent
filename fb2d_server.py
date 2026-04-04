@@ -51,6 +51,19 @@ def _read_state_hint(path, key):
     return False
 
 
+def _read_state_hint_int(path, key, default=None):
+    """Read an integer hint from a .fb2d state file."""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(f'{key}='):
+                    return int(line.split('=', 1)[1].strip())
+    except Exception:
+        pass
+    return default
+
+
 def _get_code_rows():
     """Auto-detect code rows from IP positions."""
     sim._save_active()
@@ -485,7 +498,7 @@ def new_program():
 
 @app.route('/api/load', methods=['POST'])
 def load_file():
-    global current_file, _step_all_count, waste_cleanup_enabled, free_food_enabled
+    global current_file, _step_all_count, waste_cleanup_enabled, free_food_enabled, free_food_bite_size
     data = request.get_json(force=True)
     filename = data.get('filename', '')
     # Sanitize: only allow filenames, no path traversal
@@ -506,13 +519,16 @@ def load_file():
     # Read hints from state file (default off)
     waste_cleanup_enabled = _read_state_hint(path, 'waste_cleanup')
     free_food_enabled = _read_state_hint(path, 'free_food')
+    hint_bite = _read_state_hint_int(path, 'bite_size')
+    if hint_bite is not None:
+        free_food_bite_size = hint_bite
     return jsonify(serialize_state())
 
 
 @app.route('/api/reset', methods=['POST'])
 def reset_state():
     """Reload the current file to reset back to step 0."""
-    global _step_all_count, waste_cleanup_enabled
+    global _step_all_count, waste_cleanup_enabled, free_food_enabled, free_food_bite_size
     data = request.get_json(force=True) if request.data else {}
     filename = data.get('filename', '') or current_file
     if not filename:
@@ -532,6 +548,9 @@ def reset_state():
     _free_food_log.clear()
     waste_cleanup_enabled = _read_state_hint(path, 'waste_cleanup')
     free_food_enabled = _read_state_hint(path, 'free_food')
+    hint_bite = _read_state_hint_int(path, 'bite_size')
+    if hint_bite is not None:
+        free_food_bite_size = hint_bite
     return jsonify(serialize_state())
 
 

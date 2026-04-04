@@ -172,7 +172,7 @@ body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a
   <button id="btnExCleanup" title="Reversible waste cleanup (clean cells EX leaves behind)">&#x267B; Waste</button>
   <span id="exCleanupStats" style="color:#55efc4; font-size:11px; display:none;"></span>
   <button id="btnFreeFood" title="Auto-refill fuel on EX row when food runs low">&#x1F354; Food</button>
-  <span id="freeFoodStats" style="color:#fdcb6e; font-size:11px; display:none;"></span>
+  <span id="freeFoodStats" style="color:#fdcb6e; font-size:11px; display:none;">bite=<input id="freeFoodBite" type="number" min="1" max="99" value="15" style="width:38px; background:#2d3436; color:#fdcb6e; border:1px solid #555; border-radius:3px; font-size:11px; text-align:center; padding:1px 3px;" title="Bite size (cells per food segment)"></span>
   <span style="color:#555">|</span>
   <button id="btnSnapshotSave" title="Download snapshot (deterministic replay)">&#x1F4BE; Snapshot</button>
   <button id="btnSnapshotLoad" title="Load snapshot from file">&#x1F4C2; Load Snap</button>
@@ -1962,7 +1962,7 @@ async function toggleFreeFood() {
   if (freeFoodEnabled) {
     btn.classList.add('active');
     stats.style.display = '';
-    stats.textContent = 'bite=15';
+    stats.style.display = '';
   } else {
     btn.classList.remove('active');
     stats.style.display = 'none';
@@ -1974,11 +1974,22 @@ async function toggleFreeFood() {
   });
 }
 
+document.getElementById('freeFoodBite').addEventListener('change', async function() {
+  const val = Math.max(1, parseInt(this.value) || 15);
+  this.value = val;
+  await api('free_food', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ bite_size: val })
+  });
+});
+
 function updateFreeFoodStats(st) {
   if (!st) return;
   const el = document.getElementById('freeFoodStats');
+  const biteInput = document.getElementById('freeFoodBite');
+  if (biteInput && st.free_food_bite_size) biteInput.value = st.free_food_bite_size;
   if (el && st.free_food_enabled) {
-    el.textContent = `bite=${st.free_food_bite_size || 15}`;
     el.style.display = '';
   } else if (el) {
     el.style.display = 'none';
