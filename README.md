@@ -1,12 +1,15 @@
-# fuckbrain 2D (fb2d)
+# The Wikivore: A Digital Deacon Autogen
 
-A reversible, valid-everywhere, Turing-complete 2D programming language
-and simulator — designed as the substrate for a self-correcting agent.
+A self-correcting, self-fueling agent that resists its own degradation
+by noise on a 2D toroidal grid. Two mutually-correcting Hamming(16,11)
+gadgets repair each other's code while a metabolism phase compresses
+fuel into the zeros that power error correction.
 
-fb2d is the core of a "toy agent" that can resist its own degradation
-by noise. It's based on Google's BFF from the
-[Computational Life paper](https://arxiv.org/abs/2406.19108), which is
-in turn based on brainfuck. (fuckbrain = reversible brainfuck.)
+The agent runs on **fb2d**, a reversible, Turing-complete,
+valid-everywhere 2D programming language. fb2d is based on Google's BFF
+from the [Computational Life paper](https://arxiv.org/abs/2406.19108),
+which is in turn based on Brainfuck — hence the name (fb = "fuckbrain",
+i.e. reversible Brainfuck; 2D for the toroidal grid).
 
 ## Key Properties
 
@@ -42,7 +45,7 @@ pip install flask          # one-time setup
 python3 fb2d_server.py     # starts on http://localhost:5001
 ```
 
-1. Load **agent-v1-w88** from the dropdown (the self-fueling agent)
+1. Load **agent-v1-w89** from the dropdown (the self-fueling agent)
 2. Click the **Food** button to enable the free-food cheat (auto-refill fuel)
 3. Enable noise — press `N`, set rate to ~200 flips/1M rounds, seed 42
 4. Press Space to play
@@ -90,7 +93,7 @@ python3 test_pools.py
 python3 fb2d.py
 
 # Inside the simulator:
-#   load agent-v1-w88              — load the self-fueling agent
+#   load agent-v1-w89              — load the self-fueling agent
 #   run 1000    — run 1000 steps forward
 #   back 1000   — run 1000 steps backward (perfectly reversed)
 #   show        — display the grid
@@ -257,7 +260,7 @@ python3 fb2d_server.py
   Space (play/pause), `R` (reset), `N` (noise), `W` (waste cleanup), `F`
   (fit), `+`/`-` (zoom), `E` (edit mode), `?` (help overlay)
 
-## ifb (intermediate fuckbrain)
+## ifb (intermediate fb)
 
 A Janus-like imperative language that compiles to fb2d grid files:
 
@@ -291,8 +294,9 @@ pools.py                         Reversible waste pool + noise pool
 test_pools.py                    Pool tests (waste, noise, integration)
 test_reversibility.py            Exhaustive opcode reversibility proof
 programs/                        Example programs and demos
-  agent-v1.py                       Self-fueling agent builder (★ flagship)
-  agent-v1-w88.fb2d                 Loadable state: immunity + metabolism
+  agent-v1.py                       Self-fueling agent + hunger timer (★ flagship)
+  agent-v1-w89.fb2d                 Loadable state: immunity + metabolism + hunger
+  compare-agents-mttf.py            Empirical MTTF comparison under noise
   metabolism-v1.py                   Standalone metabolism loop tests
   metabolism-v1-manual.fb2d          Hand-built metabolism prototype
   immunity-gadgets-v8-correction-mask.py  V-opcode dual gadgets (147 ops)
@@ -305,6 +309,7 @@ programs/                        Example programs and demos
 docs/                            Design documents
   isa.md                         ISA reference (62 opcodes, v1.14)
   tc_proof_sketch.md             Turing completeness proof sketch
+  theory-notes.md                Local vs global reversibility, thermodynamic analogies
 CLAUDE.md                        Detailed project context for AI assistants
 ```
 
@@ -313,13 +318,15 @@ CLAUDE.md                        Detailed project context for AI assistants
 This is active research software. The language design is at v1.15
 (62 opcodes + NOP). Recent milestones:
 
-- **Self-fueling agent** (agent-v1, ★ current flagship): dual immunity
-  gadget with XOR-based metabolism. Each gadget corrects the other's
-  code via `I` (pre-syndrome filter) and `V` (correction mask), and
-  fuels itself by compressing duplicate fuel runs into zeros. R+11
-  layout per gadget. The metabolism phase runs after each correction
-  cycle: advance-to-fuel, reference swap, compression loop, walk-back.
-  Produces N-1 zeros from N identical fuel cells, consuming 2 per cycle.
+- **Self-fueling agent with hunger timer** (agent-v1, ★ current flagship):
+  dual immunity gadget with XOR-based metabolism and periodic eating.
+  Each gadget corrects the other's code via `I` (pre-syndrome filter)
+  and `V` (correction mask), and fuels itself by compressing duplicate
+  fuel runs into zeros. A hunger timer (HUNGER_PERIOD=300) triggers
+  metabolism every 300 bypass cycles, preventing zero starvation at low
+  noise rates. The countdown lives in DSL_S2; the bypass row includes
+  T/I undo for pre-syndrome state cleanup. R+11 layout per gadget.
+  Requires width ≥ 89 (code_left=4 for col 3 vertical NOP express lane).
   GUI "free food" cheat auto-refills fuel for indefinite testing.
 - **V-opcode correction** (v8, 147 ops): replaces 160 ops of syndrome
   computation with a single `V` opcode. 4.8-6.8x longer MTTF than v5.
