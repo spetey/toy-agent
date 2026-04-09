@@ -1,12 +1,12 @@
-# CLAUDE.md — toy-agent project context
+# The Wikivore: A Digital Deacon Autogen
 
 ## Project Goal
 
 Build a "toy agent" in a digital world that can resist its own degradation
-by noise. The first milestone is a *reversible*, *Turing-complete*,
-*valid-everywhere* programming language called **fuckbrain 2D** (fb2d),
-based on Google's BFF from the Computational Life paper, which is in turn
-based on brainfuck. ("fuckbrain" = reversible brainfuck.)
+by noise. The agent runs on **fuckbrain 2D** (fb2d), a reversible,
+Turing-complete, valid-everywhere programming language based on Google's
+BFF from the Computational Life paper (itself based on brainfuck;
+"fuckbrain" = reversible brainfuck).
 
 ## Key Properties
 
