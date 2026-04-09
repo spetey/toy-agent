@@ -50,14 +50,22 @@ fb2d is a 2D reversible esoteric language where:
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
 - **`programs/agent-v1.py`** — Self-fueling agent: dual immunity gadget
-  + metabolism (★ current flagship). Combines v8 SECDED correction with
-  XOR-based metabolism that compresses duplicate fuel runs into zeros.
-  R+11 layout per gadget (3 metabolism rows below the correction code).
-  The metabolism phase runs after each correction cycle: advance-to-fuel
-  (`)`/`]`/`Z`/`T`/`?` loop), reference swap (`Z`/`X`/`Z`/`]`), compression
-  (`&`/`:`/`]`/`Z`/`x`/`T`/`?` loop), walk-back (`)`/`[`/`Z`/`T`/`?` loop).
-  Produces N-1 zeros from N identical fuel cells, consumes 2 per cycle.
-  Build: `python3 programs/agent-v1.py`
+  + metabolism + hunger timer (★ current flagship). Combines v8 SECDED
+  correction with XOR-based metabolism that compresses duplicate fuel
+  runs into zeros.  R+11 layout per gadget (3 metabolism rows below the
+  correction code).  The hunger timer (HUNGER_PERIOD=300) triggers
+  metabolism every 300 bypass cycles independent of error correction,
+  preventing zero starvation at low noise rates.  Countdown lives in
+  DSL_S2 (stomach col 5); DSL_S1 (col 4) holds the period constant.
+  Bypass row includes T/I undo for pre-syndrome state cleanup.
+  Hunger detour deposits non-zero (+Z) into waste trail; `(` gate
+  (EX≠0) at metab_main col 3 routes hungry IP into shared metabolism.
+  Requires width ≥ 89 (code_left=4 opens col 3 as vertical NOP lane).
+  Build: `python3 programs/agent-v1.py [--width W]`
+- **`programs/compare-agents-mttf.py`** — Empirical MTTF comparison of
+  wide vs narrow agent-v1. Measures mean time to failure under noise,
+  diagnosing opcode corruption vs zero starvation.
+  Run: `python3 programs/compare-agents-mttf.py --help`
 - **`programs/immunity-gadgets-v8-correction-mask.py`** — Correction-mask
   dual-gadget builder (v8, 147 ops, R+8 layout). Superseded by agent-v1
   for the full agent but still the reference for pure immunity testing.
@@ -93,6 +101,8 @@ fb2d is a 2D reversible esoteric language where:
   EX consumption ("burning zeroes").
 - **`docs/sams-ir-idea.text`** — Sam Eisenstat's instruction register idea
   for resolving ambiguity in the 1D predecessor.
+- **`docs/theory-notes.md`** — Local vs global reversibility, Landauer's
+  principle, Poincaré recurrence. Thermodynamic analogies for metabolism.
 
 ### Historical
 
@@ -102,24 +112,29 @@ fb2d is a 2D reversible esoteric language where:
 
 ## Minimal Working Example
 
-**`programs/agent-v1-w88.fb2d`** — Self-fueling agent: two mutually-
-correcting Hamming(16,11) gadgets with XOR-based metabolism. Each gadget
-corrects the other's code via `I` (pre-syndrome filter) and `V`
-(correction mask) opcodes, and fuels itself by compressing duplicate
-runs on its EX row into zeros. R+11 layout per gadget (26×88 grid).
+**`programs/agent-v1-w89.fb2d`** — Self-fueling agent with hunger timer:
+two mutually-correcting Hamming(16,11) gadgets with XOR-based metabolism
+and periodic eating. Each gadget corrects the other's code via `I`
+(pre-syndrome filter) and `V` (correction mask) opcodes, and fuels
+itself by compressing duplicate runs on its EX row into zeros. R+11
+layout per gadget (26×89 grid). The hunger timer triggers metabolism
+every 300 bypass cycles, preventing zero starvation at low noise rates.
 
 ```bash
 python3 fb2d_server.py          # default port 5001
-# Open http://localhost:5001, load agent-v1-w88
+# Open http://localhost:5001, load agent-v1-w89
 # Click "Food" button to enable free-food cheat (auto-refill fuel)
 # Enable noise (seed 42, 200 flips/1M), watch corrections + metabolism
 ```
 
-**How it works**: Each IP runs correction code (boustrophedon rows),
-then drops south into metabolism rows. EX walks east through fuel,
-XORing each cell against a reference in H1. Matches become zeros;
-mismatches trigger walk-back. The corridor returns the IP north to
-the correction code for the next cycle.
+**How it works**: Each IP runs correction code (boustrophedon rows).
+On a 1-bit error, it drops south into metabolism rows via col 2. On a
+clean bypass (no error), a countdown in DSL_S2 is decremented; when it
+hits zero, the IP takes the hunger detour (col 3 express lane) into
+the same shared metabolism. EX walks east through fuel, XORing each
+cell against a reference in H1. Matches become zeros; mismatches
+trigger walk-back. The corridor resets the countdown from DSL_S1 and
+returns the IP north to correction code for the next cycle.
 
 **Free food cheat** (🍔 button): monitors the EX/fuel row. When the
 longest contiguous stretch of food cells drops below 2× bite_size
@@ -131,7 +146,7 @@ where the existing food left off. The last garbage cell is preserved
 **Immunity-only MWE**: `programs/immunity-gadgets-v8-correction-mask-w88.fb2d`
 (v8, 147 ops per gadget, R+8 layout). Load with waste cleanup enabled.
 
-Build agent: `python3 programs/agent-v1.py`
+Build agent: `python3 programs/agent-v1.py [--width W]`
 Build v8: `python3 programs/immunity-gadgets-v8-correction-mask.py`
 
 ## ISA Summary (v1.15, 62 opcodes + NOP)
@@ -367,8 +382,11 @@ output x            // write to EX trail, zero var
 ## Running Tests
 
 ```bash
-# Self-fueling agent (★ flagship — immunity + metabolism):
-python3 programs/agent-v1.py
+# Self-fueling agent + hunger timer (★ flagship):
+python3 programs/agent-v1.py [--width W]   # default W=89
+
+# MTTF comparison (wide vs narrow, various noise rates):
+python3 programs/compare-agents-mttf.py --help
 
 # Metabolism standalone tests (compression loop, walk-back, full cycle):
 python3 programs/metabolism-v1.py
