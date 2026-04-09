@@ -226,9 +226,8 @@ def build_probe_bypass_gadget(last_row_dir):
 # Layout
 # ===================================================================
 
-def compute_probe_layout(width):
+def compute_probe_layout(width, code_left=3):
     """Compute grid layout (v7, R+8 rows per gadget)."""
-    code_left = 3
     code_right = width - 2
 
     first_row_slots = code_right - code_left
@@ -437,9 +436,9 @@ def _place_probe_gadget(sim, layout, op_values, main_ops,
     # -- Merge gate --
     sim.grid[sim._to_flat(first_code_row, 2)] = encode_opcode(OP['('])
 
-    # NOP fill cols 1-2 on non-first code rows
+    # NOP fill cols 1..(code_left-1) on non-first code rows
     for row in range(first_code_row + 1, last_code_row + 1):
-        for col in [1, 2]:
+        for col in range(1, code_left):
             flat = sim._to_flat(row, col)
             if sim.grid[flat] == 0:
                 sim.grid[flat] = NOP_CELL
@@ -565,8 +564,8 @@ def _place_probe_gadget(sim, layout, op_values, main_ops,
     sim.grid[sim._to_flat(copyover_row, 2)] = encode_opcode(OP['/'])
 
     last_copyover_col = probe_col - 1 - (len(copyover_full) - 1)
-    assert last_copyover_col >= 3, \
-        f"Copy-over extends past col 2 (last op at col {last_copyover_col})"
+    assert last_copyover_col >= code_left, \
+        f"Copy-over extends past col {code_left-1} (last op at col {last_copyover_col})"
 
 
 def _fill_row_with_nop(sim, layout, row):
