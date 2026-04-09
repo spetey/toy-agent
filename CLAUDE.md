@@ -3,10 +3,9 @@
 ## Project Goal
 
 Build a "toy agent" in a digital world that can resist its own degradation
-by noise. The agent runs on **fuckbrain 2D** (fb2d), a reversible,
-Turing-complete, valid-everywhere programming language based on Google's
-BFF from the Computational Life paper (itself based on brainfuck;
-"fuckbrain" = reversible brainfuck).
+by noise. The agent runs on **fb2d**, a reversible, Turing-complete,
+valid-everywhere 2D programming language based on Google's BFF from the
+Computational Life paper (itself based on Brainfuck).
 
 ## Key Properties
 
@@ -41,7 +40,7 @@ fb2d is a 2D reversible esoteric language where:
 
 - **`fb2d.py`** — The simulator. Interactive REPL with grid display,
   forward/reverse stepping, save/load. Run with `python3 fb2d.py`.
-- **`ifbc.py`** — Compiler from "intermediate fuckbrain" (ifb) to fb2d
+- **`ifbc.py`** — Compiler from "intermediate fb" (ifb) to fb2d
   grid files. Supports variables, arithmetic, nested while loops, swap,
   zero, stream I/O. Run tests: `python3 ifbc.py --test-all`
 - **`pools.py`** — Reversible virtual pools for waste cleanup and noise
@@ -329,7 +328,7 @@ that existed immediately after that IP's forward step — because all
 later IPs have already been undone. The ordering is correct; cross-IP
 head interference does not break reversibility.
 
-## ifb Language (intermediate fuckbrain)
+## ifb Language (intermediate fb)
 
 A Janus-like imperative language that compiles to fb2d:
 
