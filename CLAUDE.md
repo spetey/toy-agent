@@ -123,7 +123,7 @@ every 300 bypass cycles, preventing zero starvation at low noise rates.
 python3 fb2d_server.py          # default port 5001
 # Open http://localhost:5001, load agent-v1-w89
 # Click "Food" button to enable free-food cheat (auto-refill fuel)
-# Enable noise (seed 42, 200 flips/1M), watch corrections + metabolism
+# Enable noise (pick any seed, 200 flips/1M), watch corrections + metabolism
 ```
 
 **How it works**: Each IP runs correction code (boustrophedon rows).

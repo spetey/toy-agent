@@ -11,7 +11,21 @@ from the [Computational Life paper](https://arxiv.org/abs/2406.19108),
 which is in turn based on Brainfuck — hence the name (fb = "fuckbrain",
 i.e. reversible Brainfuck; 2D for the toroidal grid).
 
-## Key Properties
+## The Agent
+
+- **Self-correcting**: two gadgets correct each other's code via the IX
+  copy-down pattern, using `I` (syndrome inspect) and `V` (correction
+  mask) opcodes — 147 ops per gadget. 1-bit errors are corrected in
+  place; 2-bit errors are fixed by copying from the partner gadget.
+- **Self-fueling**: a metabolism phase compresses duplicate fuel runs
+  into zeros via XOR, replacing the infinite zero reservoir with finite
+  fuel. A hunger timer triggers metabolism every 300 bypass cycles,
+  preventing zero starvation at low noise rates.
+- **Noise-resistant**: under continuous random bit flips, the agent
+  maintains its own code integrity while earning the zeros it needs
+  for error correction. All dynamics are microscopically reversible.
+
+## Key Properties of fb2d
 
 - **Reversible**: every state has a unique predecessor, inferred from the
   current state alone. The simulator can step backward as easily as
@@ -29,12 +43,6 @@ i.e. reversible Brainfuck; 2D for the toroidal grid).
   Corrects 1-bit errors, detects 2-bit errors. The IP reads the payload
   (data bits) as the opcode. Arithmetic ops automatically maintain the
   Hamming invariant.
-- **Self-correcting + self-fueling**: two gadgets correct each other's
-  code via the IX copy-down pattern, using `I` (syndrome inspect) and `V`
-  (correction mask) opcodes — 147 ops per gadget. A metabolism phase
-  compresses duplicate fuel runs into zeros via XOR, replacing the
-  infinite zero reservoir with finite fuel. The agent resists noise
-  while earning its own energy.
 
 ## Quick Start
 
@@ -47,15 +55,16 @@ python3 fb2d_server.py     # starts on http://localhost:5001
 
 1. Load **agent-v1-w89** from the dropdown (the self-fueling agent)
 2. Click the **Food** button to enable the free-food cheat (auto-refill fuel)
-3. Enable noise — press `N`, set rate to ~200 flips/1M rounds, seed 42
+3. Enable noise — press `N`, set rate to ~200 flips/1M rounds, pick any seed
 4. Press Space to play
 
 Watch: two gadgets correct each other while metabolizing fuel. Each IP
-runs correction code (boustrophedon rows), then drops south into
-metabolism rows where EX walks east through fuel, XORing each cell
-against a reference. Matches become zeros (fuel for correction);
-mismatches trigger walk-back. The corridor returns the IP north to
-correction code for the next cycle.
+sweeps the partner gadget's code with IX, correcting errors via
+Hamming(16,11). When a 1-bit error is found (or the hunger timer fires
+after 300 clean sweeps), the IP drops south into metabolism rows where
+EX walks east through fuel, XOR-compressing duplicate runs into zeros.
+The corridor resets the hunger counter and returns the IP north for the
+next sweep cycle.
 
 The **Food** button auto-refills fuel when the contiguous food stretch
 drops below 2× bite size (default 15). It replaces garbage cells with
@@ -100,7 +109,7 @@ python3 fb2d.py
 #   help        — full command reference
 ```
 
-## Architecture
+## fb2d Architecture
 
 Multiple instruction pointers (IPs) move on a toroidal 2D grid,
 interleaved round-robin. Mirrors (`/`, `\`) and conditional mirrors
