@@ -495,7 +495,7 @@ def run_trial(args):
     agent_type, seed, noise_rate, max_steps, cycle_len, bite_size = args
 
     if agent_type == 'wide':
-        sim, layout = a1.make_agent_v1(88)
+        sim, layout = a1.make_agent_v1(89)
     else:
         sim, layout = narrow.make_narrow_agent(bite_size=bite_size)
 
@@ -508,7 +508,7 @@ def run_trial(args):
 
     np = NoisePool(seed=seed, n_code_rows=len(all_rows),
                    grid_cols=W, flips_per_1M=noise_rate,
-                   col_min=code_left, col_max=W - 2)
+                   col_min=1, col_max=W - 2)
 
     ctx = build_invariant_ctx(sim, layout, cycle_len)
 
@@ -602,33 +602,38 @@ def main():
                         help='Bite size for free-food cheat')
     parser.add_argument('--workers', type=int, default=0,
                         help='Parallel workers (0 = cpu_count - 1)')
+    parser.add_argument('--agents', type=str, default='wide,narrow',
+                        help='Comma-separated agent types to test (default: wide,narrow)')
     parser.add_argument('--csv', type=str, default='',
                         help='CSV output path (default: programs/mttf-results.csv)')
     args = parser.parse_args()
 
     rates = [float(r) for r in args.rates.split(',')]
+    agent_types = [a.strip() for a in args.agents.split(',')]
     n_workers = args.workers or max(1, (os.cpu_count() or 4) - 1)
     csv_path = args.csv or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), 'mttf-results.csv')
 
-    print(f"=== Agent MTTF Comparison: Wide (W=88) vs Narrow (W=45) ===")
+    print(f"=== Agent MTTF Comparison: {', '.join(agent_types)} ===")
     print(f"Rates: {rates}, Seeds: {args.seeds}, Trials: {args.trials}")
     print(f"Max steps: {args.max_steps:,}, Bite: {args.bite}, Workers: {n_workers}")
     print()
 
     # Measure cycle lengths for timeout detection
     print("Measuring cycle lengths...")
-    sim_w, lay_w = a1.make_agent_v1(88)
-    wide_clean, wide_dirty = measure_cycle_lengths(sim_w, lay_w)
-    wide_timeout = wide_dirty * args.cycle_mult
-    print(f"  Wide:   clean={wide_clean}, dirty~={wide_dirty}, "
-          f"timeout={wide_timeout:,} ({args.cycle_mult}x dirty)")
-
-    sim_n, lay_n = narrow.make_narrow_agent(bite_size=args.bite)
-    narrow_clean, narrow_dirty = measure_cycle_lengths(sim_n, lay_n)
-    narrow_timeout = narrow_dirty * args.cycle_mult
-    print(f"  Narrow: clean={narrow_clean}, dirty~={narrow_dirty}, "
-          f"timeout={narrow_timeout:,} ({args.cycle_mult}x dirty)")
+    agent_cycles = {}
+    if 'wide' in agent_types:
+        sim_w, lay_w = a1.make_agent_v1(89)
+        wide_clean, wide_dirty = measure_cycle_lengths(sim_w, lay_w)
+        agent_cycles['wide'] = wide_dirty
+        print(f"  Wide:   clean={wide_clean}, dirty~={wide_dirty}, "
+              f"timeout={wide_dirty * args.cycle_mult:,} ({args.cycle_mult}x dirty)")
+    if 'narrow' in agent_types:
+        sim_n, lay_n = narrow.make_narrow_agent(bite_size=args.bite)
+        narrow_clean, narrow_dirty = measure_cycle_lengths(sim_n, lay_n)
+        agent_cycles['narrow'] = narrow_dirty
+        print(f"  Narrow: clean={narrow_clean}, dirty~={narrow_dirty}, "
+              f"timeout={narrow_dirty * args.cycle_mult:,} ({args.cycle_mult}x dirty)")
     print()
 
     # Build all trial configs
@@ -637,8 +642,8 @@ def main():
         for seed_base in range(args.seeds):
             for trial in range(args.trials):
                 seed = seed_base * 1000 + trial
-                for agent, cyc in [('wide', wide_dirty),
-                                   ('narrow', narrow_dirty)]:
+                for agent in agent_types:
+                    cyc = agent_cycles[agent]
                     all_tasks.append(
                         (agent, seed, rate, args.max_steps, cyc, args.bite))
 

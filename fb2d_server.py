@@ -64,26 +64,66 @@ def _read_state_hint_int(path, key, default=None):
     return default
 
 
-def _get_code_rows():
-    """Auto-detect code rows from IP positions."""
+_cached_noise_rows = []   # set on load/reset, used every step
+
+
+def _detect_noise_rows():
+    """Auto-detect noise-target rows from grid layout.
+
+    Noise targets = all rows between boundary rows (exclusive),
+    excluding stomach rows (where H0/H1/CL live) and waste/EX rows.
+    Boundary rows are detected as rows where ALL cells are 0xFFFF.
+    """
+    W = sim.cols
+    BOUNDARY = 0xFFFF
+
+    # Find boundary rows (all cells == 0xFFFF)
+    boundary_rows = set()
+    for r in range(sim.rows):
+        base = r * W
+        if all(sim.grid[base + c] == BOUNDARY for c in range(W)):
+            boundary_rows.add(r)
+
+    # Find stomach and waste rows from IP head positions
     sim._save_active()
-    return list(set(ip['ip_row'] for ip in sim.ips))
+    exclude_rows = set(boundary_rows)
+    for ip in sim.ips:
+        exclude_rows.add(ip['h0'] // W)   # stomach (H0)
+        exclude_rows.add(ip['ex'] // W)   # waste/EX row
+
+    # Noise targets: rows between boundary rows, not excluded
+    # Find boundary-delimited segments
+    noise_rows = []
+    sorted_boundaries = sorted(boundary_rows)
+    for i in range(len(sorted_boundaries) - 1):
+        top = sorted_boundaries[i]
+        bot = sorted_boundaries[i + 1]
+        for r in range(top + 1, bot):
+            if r not in exclude_rows:
+                noise_rows.append(r)
+
+    return sorted(noise_rows)
+
+
+def _get_code_rows():
+    """Return cached noise-target rows (all gadget body rows)."""
+    return _cached_noise_rows
 
 
 def _apply_noise_forward(step):
     """Apply noise for this step_all (forward). Returns action or None."""
     if not noise_enabled or noise_pool.rate <= 0:
         return None
-    code_rows = _get_code_rows()
-    return noise_pool.apply_forward(step, sim.grid, sim._to_flat, code_rows)
+    return noise_pool.apply_forward(step, sim.grid, sim._to_flat,
+                                    _cached_noise_rows)
 
 
 def _undo_noise(step):
     """Undo noise for this step_all (backward)."""
     if not noise_enabled:
         return None
-    code_rows = _get_code_rows()
-    return noise_pool.undo_at(step, sim.grid, sim._to_flat, code_rows)
+    return noise_pool.undo_at(step, sim.grid, sim._to_flat,
+                              _cached_noise_rows)
 
 
 # Per-step records for waste cleanup reversal.
@@ -512,7 +552,9 @@ def load_file():
     _step_all_count = 0
     # Reset pools (keep enabled/rate/type settings)
     noise_pool.reset()
-    noise_pool.configure(n_code_rows=sim.rows, grid_cols=sim.cols)
+    _cached_noise_rows[:] = _detect_noise_rows()
+    noise_pool.configure(n_code_rows=len(_cached_noise_rows),
+                         grid_cols=sim.cols)
     waste_pool.reset()
     _waste_cleanup_log.clear()
     _free_food_log.clear()
@@ -542,7 +584,9 @@ def reset_state():
     _step_all_count = 0
     # Reset pools (keep enabled/rate/type settings)
     noise_pool.reset()
-    noise_pool.configure(n_code_rows=sim.rows, grid_cols=sim.cols)
+    _cached_noise_rows[:] = _detect_noise_rows()
+    noise_pool.configure(n_code_rows=len(_cached_noise_rows),
+                         grid_cols=sim.cols)
     waste_pool.reset()
     _waste_cleanup_log.clear()
     _free_food_log.clear()
@@ -837,7 +881,9 @@ def set_noise():
         if new_enabled and not noise_enabled:
             seed = data.get('seed', None)
             noise_pool.reset(seed=seed)
-            noise_pool.configure(n_code_rows=len(_get_code_rows()),
+            if not _cached_noise_rows:
+                _cached_noise_rows[:] = _detect_noise_rows()
+            noise_pool.configure(n_code_rows=len(_cached_noise_rows),
                                  grid_cols=sim.cols)
         noise_enabled = new_enabled
     if 'rate' in data:
@@ -859,7 +905,8 @@ def set_noise():
     print(f'[noise-pool] config: enabled={noise_enabled} '
           f'rate={noise_pool.flips_per_1M}/1M rounds '
           f'({noise_pool.rate:.9f}/step) '
-          f'type={noise_pool.noise_type} seed={noise_pool._seed}')
+          f'type={noise_pool.noise_type} seed={noise_pool._seed} '
+          f'noise_rows={len(_cached_noise_rows)}')
     return jsonify({
         'enabled': noise_enabled,
         'flips_per_1M': noise_pool.flips_per_1M,
@@ -1003,6 +1050,7 @@ def load_snapshot():
 
     current_file = source_file
     _step_all_count = 0
+    _cached_noise_rows[:] = _detect_noise_rows()
 
     # Step 2: Configure pools with exact geometry from snapshot
     # n_code_rows and col range must match the original run exactly,
@@ -1011,7 +1059,7 @@ def load_snapshot():
     noise_pool.configure(
         flips_per_1M=float(noise_cfg.get('flips_per_1M', 0)),
         noise_type=noise_cfg.get('type', 'any'),
-        n_code_rows=int(noise_cfg.get('n_code_rows', len(_get_code_rows()))),
+        n_code_rows=int(noise_cfg.get('n_code_rows', len(_detect_noise_rows()))),
         grid_cols=int(noise_cfg.get('grid_cols', sim.cols)),
         col_min=int(noise_cfg.get('col_min', 1)),
         col_max=int(noise_cfg.get('col_max', max(1, sim.cols - 2))),
