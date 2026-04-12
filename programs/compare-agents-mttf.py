@@ -13,13 +13,15 @@ Also diagnoses failure cause:
 
 Usage:
   # Smoke test:
-  python3 programs/compare-agents-mttf.py --rates 200 --seeds 1 --trials 1 --max-steps 200000
+  python3 programs/compare-agents-mttf.py --rates 200 --seeds 3 --max-steps 200000
 
-  # Full run (~hours):
-  python3 programs/compare-agents-mttf.py --rates 50,100,200,300,500 --seeds 10 --trials 10 --max-steps 5000000
+  # Full run (~1 hour):
+  python3 programs/compare-agents-mttf.py --rates 100,150,200,250,300 --seeds 10 --max-steps 10000000
 
-  # Custom check interval (override auto-detection):
-  python3 programs/compare-agents-mttf.py --check 500000 ...
+  # 50 seeds at one rate (~5 min):
+  python3 programs/compare-agents-mttf.py --rates 300 --seeds 50 --max-steps 10000000
+
+Seeds 0..N-1 match GUI noise seeds directly.
 """
 
 import sys
@@ -587,9 +589,7 @@ def main():
     parser.add_argument('--rates', type=str, default='50,100,200,300,500',
                         help='Comma-separated noise rates (flips/1M)')
     parser.add_argument('--seeds', type=int, default=10,
-                        help='Number of random seeds per rate')
-    parser.add_argument('--trials', type=int, default=10,
-                        help='Trials per (agent, rate, seed)')
+                        help='Number of seeds (0..N-1, matches GUI seeds)')
     parser.add_argument('--max-steps', type=int, default=5_000_000,
                         help='Max steps per trial')
     parser.add_argument('--cycle-mult', type=int, default=20,
@@ -611,7 +611,7 @@ def main():
         os.path.dirname(os.path.abspath(__file__)), 'mttf-results.csv')
 
     print(f"=== Agent MTTF Comparison: {', '.join(agent_types)} ===")
-    print(f"Rates: {rates}, Seeds: {args.seeds}, Trials: {args.trials}")
+    print(f"Rates: {rates}, Seeds: 0..{args.seeds - 1}")
     print(f"Max steps: {args.max_steps:,}, Bite: {args.bite}, Workers: {n_workers}")
     print()
 
@@ -633,15 +633,14 @@ def main():
     print()
 
     # Build all trial configs
+    # Seeds 0..N-1 match GUI seeds directly.
     all_tasks = []
     for rate in rates:
-        for seed_base in range(args.seeds):
-            for trial in range(args.trials):
-                seed = seed_base * 1000 + trial
-                for agent in agent_types:
-                    cyc = agent_cycles[agent]
-                    all_tasks.append(
-                        (agent, seed, rate, args.max_steps, cyc, args.bite))
+        for seed in range(args.seeds):
+            for agent in agent_types:
+                cyc = agent_cycles[agent]
+                all_tasks.append(
+                    (agent, seed, rate, args.max_steps, cyc, args.bite))
 
     total_tasks = len(all_tasks)
     print(f"Total trials: {total_tasks}")
@@ -823,19 +822,18 @@ def main():
             for agent, r, seed, steps, detail, cause in all_results:
                 if r != rate:
                     continue
-                seed_base = seed // 1000
-                key = (agent, seed_base)
+                key = (agent, seed)
                 if key not in by_seed:
                     by_seed[key] = []
                 by_seed[key].append(steps)
 
-            for sb in range(args.seeds):
-                s0 = by_seed.get((at0, sb), [])
-                s1 = by_seed.get((at1, sb), [])
+            for seed in range(args.seeds):
+                s0 = by_seed.get((at0, seed), [])
+                s1 = by_seed.get((at1, seed), [])
                 avg0 = mean(s0) if s0 else 0
                 avg1 = mean(s1) if s1 else 0
                 ratio = avg0 / avg1 if avg1 > 0 else 0
-                print(f"  seed {sb:>2}: {at0} {avg0:>10,.0f} | "
+                print(f"  seed {seed:>2}: {at0} {avg0:>10,.0f} | "
                       f"{at1} {avg1:>10,.0f} | ratio {ratio:.2f}x")
 
 
