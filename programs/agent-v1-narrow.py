@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
 """
-agent-v1-narrow.py -- Narrow dual immunity gadget + metabolism (W=45).
+agent-v1-narrow.py -- Narrow dual immunity gadget + metabolism + hunger (W=46).
 
 Wraps the 147-op correction gadget into multiple boustrophedon rows
-and uses an upward boustrophedon for the 2-bit copy-over.
+and uses an upward boustrophedon for the 2-bit copy-over.  Includes
+the hunger timer from agent-v1 (HUNGER_PERIOD=300) to prevent zero
+starvation at low noise rates.
 
 Layout per gadget (19 rows):
   Row 0:        BOUNDARY (~)
-  Row 1:        COPY-OVER EXIT (routing only: / at col 2, \\ at col 43)
+  Row 1:        COPY-OVER EXIT (routing only: / at col 2, \\ at col 44)
   Row 2:        COPY-OVER TOP (E, 39 ops — upward boustrophedon)
-  Row 3:        COPY-OVER BOTTOM (W, 31 ops + NOPs — entry \\ at col 42)
-  Row 4:        BYPASS ($ at col 2, \\ at col 41)
-  Row 5:        RETURN (P at col 2, rewind ops at cols 24-31)
-  Row 6:        HANDLER (h-handler at cols 8-16, v-handler at cols 21-37)
+  Row 3:        COPY-OVER BOTTOM (W, 31 ops + NOPs — entry \\ at col 43)
+  Row 4:        BYPASS ($ at col 2, \\ at col 42, hunger countdown 12-21)
+  Row 5:        RETURN (P at col 2, rewind ops at cols 25-32, hunger detour 3-16)
+  Row 6:        HANDLER (h-handler at cols 9-17, v-handler at cols 22-38)
   Row 7:        CODE ROW 1 (E): ops 0-38, ( at col 2, / at col 1
   Row 8:        CODE ROW 2 (W): mini-boustrophedon padded
-  Row 9:        CODE ROW 3 (E): probe ? at col 42
+  Row 9:        CODE ROW 3 (E): probe ? at col 43
   Row 10:       CODE ROW 4 (W): remaining ops
   Row 11:       CODE ROW 5 (E): remaining ops
   Row 12:       CODE ROW 6 (W): NOP padding, / at col 2 for metabolism
   Row 13:       METABOLISM RETURN
-  Row 14:       METABOLISM MAIN
-  Row 15:       METABOLISM CORRIDOR (\\ at col 1)
+  Row 14:       METABOLISM MAIN (( at col 3 for hunger entry)
+  Row 15:       METABOLISM CORRIDOR (\\ at col 1, counter reset 24-39)
   Row 16:       BOUNDARY (~)
-  Row 17:       STOMACH
+  Row 17:       STOMACH (DSL_S1=period@4, DSL_S2=countdown@5)
   Row 18:       FUEL/WASTE (EX)
 
-Grid: 38 x 45 = 1710 cells (vs 26 x 88 = 2288 for wide agent, 25% smaller).
+Grid: 38 x 46 = 1748 cells (vs 26 x 89 = 2314 for wide agent, 24% smaller).
 
 Run:  python3 programs/agent-v1-narrow.py
 """
@@ -68,21 +70,23 @@ OP = OPCODES
 NOP_CELL = hamming_encode(1017)
 BOUNDARY_CELL = 0xFFFF
 
+HUNGER_PERIOD = 100  # eat every N bypass cycles (0 = disabled)
+
 
 # ===================================================================
 # Layout
 # ===================================================================
 
-WIDTH = 45
-CODE_LEFT = 3
-CODE_RIGHT = WIDTH - 2  # 43
-PROBE_COL = 42  # column where probe ? lands (NOP on rows above)
+WIDTH = 46
+CODE_LEFT = 4   # col 3 = hunger express lane (NOP through code rows)
+CODE_RIGHT = WIDTH - 2  # 44
+PROBE_COL = 43  # column where probe ? lands (NOP on rows above)
 CODE_ROWS = 6   # 1 first + 2 mini-boust + 2 remaining + 1 padding
 ROWS_PER_GADGET = CODE_ROWS + 13  # 6 code + 3 copyover + bypass + return + handler + 2 boundary + stomach + fuel + 3 metab = 19
 
 
 def compute_narrow_layout(width=WIDTH):
-    """Compute the narrow grid layout (W=45, 19 rows per gadget)."""
+    """Compute the narrow grid layout (W=46, 19 rows per gadget)."""
     code_rows = CODE_ROWS
     rows_per_gadget = ROWS_PER_GADGET
     total_rows = 2 * rows_per_gadget
@@ -178,16 +182,16 @@ def _place_narrow_code(sim, layout, op_values, main_ops, code_start_row):
     """Place the 147 correction ops in a custom narrow boustrophedon.
 
     Row layout (relative to code_start_row):
-      Row 0 (E): ops 0-38 at cols 3-41. NOP at 42. \\@43 turn.
-      Row 1 (W): mini-boust padded. /@43 entry, ops near left, /@3 turn.
-      Row 2 (E): mini-boust. \\@3 entry, ops at 4-42, probe ? at 42. \\@43.
-      Row 3 (W): /@43 entry. Remaining ops west.  /@3 turn.
-      Row 4 (E): \\@3 entry. Remaining ops east. \\@43 turn.
-      Row 5 (W): /@43 entry. NOP padding (ensures last_dir=W).
+      Row 0 (E): ops 0-38 at cols 4-42. NOP at 43. \\@44 turn.
+      Row 1 (W): mini-boust padded. /@44 entry, ops near left, /@4 turn.
+      Row 2 (E): mini-boust. \\@4 entry, ops at 5-43, probe ? at 43. \\@44.
+      Row 3 (W): /@44 entry. Remaining ops west.  /@4 turn.
+      Row 4 (E): \\@4 entry. Remaining ops east. \\@44 turn.
+      Row 5 (W): /@44 entry. NOP padding (ensures last_dir=W).
     """
     W = layout['width']
-    CL = CODE_LEFT    # 3
-    CR = CODE_RIGHT   # 43
+    CL = CODE_LEFT    # 4
+    CR = CODE_RIGHT   # 44
 
     n_ops = len(op_values)
     assert n_ops == 147
@@ -204,7 +208,7 @@ def _place_narrow_code(sim, layout, op_values, main_ops, code_start_row):
         col = CL + i
         val = op_values[i]
         sim.grid[sim._to_flat(row, col)] = encode_opcode(val) if val >= 0 else (-val)
-    _place_nop(sim, row, 42)              # NOP for clean northward corridor
+    _place_nop(sim, row, PROBE_COL)       # NOP for clean northward corridor
     sim.grid[sim._to_flat(row, CR)] = encode_opcode(OP['\\'])  # E→S turn
 
     # -- Row 1 (W): mini-boustrophedon padded (ops 39-43) --
@@ -212,17 +216,17 @@ def _place_narrow_code(sim, layout, op_values, main_ops, code_start_row):
     sim.grid[sim._to_flat(row, CR)] = encode_opcode(OP['/'])   # S→W entry
 
     # Ops 39-43: 5 real ops. Back-pad: NOPs at high cols, ops at low cols.
-    # West row goes from col CR-1=42 to CL+1=4. 39 inner slots.
+    # West row goes from col CR-1=43 to CL+1=5. 39 inner slots.
     mini_first_ops = 5  # ops 39-43
     inner_slots = CR - CL - 1  # 39
     n_nops_row1 = inner_slots - mini_first_ops  # 34
 
-    # Place NOPs at cols 42 down to 42-33=9 (34 NOPs)
+    # Place NOPs at cols 43 down to 43-33=10 (34 NOPs)
     for i in range(n_nops_row1):
         col = CR - 1 - i  # 42, 41, ..., 9
         _place_nop(sim, row, col)
 
-    # Place ops 39-43 at cols 8, 7, 6, 5, 4
+    # Place ops 39-43 at cols 9, 8, 7, 6, 5
     for i in range(mini_first_ops):
         col = CR - 1 - n_nops_row1 - i
         val = op_values[39 + i]
@@ -230,17 +234,17 @@ def _place_narrow_code(sim, layout, op_values, main_ops, code_start_row):
 
     sim.grid[sim._to_flat(row, CL)] = encode_opcode(OP['/'])   # W→S turn at left
 
-    # -- Row 2 (E): mini-boustrophedon (ops 44-82, probe ? at col 42) --
+    # -- Row 2 (E): mini-boustrophedon (ops 44-82, probe ? at col 43) --
     row = code_start_row + 2
     sim.grid[sim._to_flat(row, CL)] = encode_opcode(OP['\\'])  # S→E entry
 
-    # 39 ops (44-82) at cols 4-42
+    # 39 ops (44-82) at cols 5-43
     for i in range(39):
         col = CL + 1 + i  # 4, 5, ..., 42
         val = op_values[44 + i]
         sim.grid[sim._to_flat(row, col)] = encode_opcode(val) if val >= 0 else (-val)
 
-    # Verify probe ? is at col 42
+    # Verify probe ? is at col 43
     assert main_ops[82] == '?', f"Expected probe ? at op 82, got {main_ops[82]}"
     assert CL + 1 + (82 - 44) == PROBE_COL, f"Probe at col {CL + 1 + (82 - 44)}, expected {PROBE_COL}"
 
@@ -253,7 +257,7 @@ def _place_narrow_code(sim, layout, op_values, main_ops, code_start_row):
     remaining_start = 83
     row3_count = min(inner_slots, n_ops - remaining_start)  # 39
     for i in range(row3_count):
-        col = CR - 1 - i  # 42, 41, ..., 4
+        col = CR - 1 - i  # 43, 42, ..., 5
         val = op_values[remaining_start + i]
         sim.grid[sim._to_flat(row, col)] = encode_opcode(val) if val >= 0 else (-val)
 
@@ -266,7 +270,7 @@ def _place_narrow_code(sim, layout, op_values, main_ops, code_start_row):
     remaining_start2 = 83 + row3_count  # 122
     row4_count = n_ops - remaining_start2  # 25
     for i in range(row4_count):
-        col = CL + 1 + i  # 4, 5, ..., 28
+        col = CL + 1 + i  # 5, 6, ..., 29
         val = op_values[remaining_start2 + i]
         sim.grid[sim._to_flat(row, col)] = encode_opcode(val) if val >= 0 else (-val)
 
@@ -288,9 +292,9 @@ def _place_narrow_code(sim, layout, op_values, main_ops, code_start_row):
     sim.grid[sim._to_flat(first_code_row, 1)] = encode_opcode(OP['/'])  # corridor N→E
     sim.grid[sim._to_flat(first_code_row, 2)] = encode_opcode(OP['('])  # merge gate
 
-    # NOP fill cols 1-2 on non-first code rows (overwrite \ on last row later by metab)
+    # NOP fill cols 1-3 on non-first code rows (col 3 = hunger express lane)
     for r in range(code_start_row + 1, last_code_row + 1):
-        for col in [1, 2]:
+        for col in [1, 2, 3]:
             flat = sim._to_flat(r, col)
             if sim.grid[flat] == 0:
                 sim.grid[flat] = NOP_CELL
@@ -305,9 +309,9 @@ def _place_narrow_copyover(sim, layout, copyover_full, probe_col,
                            is_upper, RPG):
     """Place copy-over in a 3-row upward boustrophedon.
 
-    Bottom row (W): entry \\@42, ops going west, \\@3 turn up.
-    Top row (E):    /@3 entry, ops going east, /@43 exit up.
-    Exit row (W):   \\@43 → NOP west → /@2 exit south.
+    Bottom row (W): entry \\@43, ops going west, \\@4 turn up.
+    Top row (E):    /@4 entry, ops going east, /@44 exit up.
+    Exit row (W):   \\@44 → NOP west → /@2 exit south.
     """
     W = layout['width']
     CL = CODE_LEFT
@@ -437,9 +441,9 @@ def _place_narrow_gadget(sim, layout, op_values, main_ops,
 
     # All first 3 ? marks should be on the first code row
     # (they're at ops 5, 18, 38 which are all < 39 first-row slots)
-    hbound_col = CL + hbound_idx      # 8
-    vbound_col = CL + vbound_idx      # 21
-    pre_syn_col = CL + pre_syn_idx    # 41
+    hbound_col = CL + hbound_idx      # 9
+    vbound_col = CL + vbound_idx      # 22
+    pre_syn_col = CL + pre_syn_idx    # 42
 
     # -- Horizontal handler (9 ops) on handler_row --
     h_handler_ops = ['/', ';', 'T', 'm', 'B', 'C', 'U', ']', '\\']
@@ -448,7 +452,7 @@ def _place_narrow_gadget(sim, layout, op_values, main_ops,
 
     # Verify alignment: handler exit at hbound_col+8 = merge1 col
     merge1_idx = next(i for i, op in enumerate(main_ops[hbound_idx+1:], hbound_idx+1) if op == ')')
-    merge1_col = CL + merge1_idx  # should be 16
+    merge1_col = CL + merge1_idx  # should be 17
     assert hbound_col + 8 == merge1_col, \
         f"H-handler exit {hbound_col+8} != merge {merge1_col}"
 
@@ -459,8 +463,8 @@ def _place_narrow_gadget(sim, layout, op_values, main_ops,
         sim.grid[sim._to_flat(handler_row, vbound_col + i)] = encode_opcode(OP[op_ch])
 
     # -- Return row ops (rewind loop bounces) --
-    percent_col = vbound_col + 10   # 31
-    paren_col = vbound_col + 3      # 24
+    percent_col = vbound_col + 10   # 32
+    paren_col = vbound_col + 3      # 25
     sim.grid[sim._to_flat(return_row, percent_col)] = encode_opcode(OP['\\'])
     return_ops = [';', 'T', 'm', 'P']
     for i, op_ch in enumerate(return_ops):
@@ -469,7 +473,7 @@ def _place_narrow_gadget(sim, layout, op_values, main_ops,
 
     # Verify rewind alignment
     merge2_idx = next(i for i, op in enumerate(main_ops[vbound_idx+1:], vbound_idx+1) if op == ')')
-    merge2_col = CL + merge2_idx  # should be 37
+    merge2_col = CL + merge2_idx  # should be 38
     assert vbound_col + 16 == merge2_col, \
         f"V-handler exit {vbound_col+16} != merge {merge2_col}"
 
@@ -503,6 +507,90 @@ def _place_narrow_gadget(sim, layout, op_values, main_ops,
                            copyover_exit_row, copyover_top_row,
                            copyover_bottom_row, is_upper, RPG)
 
+    # -- Hunger bypass (countdown + detour + express lane) --
+    _place_hunger_bypass(sim, layout, bypass_row, return_row,
+                         handler_row, code_start_row)
+
+
+# ===================================================================
+# Hunger bypass (adapted from agent-v1)
+# ===================================================================
+
+def _place_hunger_bypass(sim, layout, bypass_row, return_row,
+                         handler_row, first_code_row):
+    """Place hunger countdown on bypass row + detour on return row.
+
+    Same mechanism as agent-v1._place_hunger_bypass, adapted for the
+    narrow layout (CL=4, W=46).
+
+    Bypass row (going west from \\@42):
+      col 41: T     undo pre-syndrome T
+      col 40: I     undo pre-syndrome I
+      ... NOP ...
+      col 21: E     H0 east (CWL → S0)
+      col 20: E     H0 east (S0 → S1)
+      col 19: E     H0 east (S1 → S2 = countdown)
+      col 18: T     bridge S2 → CL
+      col 17: ;     decrement CL
+      col 16: ?     / if CL==0 → HUNGRY (W→S)
+      col 15: T     undo bridge (not hungry)
+      col 14: W     S2 → S1
+      col 13: W     S1 → S0
+      col 12: W     S0 → CWL (restored)
+
+    Return row detour (cols 3-16):
+      col 16: /     catch S→W
+      col 15: T     undo bridge (CL restored, S2=0)
+      col 14: +     [S2]++ (S2=1, non-zero deposit)
+      col 13: Z     swap [S2=1] ↔ [EX]: waste dirty, [EX] gets 1
+      col 12: W     S2 → S1
+      col 11: W     S1 → S0
+      col 10: W     S0 → CWL (restored)
+      ...
+      col  3: /     W→S → col 3 express lane
+
+    Col 3 is NOP through handler and code rows (CODE_LEFT=4).
+    metab_main col 3: ( (\\ if EX≠0) → S→E into metabolism.
+    """
+    if HUNGER_PERIOD == 0:
+        return
+
+    # -- Bypass row: pre-syndrome undo --
+    _place(sim, bypass_row, 41, 'T')    # undo pre-syndrome T
+    _place(sim, bypass_row, 40, 'I')    # undo pre-syndrome I
+
+    # -- Bypass row: hunger countdown (DSL_S2 = col 5) --
+    _place(sim, bypass_row, 21, 'E')    # CWL → S0
+    _place(sim, bypass_row, 20, 'E')    # S0 → S1
+    _place(sim, bypass_row, 19, 'E')    # S1 → S2
+    _place(sim, bypass_row, 18, 'T')    # bridge S2 → CL
+    _place(sim, bypass_row, 17, ';')    # decrement
+    _place(sim, bypass_row, 16, '?')    # / if CL==0 → hungry
+    _place(sim, bypass_row, 15, 'T')    # undo bridge (not hungry)
+    _place(sim, bypass_row, 14, 'W')    # S2 → S1
+    _place(sim, bypass_row, 13, 'W')    # S1 → S0
+    _place(sim, bypass_row, 12, 'W')    # S0 → CWL
+
+    # -- Return row detour (cols 3-16) --
+    _place(sim, return_row, 16, '/')    # catch S→W
+    _place(sim, return_row, 15, 'T')    # undo bridge (S2=0)
+    _place(sim, return_row, 14, '+')    # [S2]++ → 1
+    _place(sim, return_row, 13, 'Z')    # swap [S2=1] ↔ [EX]
+    _place(sim, return_row, 12, 'W')    # S2 → S1
+    _place(sim, return_row, 11, 'W')    # S1 → S0
+    _place(sim, return_row, 10, 'W')    # S0 → CWL
+    _place(sim, return_row, 3, '/')     # W→S → col 3 express
+
+    # -- Handler row col 3: NOP (H0 already at CWL) --
+    flat = sim._to_flat(handler_row, 3)
+    if sim.grid[flat] == 0:
+        sim.grid[flat] = NOP_CELL
+
+    # -- NOP fill col 3 on first code row --
+    flat = sim._to_flat(first_code_row, 3)
+    if sim.grid[flat] == 0:
+        sim.grid[flat] = NOP_CELL
+
 
 # ===================================================================
 # Metabolism (reused from agent-v1)
@@ -526,9 +614,9 @@ def _place_metabolism(sim, layout, metab_return_row, metab_main_row,
     _place(sim, last_code_row, 2, '/')        # W→S
     sim.grid[sim._to_flat(last_code_row, 1)] = NOP_CELL  # remove corridor \\
 
-    # Metabolism main row (same ops as agent-v1)
+    # Metabolism main row (same ops as agent-v1 + hunger entry at col 3)
     main_ops = {
-        2: '\\',  4: 'e',  5: 'P',  6: ')',  7: ']',  8: 'Z',
+        2: '\\',  3: '(',  4: 'e',  5: 'P',  6: ')',  7: ']',  8: 'Z',
         9: 'T',  10: '?', 12: 'T', 13: 'X', 15: '&', 16: ':',
         17: ']', 18: 'Z', 20: 'x', 21: 'T', 22: '?', 23: 'T',
         24: 'x', 25: 'Z', 26: ')', 27: '[', 28: 'Z', 29: 'T',
@@ -553,10 +641,30 @@ def _place_metabolism(sim, layout, metab_return_row, metab_main_row,
     _place_boundary_edges(sim, metab_return_row, W)
     _fill_row_nop(sim, metab_return_row, W)
 
-    # Metabolism corridor row
-    _place(sim, metab_corridor_row, 39, '/')     # S→W
-    _place(sim, metab_corridor_row, 38, 'w')     # H1 west
-    _place(sim, metab_corridor_row, 1, '\\')     # W→N
+    # Metabolism corridor row (with hunger counter reset)
+    # Counter reset: reload DSL_S2 (countdown, col 5) from DSL_S1
+    # (period constant, col 4).  Same sequence as agent-v1.
+    corridor_ops = {
+        39: '/',    # S→W
+        38: 'w',    # H1 west (restore H1: S0 → CWL)
+        37: 'E',    # H0 east (CWL → S0)
+        36: 'E',    # H0 east (S0 → S1)
+        35: 'E',    # H0 east (S1 → S2 = countdown cell)
+        34: '+',    # [S2]++ (ensure non-zero deposit)
+        33: 'Z',    # swap [S2≥1] ↔ [EX]: deposit non-zero
+        32: ']',    # advance EX past deposit
+        31: 'e',    # H1 east (CWL → S0)
+        30: 'e',    # H1 east (S0 → S1 = period cell)
+        29: '.',    # [S2] += [S1] → S2 = 0 + period = period
+        28: 'w',    # H1 west (S1 → S0)
+        27: 'w',    # H1 west (S0 → CWL, restored)
+        26: 'W',    # H0 west (S2 → S1)
+        25: 'W',    # H0 west (S1 → S0)
+        24: 'W',    # H0 west (S0 → CWL, restored)
+        1:  '\\',   # W→N → north to first_code_row
+    }
+    for c, op_ch in corridor_ops.items():
+        _place(sim, metab_corridor_row, c, op_ch)
 
     _place_boundary_edges(sim, metab_corridor_row, W)
     _fill_row_nop(sim, metab_corridor_row, W)
@@ -626,7 +734,7 @@ def make_narrow_agent(width=WIDTH, bite_size=10):
         bite = bite_size
         fuel_payloads = [189, 250, 380, 639]
         sim.grid[sim._to_flat(waste_row, 0)] = hamming_encode(999)  # dirty cell
-        # Initial zeros: 1x bite (2x would eat too much fuel at W=45)
+        # Initial zeros: 1x bite (2x would eat too much fuel at W=46)
         n_zeros = bite
         for c in range(1, n_zeros + 1):
             if c < W:
@@ -668,6 +776,14 @@ def make_narrow_agent(width=WIDTH, bite_size=10):
         ex=ip1_ex,
     )
 
+    # Initialize hunger timer in stomach rows
+    DSL_S1 = 4   # period constant cell
+    DSL_S2 = 5   # countdown cell
+    if HUNGER_PERIOD > 0:
+        for stom_row in [layout['ga_stomach'], layout['gb_stomach']]:
+            sim.grid[sim._to_flat(stom_row, DSL_S1)] = hamming_encode(HUNGER_PERIOD)
+            sim.grid[sim._to_flat(stom_row, DSL_S2)] = hamming_encode(HUNGER_PERIOD)
+
     return sim, layout
 
 
@@ -679,7 +795,7 @@ def test_build():
     """Test that the narrow agent builds without errors."""
     sim, layout = make_narrow_agent()
     assert sim.rows == 38
-    assert sim.cols == 45
+    assert sim.cols == 46
     assert layout['rows_per_gadget'] == 19
     assert layout['code_rows'] == 6
     print(f"  Grid: {sim.rows}x{sim.cols} = {sim.rows * sim.cols} cells")

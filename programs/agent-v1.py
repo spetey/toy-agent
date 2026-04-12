@@ -462,7 +462,7 @@ def make_agent_v1(width=88, fuel_spec=None):
 
 
 if __name__ == '__main__':
-    width = 88
+    width = 89
     for i, arg in enumerate(sys.argv):
         if arg == '--width' and i + 1 < len(sys.argv):
             width = int(sys.argv[i + 1])

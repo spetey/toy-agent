@@ -519,14 +519,10 @@ def run_trial(args):
     PERIODIC_INTERVAL = 10_000
 
     for step in range(max_steps):
-        # Inject noise
-        action = np.flip_at(step, all_rows)
-        if action:
-            row, col, bit = action
-            flat = sim._to_flat(row, col)
-            sim.grid[flat] ^= (1 << bit)
-
+        # Match server order exactly: step → noise → food
+        # (waste_cleanup is off by default in the GUI for these agents)
         sim.step_all()
+        np.apply_forward(step, sim.grid, sim._to_flat, all_rows)
         apply_free_food(sim, layout, bite_size=bite_size)
 
         # -- Per-step invariant checks (O(1)) --
@@ -598,7 +594,7 @@ def main():
                         help='Max steps per trial')
     parser.add_argument('--cycle-mult', type=int, default=20,
                         help='Cycle timeout multiplier (default 20x clean cycle)')
-    parser.add_argument('--bite', type=int, default=20,
+    parser.add_argument('--bite', type=int, default=15,
                         help='Bite size for free-food cheat')
     parser.add_argument('--workers', type=int, default=0,
                         help='Parallel workers (0 = cpu_count - 1)')
@@ -701,7 +697,7 @@ def main():
         print(f"Rate: {rate:.0f} flips/1M")
         print(f"{'='*78}")
 
-        for agent in ('wide', 'narrow'):
+        for agent in agent_types:
             key = (agent, rate)
             trials = by_agent_rate.get(key, [])
             if not trials:
@@ -740,27 +736,28 @@ def main():
                       f"({n_noise_fail} fail, {n_noise_ok} ok, "
                       f"{len(trials) - len(noise_steps)} metab excluded)")
 
-        # Ratio
-        w_trials = by_agent_rate.get(('wide', rate), [])
-        n_trials = by_agent_rate.get(('narrow', rate), [])
-        if w_trials and n_trials:
-            w_avg = mean(t[0] for t in w_trials)
-            n_avg = mean(t[0] for t in n_trials)
-            ratio = w_avg / n_avg if n_avg > 0 else float('inf')
-            print(f"  >> combined ratio (wide/narrow): {ratio:.2f}x")
-            # Noise-only ratio
-            w_noise = [s for s, c in w_trials if classify(c) != 'metabolism']
-            n_noise = [s for s, c in n_trials if classify(c) != 'metabolism']
-            if w_noise and n_noise:
-                ratio_n = mean(w_noise) / mean(n_noise)
-                print(f"  >> noise-only ratio (wide/narrow): {ratio_n:.2f}x")
+        # Ratio (only if both wide and narrow present)
+        if len(agent_types) >= 2:
+            t0 = by_agent_rate.get((agent_types[0], rate), [])
+            t1 = by_agent_rate.get((agent_types[1], rate), [])
+            if t0 and t1:
+                avg0 = mean(t[0] for t in t0)
+                avg1 = mean(t[0] for t in t1)
+                ratio = avg0 / avg1 if avg1 > 0 else float('inf')
+                print(f"  >> combined ratio ({agent_types[0]}/{agent_types[1]}): {ratio:.2f}x")
+                # Noise-only ratio
+                n0 = [s for s, c in t0 if classify(c) != 'metabolism']
+                n1 = [s for s, c in t1 if classify(c) != 'metabolism']
+                if n0 and n1:
+                    ratio_n = mean(n0) / mean(n1)
+                    print(f"  >> noise-only ratio ({agent_types[0]}/{agent_types[1]}): {ratio_n:.2f}x")
         print()
 
     # -- Cause summary across all rates ----------------------------------------
     print(f"\n{'='*78}")
     print(f"Failure cause summary (all rates)")
     print(f"{'='*78}")
-    for agent in ('wide', 'narrow'):
+    for agent in agent_types:
         agent_results = [(s, c) for a, _, _, s, _, c in all_results if a == agent]
         total = len(agent_results)
         cause_counts = Counter(c for _, c in agent_results if c is not None)
@@ -780,12 +777,16 @@ def main():
     print(f"{'='*78}")
     print(f"Noise-only MTTF curve (metabolism failures excluded)")
     print(f"{'='*78}")
-    print(f"{'Rate':>6} | {'Wide mean':>12} {'med':>10} {'n':>4} | "
-          f"{'Narrow mean':>12} {'med':>10} {'n':>4} | {'Ratio':>6}")
-    print(f"{'-'*6}-+-{'-'*28}-+-{'-'*28}-+-{'-'*6}")
+    header_parts = [f"{'Rate':>6}"]
+    for agent in agent_types:
+        header_parts.append(f"{agent + ' mean':>12} {'med':>10} {'n':>4}")
+    if len(agent_types) >= 2:
+        header_parts.append(f"{'Ratio':>6}")
+    print(" | ".join(header_parts))
+    print("-" * len(" | ".join(header_parts)))
     for rate in rates:
         row_parts = [f"{rate:>6.0f}"]
-        for agent in ('wide', 'narrow'):
+        for agent in agent_types:
             key = (agent, rate)
             trials = by_agent_rate.get(key, [])
             noise_steps = [s for s, c in trials if classify(c) != 'metabolism']
@@ -796,43 +797,46 @@ def main():
             else:
                 row_parts.append(f"{'N/A':>12} {'N/A':>10} {'0':>4}")
 
-        w_noise = [s for s, c in by_agent_rate.get(('wide', rate), [])
-                   if classify(c) != 'metabolism']
-        n_noise = [s for s, c in by_agent_rate.get(('narrow', rate), [])
-                   if classify(c) != 'metabolism']
-        if w_noise and n_noise:
-            ratio = mean(w_noise) / mean(n_noise)
-            row_parts.append(f"{ratio:>6.2f}")
-        else:
-            row_parts.append(f"{'N/A':>6}")
+        if len(agent_types) >= 2:
+            n0 = [s for s, c in by_agent_rate.get((agent_types[0], rate), [])
+                  if classify(c) != 'metabolism']
+            n1 = [s for s, c in by_agent_rate.get((agent_types[1], rate), [])
+                  if classify(c) != 'metabolism']
+            if n0 and n1:
+                ratio = mean(n0) / mean(n1)
+                row_parts.append(f"{ratio:>6.2f}")
+            else:
+                row_parts.append(f"{'N/A':>6}")
 
         print(" | ".join(row_parts))
     print()
 
     # -- Per-seed breakdown (compact) ------------------------------------------
-    print(f"{'='*78}")
-    print(f"Per-seed breakdown (mean steps across trials)")
-    print(f"{'='*78}")
-    for rate in rates:
-        print(f"\nRate: {rate:.0f} flips/1M")
-        by_seed = {}
-        for agent, r, seed, steps, detail, cause in all_results:
-            if r != rate:
-                continue
-            seed_base = seed // 1000
-            key = (agent, seed_base)
-            if key not in by_seed:
-                by_seed[key] = []
-            by_seed[key].append(steps)
+    if len(agent_types) >= 2:
+        print(f"{'='*78}")
+        print(f"Per-seed breakdown (mean steps across trials)")
+        print(f"{'='*78}")
+        at0, at1 = agent_types[0], agent_types[1]
+        for rate in rates:
+            print(f"\nRate: {rate:.0f} flips/1M")
+            by_seed = {}
+            for agent, r, seed, steps, detail, cause in all_results:
+                if r != rate:
+                    continue
+                seed_base = seed // 1000
+                key = (agent, seed_base)
+                if key not in by_seed:
+                    by_seed[key] = []
+                by_seed[key].append(steps)
 
-        for sb in range(args.seeds):
-            w_steps = by_seed.get(('wide', sb), [])
-            n_steps = by_seed.get(('narrow', sb), [])
-            w_avg = mean(w_steps) if w_steps else 0
-            n_avg = mean(n_steps) if n_steps else 0
-            ratio = w_avg / n_avg if n_avg > 0 else 0
-            print(f"  seed {sb:>2}: wide {w_avg:>10,.0f} | "
-                  f"narrow {n_avg:>10,.0f} | ratio {ratio:.2f}x")
+            for sb in range(args.seeds):
+                s0 = by_seed.get((at0, sb), [])
+                s1 = by_seed.get((at1, sb), [])
+                avg0 = mean(s0) if s0 else 0
+                avg1 = mean(s1) if s1 else 0
+                ratio = avg0 / avg1 if avg1 > 0 else 0
+                print(f"  seed {sb:>2}: {at0} {avg0:>10,.0f} | "
+                      f"{at1} {avg1:>10,.0f} | ratio {ratio:.2f}x")
 
 
 if __name__ == '__main__':

@@ -1873,7 +1873,8 @@ async function toggleNoise() {
 async function sendNoiseConfig() {
   const rate = parseFloat(document.getElementById('noiseRate').value) || 0;
   const type = document.getElementById('noiseType').value;
-  const seed = parseInt(document.getElementById('noiseSeed').value) || 42;
+  const seedVal = parseInt(document.getElementById('noiseSeed').value);
+  const seed = Number.isNaN(seedVal) ? 42 : seedVal;
   await api('noise', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -1892,9 +1893,10 @@ function updateNoiseStats(st) {
       el.textContent = st.noise_total_injected + ' injected';
     }
   }
-  // Sync seed from server
-  if (st.noise_seed !== undefined) {
-    document.getElementById('noiseSeed').value = st.noise_seed;
+  // Sync seed from server (but don't overwrite while user is editing)
+  const seedEl = document.getElementById('noiseSeed');
+  if (st.noise_seed !== undefined && seedEl && document.activeElement !== seedEl) {
+    seedEl.value = st.noise_seed;
   }
   // Sync toggle state from server (e.g. on page load)
   if (st.noise_enabled !== undefined && st.noise_enabled !== noiseEnabled) {
