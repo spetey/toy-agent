@@ -48,18 +48,16 @@ fb2d is a 2D reversible esoteric language where:
   with dirty working-area cells). NoisePool provides deterministic,
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
-- **`programs/agent-v1.py`** — Self-fueling agent: dual immunity gadget
-  + metabolism + hunger timer (★ current flagship). Combines v8 SECDED
-  correction with XOR-based metabolism that compresses duplicate fuel
-  runs into zeros.  R+11 layout per gadget (3 metabolism rows below the
-  correction code).  The hunger timer (HUNGER_PERIOD=300) triggers
-  metabolism every 300 bypass cycles independent of error correction,
-  preventing zero starvation at low noise rates.  Countdown lives in
-  DSL_S2 (stomach col 5); DSL_S1 (col 4) holds the period constant.
-  Bypass row includes T/I undo for pre-syndrome state cleanup.
-  Hunger detour deposits non-zero (+Z) into waste trail; `(` gate
-  (EX≠0) at metab_main col 3 routes hungry IP into shared metabolism.
-  Requires width ≥ 89 (code_left=4 opens col 3 as vertical NOP lane).
+- **`programs/agent-v1-narrow.py`** — Narrow self-fueling agent (★ current
+  flagship, W=46): dual immunity gadget + metabolism + hunger timer
+  (HUNGER_PERIOD=100). 38×46 = 1748 cells. Same v8 correction as the
+  wide agent but packed into 6 code rows via custom boustrophedon.
+  CODE_LEFT=4 frees col 3 as the hunger express lane. Probe ? at col 43,
+  pre-syndrome ? at col 42. Build: `python3 programs/agent-v1-narrow.py`
+- **`programs/agent-v1.py`** — Wide self-fueling agent (W=89): same
+  architecture as narrow but wider grid (26×89 = 2314 cells) with
+  HUNGER_PERIOD=300. ~3-4× longer MTTF under noise. Requires width ≥ 89
+  (code_left=4 opens col 3 as vertical NOP lane).
   Build: `python3 programs/agent-v1.py [--width W]`
 - **`programs/compare-agents-mttf.py`** — Empirical MTTF comparison of
   wide vs narrow agent-v1. Measures mean time to failure under noise,
@@ -111,20 +109,24 @@ fb2d is a 2D reversible esoteric language where:
 
 ## Minimal Working Example
 
-**`programs/agent-v1-w89.fb2d`** — Self-fueling agent with hunger timer:
-two mutually-correcting Hamming(16,11) gadgets with XOR-based metabolism
-and periodic eating. Each gadget corrects the other's code via `I`
-(pre-syndrome filter) and `V` (correction mask) opcodes, and fuels
-itself by compressing duplicate runs on its EX row into zeros. R+11
-layout per gadget (26×89 grid). The hunger timer triggers metabolism
-every 300 bypass cycles, preventing zero starvation at low noise rates.
+**`programs/agent-v1-narrow-w46.fb2d`** (★ flagship) — Narrow self-fueling
+agent with hunger timer: two mutually-correcting Hamming(16,11) gadgets
+with XOR-based metabolism and periodic eating. Each gadget corrects the
+other's code via `I` (pre-syndrome filter) and `V` (correction mask)
+opcodes, and fuels itself by compressing duplicate runs on its EX row
+into zeros. R+11 layout per gadget (38×46 grid, 1748 cells). The hunger
+timer triggers metabolism every 100 bypass cycles, preventing zero
+starvation at low noise rates.
 
 ```bash
 python3 fb2d_server.py          # default port 5001
-# Open http://localhost:5001, load agent-v1-w89
+# Open http://localhost:5001, load agent-v1-narrow-w46
 # Click "Food" button to enable free-food cheat (auto-refill fuel)
 # Enable noise (pick any seed, 200 flips/1M), watch corrections + metabolism
 ```
+
+Also available: **`programs/agent-v1-w89.fb2d`** (wide agent, W=89,
+HUNGER_PERIOD=300, ~3-4× longer MTTF).
 
 **How it works**: Each IP runs correction code (boustrophedon rows).
 On a 1-bit error, it drops south into metabolism rows via col 2. On a
@@ -381,7 +383,10 @@ output x            // write to EX trail, zero var
 ## Running Tests
 
 ```bash
-# Self-fueling agent + hunger timer (★ flagship):
+# Narrow self-fueling agent + hunger timer (★ flagship):
+python3 programs/agent-v1-narrow.py        # default W=46
+
+# Wide self-fueling agent + hunger timer:
 python3 programs/agent-v1.py [--width W]   # default W=89
 
 # MTTF comparison (wide vs narrow, various noise rates):

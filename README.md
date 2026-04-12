@@ -53,7 +53,7 @@ pip install flask          # one-time setup
 python3 fb2d_server.py     # starts on http://localhost:5001
 ```
 
-1. Load **agent-v1-w89** from the dropdown (the self-fueling agent)
+1. Load **agent-v1-narrow-w46** from the dropdown (the narrow self-fueling agent, ★ flagship)
 2. Click the **Food** button to enable the free-food cheat (auto-refill fuel)
 3. Enable noise — press `N`, set rate to ~200 flips/1M rounds, pick any seed
 4. Press Space to play
@@ -61,10 +61,13 @@ python3 fb2d_server.py     # starts on http://localhost:5001
 Watch: two gadgets correct each other while metabolizing fuel. Each IP
 sweeps the partner gadget's code with IX, correcting errors via
 Hamming(16,11). When a 1-bit error is found (or the hunger timer fires
-after 300 clean sweeps), the IP drops south into metabolism rows where
+after 100 clean sweeps), the IP drops south into metabolism rows where
 EX walks east through fuel, XOR-compressing duplicate runs into zeros.
 The corridor resets the hunger counter and returns the IP north for the
 next sweep cycle.
+
+Also available: **agent-v1-w89** (wide agent, HUNGER_PERIOD=300).
+Wider grid gives ~3-4× longer MTTF under noise but uses 32% more cells.
 
 The **Food** button auto-refills fuel when the contiguous food stretch
 drops below 2× bite size (default 15). It replaces garbage cells with
@@ -77,7 +80,10 @@ and enable waste cleanup (`W` key) instead of food.
 ### Tests
 
 ```bash
-# Self-fueling agent (★ flagship — immunity + metabolism)
+# Narrow self-fueling agent (★ flagship — immunity + metabolism + hunger)
+python3 programs/agent-v1-narrow.py
+
+# Wide self-fueling agent (wider grid, longer MTTF)
 python3 programs/agent-v1.py
 
 # Metabolism standalone tests (compression, walk-back, full cycle)
@@ -102,7 +108,8 @@ python3 test_pools.py
 python3 fb2d.py
 
 # Inside the simulator:
-#   load agent-v1-w89              — load the self-fueling agent
+#   load agent-v1-narrow-w46       — load the narrow agent (★ flagship)
+#   load agent-v1-w89              — load the wide agent
 #   run 1000    — run 1000 steps forward
 #   back 1000   — run 1000 steps backward (perfectly reversed)
 #   show        — display the grid
@@ -303,8 +310,10 @@ pools.py                         Reversible waste pool + noise pool
 test_pools.py                    Pool tests (waste, noise, integration)
 test_reversibility.py            Exhaustive opcode reversibility proof
 programs/                        Example programs and demos
-  agent-v1.py                       Self-fueling agent + hunger timer (★ flagship)
-  agent-v1-w89.fb2d                 Loadable state: immunity + metabolism + hunger
+  agent-v1-narrow.py                 Narrow self-fueling agent (W=46, ★ flagship)
+  agent-v1-narrow-w46.fb2d          Loadable state: narrow agent
+  agent-v1.py                       Wide self-fueling agent (W=89)
+  agent-v1-w89.fb2d                 Loadable state: wide agent
   compare-agents-mttf.py            Empirical MTTF comparison under noise
   metabolism-v1.py                   Standalone metabolism loop tests
   metabolism-v1-manual.fb2d          Hand-built metabolism prototype
@@ -327,16 +336,16 @@ CLAUDE.md                        Detailed project context for AI assistants
 This is active research software. The language design is at v1.15
 (62 opcodes + NOP). Recent milestones:
 
-- **Self-fueling agent with hunger timer** (agent-v1, ★ current flagship):
-  dual immunity gadget with XOR-based metabolism and periodic eating.
-  Each gadget corrects the other's code via `I` (pre-syndrome filter)
-  and `V` (correction mask), and fuels itself by compressing duplicate
-  fuel runs into zeros. A hunger timer (HUNGER_PERIOD=300) triggers
-  metabolism every 300 bypass cycles, preventing zero starvation at low
-  noise rates. The countdown lives in DSL_S2; the bypass row includes
-  T/I undo for pre-syndrome state cleanup. R+11 layout per gadget.
-  Requires width ≥ 89 (code_left=4 for col 3 vertical NOP express lane).
-  GUI "free food" cheat auto-refills fuel for indefinite testing.
+- **Narrow self-fueling agent** (agent-v1-narrow, W=46, ★ current flagship):
+  dual immunity gadget with XOR-based metabolism and hunger timer
+  (HUNGER_PERIOD=100). 38×46 = 1748 cells — 24% smaller than the wide
+  agent. CODE_LEFT=4 frees col 3 as the hunger express lane through
+  code rows. Probe ? at col 43, pre-syndrome ? at col 42. MTTF
+  comparison (compare-agents-mttf.py) verified seed-for-seed against
+  the GUI server.
+- **Wide self-fueling agent** (agent-v1, W=89): same architecture, wider
+  grid (26×89 = 2314 cells), HUNGER_PERIOD=300. ~3-4× longer MTTF
+  under noise due to more fuel and wider correction margins.
 - **V-opcode correction** (v8, 147 ops): replaces 160 ops of syndrome
   computation with a single `V` opcode. 4.8-6.8x longer MTTF than v5.
   Pre-syndrome filter (`I T ?`) lets 95% of cells bypass in ~84 steps.
