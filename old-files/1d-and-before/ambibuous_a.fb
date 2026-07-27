@@ -1,0 +1,9 @@
+# F***brain IR state: ambibuous_a.fb
+tape_size=8
+ip=0
+ir=0
+cl=5
+h0=0
+h1=0
+step=0
+tape=11,0,0,1,0,4,1,0

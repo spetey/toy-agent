@@ -1,0 +1,23 @@
+# RBF Decrement-Until-Zero Loop
+# Program: <<<x}}))F>J<F}+{{{((x-}}}}S{{{{>>>J
+# 
+# This decrements tape[40] (r) until it reaches 0, then exits to position 50.
+# Each iteration:
+#   1. Tests if r=0 (via F conditional)
+#   2. If r!=0: decrements r, loops back
+#   3. If r=0: jumps to exit (position 50)
+# 
+# Data layout:
+#   tape[40] = r (register to decrement)
+#   tape[41] = scratch
+#   tape[42] = label/exit address (50)
+#   tape[43] = continue address (11)
+#   tape[44] = loopback address (0)
+# 
+tape_size=64
+ip=0
+cl=44
+h0=40
+h1=41
+step=0
+tape=1,1,1,9,4,4,6,6,10,2,11,1,10,4,7,3,3,3,5,5,9,8,4,4,4,4,12,3,3,3,3,2,2,2,11,0,0,0,0,0,5,0,50,11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0

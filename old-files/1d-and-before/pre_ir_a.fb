@@ -1,0 +1,9 @@
+# F***brain IR state: pre_ir_a.fb
+tape_size=8
+ip=3
+ir=0
+cl=5
+h0=0
+h1=0
+step=0
+tape=0,11,0,0,0,1,2,0

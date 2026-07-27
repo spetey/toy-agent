@@ -1,0 +1,8 @@
+# F***brain state: conditional_jump_reverse_trouble.fb
+tape_size=32
+ip=0
+cl=11
+h0=8
+h1=9
+step=0
+tape=10,12,11,0,0,0,0,0,3,17,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0

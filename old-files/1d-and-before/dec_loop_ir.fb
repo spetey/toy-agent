@@ -1,0 +1,47 @@
+# F***brain IR v2 state: dec_loop_ir.fb
+# Decrementing loop example for IR-based reversible simulator
+#
+# This decrements counter from 3 to 0, using "unrolled" loop copies.
+# Each iteration uses a fresh loop body and fresh target cell.
+#
+# Loop body: - ) J  (decrement counter, advance H1, conditional jump)
+#
+# Memory layout:
+#   Code section (positions 0-15):
+#     0-2:   -, ), J   (iteration 1 body)
+#     3:     0         (padding)
+#     4-6:   -, ), J   (iteration 2 body)
+#     7:     0         (padding)
+#     8-10:  -, ), J   (iteration 3 body)
+#     11:    0         (padding)
+#     12-14: -, ), J   (iteration 4 body - unused if counter=3)
+#     15:    0         (padding/exit)
+#   
+#   Positions 16-31: exit area (NOPs)
+#
+#   Data section (positions 32+):
+#     32:    counter (initial value 3)
+#     33-36: jump targets [3, 7, 11, 15]
+#            (each J lands at target+1, so 3→pos 4, 7→pos 8, etc.)
+#
+# Initial registers:
+#   IP = 0   (start of first loop body)
+#   IR = 0   (empty instruction register)
+#   CL = 32  (points to counter)
+#   H0 = 32  (points to counter, for decrement)
+#   H1 = 33  (points to first target cell)
+#
+# After execution:
+#   - Counter decremented 3 times (3→2→1→0)
+#   - Final J (at pos 14) falls through because counter=0
+#   - IP walks into exit area at position 16+
+#   - Target cells contain return addresses (garbage for reversal)
+#
+tape_size=64
+ip=0
+ir=0
+cl=32
+h0=32
+h1=33
+step=0
+tape=8,6,12,0,8,6,12,0,8,6,12,0,8,6,12,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,7,11,15,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0

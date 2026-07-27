@@ -1,0 +1,8 @@
+# F***brain state: jump_reversible.fb
+tape_size=32
+ip=11
+cl=14
+h0=8
+h1=9
+step=11
+tape=0,0,11,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0

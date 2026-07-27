@@ -1,0 +1,31 @@
+# F***brain state: dec_loop.fb
+# DEC-until-zero loop example
+# 
+# Program: G{{{{x}}))F>J<F}+{{{((x-}}}}+GJ (31 instructions)
+# 
+# This decrements r until it reaches 0, then exits.
+# Each iteration uses a different garbage cell for the loopback return address.
+# The G instruction enables this by swapping CL with tape[H0], allowing
+# indirect addressing of the garbage pointer.
+#
+# Memory layout:
+#   tape[40] = r (loop counter, starts at 5)
+#   tape[41] = scratch (for F test)
+#   tape[42] = exit address (70)
+#   tape[43] = continue address (13)
+#   tape[44] = garbage pointer (starts at 55)
+#   tape[55+] = garbage cells (return addresses)
+#
+# Initial state:
+#   IP = 1 (skip G@0 on first iteration)
+#   H0 = 44 (garbage pointer cell)
+#   H1 = 41 (scratch)
+#   CL = 41 (for F test)
+#
+tape_size=80
+ip=1
+cl=41
+h0=44
+h1=41
+step=0
+tape=13,3,3,3,3,9,4,4,6,6,10,2,11,1,10,4,7,3,3,3,5,5,9,8,4,4,4,4,7,13,11,0,0,0,0,0,0,0,0,0,5,0,70,13,55,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0

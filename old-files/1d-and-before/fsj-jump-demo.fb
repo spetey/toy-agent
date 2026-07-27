@@ -1,0 +1,8 @@
+# F***brain state: fsj-jump-demo.fb
+tape_size=16
+ip=0
+cl=11
+h0=8
+h1=9
+step=0
+tape=10,12,11,0,0,0,0,0,3,0,0,5,0,0,0,0

@@ -1,0 +1,9 @@
+# F***brain IR state: ir_ambiguity.fb
+tape_size=8
+ip=4
+ir=0
+cl=5
+h0=0
+h1=0
+step=4
+tape=0,11,0,1,0,1,1,0
