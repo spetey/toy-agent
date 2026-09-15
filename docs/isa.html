@@ -4,12 +4,12 @@
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <title>isa</title>
+  <title>fb2d ISA: raw opcode fetch</title>
   <style>
-    /* Default styles provided by pandoc.
-    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
-    */
     html {
+      line-height: 1.5;
+      font-family: Georgia, serif;
+      font-size: 20px;
       color: #1a1a1a;
       background-color: #fdfdfd;
     }
@@ -28,16 +28,13 @@
     @media (max-width: 600px) {
       body {
         font-size: 0.9em;
-        padding: 12px;
+        padding: 1em;
       }
       h1 {
         font-size: 1.8em;
       }
     }
     @media print {
-      html {
-        background-color: white;
-      }
       body {
         background-color: transparent;
         color: black;
@@ -61,10 +58,6 @@
       color: #1a1a1a;
     }
     img {
-      max-width: 100%;
-    }
-    svg {
-      height: auto;
       max-width: 100%;
     }
     h1, h2, h3, h4, h5, h6 {
@@ -91,10 +84,9 @@
       color: #606060;
     }
     code {
-      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-family: Menlo, Monaco, 'Lucida Console', Consolas, monospace;
       font-size: 85%;
       margin: 0;
-      hyphens: manual;
     }
     pre {
       margin: 1em 0;
@@ -110,8 +102,8 @@
      overflow: visible;
     }
     hr {
+      background-color: #1a1a1a;
       border: none;
-      border-top: 1px solid #1a1a1a;
       height: 1px;
       margin: 1em 0;
     }
@@ -156,35 +148,99 @@
     }
     code{white-space: pre-wrap;}
     span.smallcaps{font-variant: small-caps;}
-    div.columns{display: flex; gap: min(4vw, 1.5em);}
-    div.column{flex: auto; overflow-x: auto;}
+    span.underline{text-decoration: underline;}
+    div.column{display: inline-block; vertical-align: top; width: 50%;}
     div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
-    /* The extra [class] is a hack that increases specificity enough to
-       override a similar rule in reveal.js */
-    ul.task-list[class]{list-style: none;}
-    ul.task-list li input[type="checkbox"] {
-      font-size: inherit;
-      width: 0.8em;
-      margin: 0 0.8em 0.2em -1.6em;
-      vertical-align: middle;
+    ul.task-list{list-style: none;}
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
     }
-    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
   </style>
+  <!--[if lt IE 9]>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
+  <![endif]-->
 </head>
 <body>
-<h1 id="fb2d-instruction-set-architecture-v1.15">fb2d Instruction Set
-Architecture (v1.15)</h1>
-<p>62 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
-<code>payload(cell)</code> (the 11 data bits of the Hamming(16,11)
-codeword) as the opcode. Payloads corresponding to opcodes 1-62 (or
-within Hamming distance 1 of such a payload) execute that opcode;
-everything else is NOP.</p>
-<p>v1.15 changes: <code>I</code> (syndrome inspect) replaces the unused
-<code>M</code> (payload subtract via IX) at opcode 54. <code>M</code>
-was completely superseded by <code>m</code> (raw XOR) in the copy-down
-architecture.</p>
+<header id="title-block-header">
+<h1 class="title">fb2d ISA: raw opcode fetch</h1>
+</header>
+<h1 id="fb2d-instruction-set-architecture-raw-opcode-fetch-fork">fb2d
+Instruction Set Architecture (raw opcode fetch fork)</h1>
+<p>62 opcodes + NOP. Every 16-bit cell value is a valid simulator state.
+The IP extracts the 11 data bits <strong>without Hamming
+correction</strong>, then uses the opcode decoder to select an
+instruction. The five parity bits do not participate in instruction
+selection.</p>
+<p>This fork retains the v1.15 instruction set: <code>I</code> (syndrome
+inspect) replaces the unused <code>M</code> (payload subtract via IX) at
+opcode 54. <code>M</code> was completely superseded by <code>m</code>
+(raw XOR) in the copy-down architecture. The change is the fetch rule,
+not the 16-bit cell format or the semantics of the individual
+instructions.</p>
 <h2 id="cell-format">Cell Format</h2>
-<p>Each cell is a 16-bit Hamming(16,11) SECDED codeword:</p>
+<p>Each cell stores 16 bits in the following Hamming(16,11) SECDED
+layout. All 65,536 patterns are allowed; exactly 2,048 have valid
+parity:</p>
 <pre><code>Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
      d10 d9 d8 d7 d6 d5 d4 p3 d3 d2 d1 p2 d0 p1 p0 p_all</code></pre>
 <ul>
@@ -197,17 +253,95 @@ invariant</li>
 <li>Bit-level ops (r, l, R, L, Y, x, z, f, m, j, I) operate on all 16
 raw bits</li>
 </ul>
-<h2 id="opcode-encoding">Opcode Encoding</h2>
+<h2 id="instruction-selection">Instruction Selection</h2>
+<p>Forward and reverse stepping use the same read rule:</p>
+<pre class="text"><code>16-bit cell -&gt; raw 11-bit payload -&gt; opcode lookup -&gt; instruction</code></pre>
+<p>In <code>fb2d.py</code>, the lookup is
+<code>_PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD_RAW[cell]]</code>. Neither
+this read nor the lookup changes the stored cell. The CLI and GUI
+instruction labels use this same interpretation. Parity remains
+available to instructions that explicitly read or modify it.</p>
+<h3 id="opcode-encoding">Opcode Encoding</h3>
 <p>Opcode payloads are drawn from an [11,6,4] linear code with minimum
 Hamming distance d_min = 4. This means no combination of 1, 2, or 3
-data-bit flips can turn one valid opcode payload into another.</p>
+data-bit flips can turn one designated opcode payload into another
+designated payload. The numeric opcode IDs used in the instruction
+tables below are not their stored payloads: <code>OPCODE_PAYLOADS</code>
+in <code>fb2d.py</code> supplies the mapping (for example, opcode 15,
+<code>+</code>, has payload 975).</p>
 <p><strong>Nearest-codeword decoding</strong>: each 11-bit payload
-within Hamming distance 1 of a valid opcode codeword decodes to that
-opcode (not NOP). A single data-bit error in an opcode cell still
-executes the <em>correct</em> opcode. Two-bit errors → NOP (guaranteed
-by d_min = 4). Each opcode has a “neighborhood” of 12 payloads (1 center
-+ 11 single-bit neighbors). 672 of 2048 payloads decode to valid
-opcodes.</p>
+within Hamming distance 1 of a designated non-NOP opcode payload selects
+that opcode. Starting from a designated encoding, one data-bit flip
+preserves the instruction and two data-bit flips give NOP. Three or more
+data-bit flips can select a different instruction. Parity-bit flips have
+no effect on this choice. Each non-NOP opcode accepts 12 payloads (one
+center and 11 single-bit neighbors), so 744 of 2,048 payloads select
+non-NOP instructions and the remaining 1,304 select NOP.</p>
+<p>These error guarantees concern distance from a designated instruction
+payload, not from any Hamming-valid data word. A correct parity check
+alone does not make a payload a designated instruction encoding.</p>
+<h3 id="why-fetch-does-not-perform-hamming-correction">Why Fetch Does
+Not Perform Hamming Correction</h3>
+<p>The former fetch path applied Hamming decoding before the opcode
+lookup. That could move a payload across an opcode boundary. For
+example, flipping cell bits 0, 1, and 6 in a designated <code>+</code>
+encoding changes its raw payload from 975 to 971. Raw opcode decoding
+still selects <code>+</code>, since 971 is one data bit from 975.
+Hamming decoding instead produces payload 963, two bits from 975, and
+the subsequent opcode lookup selects NOP.</p>
+<p>The fork avoids that interaction by using only raw payload extraction
+during fetch. This does not claim better survival for every noise
+pattern.</p>
+<h3 id="other-reads-and-explicit-repair">Other Reads and Explicit
+Repair</h3>
+<table>
+<colgroup>
+<col style="width: 23%" />
+<col style="width: 76%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Use</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Instruction fetch, forward and reverse</td>
+<td>Raw payload followed by opcode lookup</td>
+</tr>
+<tr class="even">
+<td>Payload arithmetic and CL/EX zero tests</td>
+<td>Raw data bits; no Hamming decoding</td>
+</tr>
+<tr class="odd">
+<td><code>R</code>, <code>L</code>, <code>Y</code> rotation amounts</td>
+<td>Hamming-decoded payload of <code>[CL]</code>, then
+<code>&amp; 15</code></td>
+</tr>
+<tr class="even">
+<td><code>I</code>, <code>V</code></td>
+<td>Explicit Hamming syndrome/parity operations on raw 16-bit
+values</td>
+</tr>
+<tr class="odd">
+<td>Raw swaps, XORs, and rotated data</td>
+<td>Full 16-bit values, including parity positions</td>
+</tr>
+</tbody>
+</table>
+<p>Hamming(16,11) has minimum distance 4. Its checks enable single-bit
+correction and double-bit detection across all 16 positions. The agent
+uses <code>I</code> to inspect cells, <code>V</code> to form a
+single-error mask, and <code>j</code> to write the repair. Double-bit
+errors need extra information; the current agent consults the
+corresponding cell in its partner gadget. Three or more errors can
+imitate the single- or double-error cases.</p>
+<p>Reversibility does not require Hamming decoding during fetch: the
+stored instruction bits are retained, both time directions use the same
+lookup, and the existing overlap guards protect the inputs needed to
+undo each instruction. The repair program preserves error information in
+its auxiliary cells and waste rather than discarding it.</p>
 <h2 id="heads">Heads</h2>
 <table>
 <colgroup>
@@ -215,30 +349,30 @@ opcodes.</p>
 <col style="width: 60%" />
 </colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>Head</th>
 <th>Purpose</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td>H0</td>
 <td>Primary data head</td>
 </tr>
-<tr>
+<tr class="even">
 <td>H1</td>
 <td>Secondary data head</td>
 </tr>
-<tr>
+<tr class="odd">
 <td>IX</td>
 <td>Interoceptor — programmable head for cross-gadget correction</td>
 </tr>
-<tr>
+<tr class="even">
 <td>CL</td>
 <td>Condition latch — tested by conditional mirrors; also provides
 rotation amounts</td>
 </tr>
-<tr>
+<tr class="odd">
 <td>EX</td>
 <td>Exteroceptor — breadcrumb trail for reversibility</td>
 </tr>
@@ -249,167 +383,171 @@ rotation amounts</td>
 <ul>
 <li><code>[H0]</code> = full 16-bit cell value at head H0’s
 position</li>
-<li><code>payload(X)</code> = the 11 data bits extracted from cell
-X</li>
+<li><code>payload(X)</code> = the 11 data bits extracted from cell X
+without correction</li>
+<li><code>decoded_payload(X)</code> = the 11-bit result of the Hamming
+decoder; used for rotation amounts only among the instruction operands
+below</li>
 <li>Movement is on a torus: edges wrap</li>
 </ul>
 <h2 id="mirrors-6-opcodes">Mirrors (6 opcodes)</h2>
 <table>
 <thead>
-<tr>
+<tr class="header">
 <th>Op</th>
-<th>Payload</th>
+<th>Opcode</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>/</code></td>
 <td>1</td>
 <td>Unconditional <code>/</code> reflect</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>\</code></td>
 <td>2</td>
 <td>Unconditional <code>\</code> reflect</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>%</code></td>
 <td>3</td>
 <td><code>/</code> reflect if payload([CL]) != 0</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>?</code></td>
 <td>4</td>
 <td><code>/</code> reflect if payload([CL]) == 0</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>&amp;</code></td>
 <td>5</td>
 <td><code>\</code> reflect if payload([CL]) != 0</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>!</code></td>
 <td>6</td>
 <td><code>\</code> reflect if payload([CL]) == 0</td>
 </tr>
 </tbody>
 </table>
-<p>Mirror geometry:</p>
-<ul>
-<li><code>/</code> maps E<span class="math inline">↔︎</span>N, S<span
-class="math inline">↔︎</span>W</li>
-<li><code>\</code> maps E<span class="math inline">↔︎</span>S, N<span
-class="math inline">↔︎</span>W</li>
-</ul>
+<p>Mirror geometry: <code>/</code> maps
+E<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>↔</mo><annotation encoding="application/x-tex">\leftrightarrow</annotation></semantics></math>N
+and
+S<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>↔</mo><annotation encoding="application/x-tex">\leftrightarrow</annotation></semantics></math>W;
+<code>\</code> maps
+E<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>↔</mo><annotation encoding="application/x-tex">\leftrightarrow</annotation></semantics></math>S
+and
+N<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>↔</mo><annotation encoding="application/x-tex">\leftrightarrow</annotation></semantics></math>W.</p>
 <p>Conditional mirrors test whether any data bit in [CL] is set
 (<code>[CL] &amp; DATA_MASK</code>). Parity bits are ignored.</p>
 <h2 id="head-movement-20-opcodes">Head Movement (20 opcodes)</h2>
 <table>
 <thead>
-<tr>
+<tr class="header">
 <th>Op</th>
-<th>Payload</th>
+<th>Opcode</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>N</code></td>
 <td>7</td>
 <td>Move H0 north</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>S</code></td>
 <td>8</td>
 <td>Move H0 south</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>E</code></td>
 <td>9</td>
 <td>Move H0 east</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>W</code></td>
 <td>10</td>
 <td>Move H0 west</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>n</code></td>
 <td>11</td>
 <td>Move H1 north</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>s</code></td>
 <td>12</td>
 <td>Move H1 south</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>e</code></td>
 <td>13</td>
 <td>Move H1 east</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>w</code></td>
 <td>14</td>
 <td>Move H1 west</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>&gt;</code></td>
 <td>23</td>
 <td>Move CL east</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>&lt;</code></td>
 <td>24</td>
 <td>Move CL west</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>^</code></td>
 <td>25</td>
 <td>Move CL north</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>v</code></td>
 <td>26</td>
 <td>Move CL south</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>]</code></td>
 <td>29</td>
 <td>Move EX east</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>[</code></td>
 <td>30</td>
 <td>Move EX west</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>}</code></td>
 <td>31</td>
 <td>Move EX south</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>{</code></td>
 <td>32</td>
 <td>Move EX north</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>H</code></td>
 <td>49</td>
 <td>Move IX north</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>h</code></td>
 <td>50</td>
 <td>Move IX south</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>a</code></td>
 <td>51</td>
 <td>Move IX east</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>d</code></td>
 <td>52</td>
 <td>Move IX west</td>
@@ -428,57 +566,57 @@ invariant.</p>
 <col style="width: 25%" />
 </colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>Op</th>
-<th>Payload</th>
+<th>Opcode</th>
 <th>Description</th>
 <th>Inverse</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>+</code></td>
 <td>15</td>
 <td>payload([H0])++ (mod 2048, with parity fixup)</td>
 <td><code>-</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>-</code></td>
 <td>16</td>
 <td>payload([H0])– (mod 2048, with parity fixup)</td>
 <td><code>+</code></td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>.</code></td>
 <td>17</td>
 <td>payload([H0]) += payload([H1]) (mod 2048, with parity fixup)</td>
 <td><code>,</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>,</code></td>
 <td>18</td>
 <td>payload([H0]) -= payload([H1]) (mod 2048, with parity fixup)</td>
 <td><code>.</code></td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>X</code></td>
 <td>19</td>
 <td>swap([H0], [H1]) — full 16-bit swap</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>F</code></td>
 <td>20</td>
 <td>if payload([CL]) != 0: swap([H0], [H1]) — Fredkin gate</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>G</code></td>
 <td>21</td>
 <td>swap(H1 register, [H0]) — indirect H1</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>T</code></td>
 <td>22</td>
 <td>swap([CL], [H0]) — bridge (full 16-bit)</td>
@@ -504,69 +642,70 @@ design, the correction gadget uses them to manipulate raw bits.</p>
 <col style="width: 25%" />
 </colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>Op</th>
-<th>Payload</th>
+<th>Opcode</th>
 <th>Description</th>
 <th>Inverse</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>x</code></td>
 <td>39</td>
 <td>[H0] ^= [H1] — XOR</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>r</code></td>
 <td>40</td>
 <td>[H0] rotate right 1 bit</td>
 <td><code>l</code></td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>l</code></td>
 <td>41</td>
 <td>[H0] rotate left 1 bit</td>
 <td><code>r</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>f</code></td>
 <td>42</td>
 <td>if [CL] &amp; 1: swap([H0], [H1]) — bit-0 Fredkin</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>z</code></td>
 <td>43</td>
-<td>swap(bit 0 of [H0], bit 0 of [EX])</td>
+<td>swap(bit 0 of [H0], bit 0 of [H1])</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>R</code></td>
 <td>44</td>
-<td>[H0] rotate right by (payload([CL]) &amp; 15) bits</td>
+<td>[H0] rotate right by (decoded_payload([CL]) &amp; 15) bits</td>
 <td><code>L</code></td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>L</code></td>
 <td>45</td>
-<td>[H0] rotate left by (payload([CL]) &amp; 15) bits</td>
+<td>[H0] rotate left by (decoded_payload([CL]) &amp; 15) bits</td>
 <td><code>R</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>Y</code></td>
 <td>46</td>
-<td>[H0] ^= ror([H1], payload([CL]) &amp; 15) — fused rotate-XOR</td>
+<td>[H0] ^= ror([H1], decoded_payload([CL]) &amp; 15) — fused
+rotate-XOR</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>:</code></td>
 <td>47</td>
 <td>payload([CL])++ (mod 2048, with parity fixup)</td>
 <td><code>;</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>;</code></td>
 <td>48</td>
 <td>payload([CL])– (mod 2048, with parity fixup)</td>
@@ -582,10 +721,11 @@ design, the correction gadget uses them to manipulate raw bits.</p>
 <strong>payload([CL]) != 0</strong> — used for general conditional
 logic</li>
 <li><strong><code>R</code>/<code>L</code>/<code>Y</code></strong> read
-the rotation amount from <code>payload([CL]) &amp; 15</code> (0-15
-positions, suitable for 16-bit cells)</li>
+the rotation amount from <code>decoded_payload([CL]) &amp; 15</code>
+(0-15 positions). This Hamming decoding is an operand rule, not opcode
+selection, and does not write a correction back to CL.</li>
 <li><strong><code>z</code></strong> swaps raw bit 0 of [H0] with raw bit
-0 of [EX] — used to extract single syndrome/parity bits</li>
+0 of [H1] — used to extract single syndrome/parity bits</li>
 </ul>
 <h2 id="ex-exteroceptor-ops-8-opcodes">EX (Exteroceptor) Ops (8
 opcodes)</h2>
@@ -597,57 +737,57 @@ opcodes)</h2>
 <col style="width: 25%" />
 </colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>Op</th>
-<th>Payload</th>
+<th>Opcode</th>
 <th>Description</th>
 <th>Inverse</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>P</code></td>
 <td>27</td>
 <td>payload([EX])++ — leave breadcrumb</td>
 <td><code>Q</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>Q</code></td>
 <td>28</td>
 <td>payload([EX])– — erase breadcrumb</td>
 <td><code>P</code></td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>K</code></td>
 <td>33</td>
 <td>swap(CL register, EX register) — exchange head positions</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>(</code></td>
 <td>34</td>
 <td><code>\</code> reflect if payload([EX]) != 0</td>
 <td>—</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>)</code></td>
 <td>35</td>
 <td><code>\</code> reflect if payload([EX]) == 0</td>
 <td>—</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>#</code></td>
 <td>36</td>
 <td><code>/</code> reflect if payload([EX]) == 0</td>
 <td>—</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>$</code></td>
 <td>37</td>
 <td><code>/</code> reflect if payload([EX]) != 0</td>
 <td>—</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>Z</code></td>
 <td>38</td>
 <td>swap([H0], [EX]) — full 16-bit EX swap</td>
@@ -685,33 +825,33 @@ writes the correction mask back to the remote cell.</p>
 <col style="width: 25%" />
 </colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>Op</th>
-<th>Payload</th>
+<th>Opcode</th>
 <th>Description</th>
 <th>Inverse</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>m</code></td>
 <td>53</td>
 <td>[H0] ^= [IX] — raw 16-bit XOR (copy-in / uncompute)</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>I</code></td>
 <td>54</td>
 <td>[H0] ^= syndrome_5bit([IX]) — syndrome inspect</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>j</code></td>
 <td>55</td>
 <td>[IX] ^= [H0] — raw 16-bit write-back</td>
 <td>self</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>V</code></td>
 <td>56</td>
 <td>[H0] ^= (1 &lt;&lt; syndrome_4bit([IX])) — correction mask</td>
@@ -729,15 +869,18 @@ bits to DATA_MASK positions, and XORs them into [H0]:</p>
 (d3)</li>
 <li>p_all → bit 9 (d4)</li>
 </ul>
-<p>Result: <code>payload([H0]) != 0</code> iff [IX] has <em>any</em>
-error — including bit-0-only errors (syndrome=0, p_all=1). Self-inverse
-(XOR). NOP when H0 == IX.</p>
+<p>Starting with <code>[H0] = 0</code>, the result has
+<code>payload([H0]) != 0</code> exactly when [IX] fails at least one
+parity check, including bit-0-only errors (syndrome=0, p_all=1). Passing
+all checks does not prove that the cell still contains the original
+value: some larger error patterns produce another valid codeword.
+Self-inverse (XOR). NOP when H0 == IX.</p>
 <p><code>I</code> enables a <strong>pre-syndrome filter</strong>: before
 copying in the remote cell, test its integrity with <code>I T ?</code>.
-Clean cells (syndrome=0, p_all=0) bypass the entire correction pipeline
-in ~8 ops instead of ~70. Cells with errors continue to the full
-correction path. This replaces 123 ops of Phase C syndrome computation
-on the bypass path with a single opcode.</p>
+Cells with valid parity (syndrome=0, p_all=0) bypass the entire
+correction pipeline in ~8 ops instead of ~70. Cells with failed checks
+continue to the full correction path. This replaces 123 ops of Phase C
+syndrome computation on the bypass path with a single opcode.</p>
 <p>The copy-down pattern for correcting a remote cell:</p>
 <ol type="1">
 <li><code>m</code> — copy remote codeword [IX] into local zero cell via
@@ -755,10 +898,12 @@ cell)</li>
 bit position, so <code>1 &lt;&lt; syndrome</code> is the exact
 single-bit correction mask. Self-inverse (XOR). NOP when H0 == IX.</p>
 <p><code>V</code> replaces Phases C+D+C’ (~160 ops of syndrome
-computation, barrel shifting, and uncompute) with a single opcode. The
-pre-syndrome filter (<code>I</code>) guarantees only 1-bit errors reach
-<code>V</code> — 2-bit errors go to copy-over, clean cells bypass
-entirely. Shrinks the gadget from 379 to 147 ops.</p>
+computation, barrel shifting, and uncompute) with a single opcode.
+Assuming at most two flipped bits per scanned cell, the pre-syndrome
+filter and overall-parity probe route single-bit errors to
+<code>V</code>, double-bit errors to copy-over, and clean cells to
+bypass. Larger error patterns can be misclassified. Shrinks the gadget
+from 379 to 147 ops.</p>
 <h2 id="ix-horizontal-momentum-ops-3-opcodes">IX Horizontal Momentum Ops
 (3 opcodes)</h2>
 <p>IX momentum ops give IX a persistent horizontal direction
@@ -774,32 +919,32 @@ systematic row-by-row coverage without coprimality constraints.</p>
 <col style="width: 25%" />
 </colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>Op</th>
-<th>Payload</th>
+<th>Opcode</th>
 <th>Description</th>
 <th>Inverse</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>A</code></td>
 <td>57</td>
 <td>Advance IX one step in <code>ix_dir</code></td>
 <td><code>B</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>B</code></td>
 <td>58</td>
 <td>Retreat IX one step opposite <code>ix_dir</code></td>
 <td><code>A</code></td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>U</code></td>
 <td>59</td>
-<td>Flip <code>ix_dir</code> via XOR 2 (E<span
-class="math inline">↔︎</span>W, N<span
-class="math inline">↔︎</span>S)</td>
+<td>Flip <code>ix_dir</code> via XOR 2
+(E<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>↔</mo><annotation encoding="application/x-tex">\leftrightarrow</annotation></semantics></math>W,
+N<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>↔</mo><annotation encoding="application/x-tex">\leftrightarrow</annotation></semantics></math>S)</td>
 <td>self</td>
 </tr>
 </tbody>
@@ -833,32 +978,32 @@ code row and handler row without entering stomach/waste rows.</p>
 <col style="width: 25%" />
 </colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>Op</th>
-<th>Payload</th>
+<th>Opcode</th>
 <th>Description</th>
 <th>Inverse</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>C</code></td>
 <td>60</td>
 <td>Advance IX one step in <code>ix_vdir</code></td>
 <td><code>D</code></td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>D</code></td>
 <td>61</td>
 <td>Retreat IX one step opposite <code>ix_vdir</code></td>
 <td><code>C</code></td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>O</code></td>
 <td>62</td>
-<td>Flip <code>ix_vdir</code> via XOR 2 (N<span
-class="math inline">↔︎</span>S, E<span
-class="math inline">↔︎</span>W)</td>
+<td>Flip <code>ix_vdir</code> via XOR 2
+(N<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>↔</mo><annotation encoding="application/x-tex">\leftrightarrow</annotation></semantics></math>S,
+E<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>↔</mo><annotation encoding="application/x-tex">\leftrightarrow</annotation></semantics></math>W)</td>
 <td>self</td>
 </tr>
 </tbody>
@@ -876,99 +1021,99 @@ cycles per full down-up sweep.</p>
 <p>Every opcode has a unique inverse (itself or another opcode):</p>
 <table>
 <thead>
-<tr>
+<tr class="header">
 <th>Forward</th>
 <th>Inverse</th>
 <th>Notes</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>+</code></td>
 <td><code>-</code></td>
 <td>Increment / decrement</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>.</code></td>
 <td><code>,</code></td>
 <td>Add / subtract</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>r</code></td>
 <td><code>l</code></td>
 <td>Rotate right / left by 1</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>R</code></td>
 <td><code>L</code></td>
 <td>Rotate right / left by CL</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>:</code></td>
 <td><code>;</code></td>
 <td>CL increment / decrement</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>P</code></td>
 <td><code>Q</code></td>
 <td>EX breadcrumb / erase</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>N</code>/<code>S</code></td>
 <td><code>S</code>/<code>N</code></td>
 <td>H0 movement pairs</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>E</code>/<code>W</code></td>
 <td><code>W</code>/<code>E</code></td>
 <td>H0 movement pairs</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>n</code>/<code>s</code></td>
 <td><code>s</code>/<code>n</code></td>
 <td>H1 movement pairs</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>e</code>/<code>w</code></td>
 <td><code>w</code>/<code>e</code></td>
 <td>H1 movement pairs</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>&gt;</code>/<code>&lt;</code></td>
 <td><code>&lt;</code>/<code>&gt;</code></td>
 <td>CL movement pairs</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>^</code>/<code>v</code></td>
 <td><code>v</code>/<code>^</code></td>
 <td>CL movement pairs</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>]</code>/<code>[</code></td>
 <td><code>[</code>/<code>]</code></td>
 <td>EX movement pairs</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>}</code>/<code>{</code></td>
 <td><code>{</code>/<code>}</code></td>
 <td>EX movement pairs</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>H</code>/<code>h</code></td>
 <td><code>h</code>/<code>H</code></td>
 <td>IX movement pairs</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>a</code>/<code>d</code></td>
 <td><code>d</code>/<code>a</code></td>
 <td>IX movement pairs</td>
 </tr>
-<tr>
+<tr class="odd">
 <td><code>A</code>/<code>B</code></td>
 <td><code>B</code>/<code>A</code></td>
 <td>IX horizontal momentum advance / retreat</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>C</code>/<code>D</code></td>
 <td><code>D</code>/<code>C</code></td>
 <td>IX vertical momentum advance / retreat</td>
@@ -999,7 +1144,7 @@ effects. The canonical “empty cell” is raw value 0 (payload 0).</p>
 <col style="width: 31%" />
 </colgroup>
 <thead>
-<tr>
+<tr class="header">
 <th>Symbol</th>
 <th>Payload</th>
 <th>Raw Value</th>
@@ -1007,7 +1152,7 @@ effects. The canonical “empty cell” is raw value 0 (payload 0).</p>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr class="odd">
 <td><code>o</code></td>
 <td>1017</td>
 <td>0x7E8E</td>
@@ -1018,7 +1163,7 @@ two-bit pairs produce a real opcode). Used for padding on code rows,
 bypass rows, return rows, and handler rows. Data-bit distance 8 from
 zero (robust boundary detection).</td>
 </tr>
-<tr>
+<tr class="even">
 <td><code>~</code></td>
 <td>2047</td>
 <td>0xFFFF</td>
@@ -1031,5 +1176,19 @@ where zero cells are not reliably empty.</td>
 </tr>
 </tbody>
 </table>
+<h2 id="reference-exports">Reference Exports</h2>
+<p><code>docs/isa.md</code> is the editable source. Rebuild the HTML,
+plain-text, and PDF references after changing it:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pandoc</span> docs/isa.md <span class="at">--standalone</span> <span class="at">--mathml</span> <span class="dt">\</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--metadata</span> title=<span class="st">&quot;fb2d ISA: raw opcode fetch&quot;</span> <span class="at">-o</span> docs/isa.html</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="ex">pandoc</span> docs/isa.md <span class="at">--to</span><span class="op">=</span>plain <span class="at">--wrap</span><span class="op">=</span>auto <span class="at">--columns</span><span class="op">=</span>100 <span class="dt">\</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">-o</span> docs/isa.text</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="ex">pandoc</span> docs/isa.md <span class="at">--pdf-engine</span><span class="op">=</span>xelatex <span class="dt">\</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">--include-in-header</span><span class="op">=</span>docs/isa-pdf-header.tex <span class="dt">\</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">-V</span> geometry:margin=0.65in <span class="at">-V</span> fontsize=10pt <span class="dt">\</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">-V</span> mainfont=<span class="st">&quot;Arial&quot;</span> <span class="at">-V</span> monofont=<span class="st">&quot;Menlo&quot;</span> <span class="at">-o</span> docs/isa.pdf</span></code></pre></div>
+<p>The PDF command uses fonts available on macOS; use equivalent local
+fonts on other systems. These references describe the fork; historical
+design notes describe earlier implementations.</p>
 </body>
 </html>

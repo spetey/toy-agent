@@ -61,11 +61,11 @@ i.e. reversible Brainfuck; 2D for the toroidal grid).
   opcode (not NOP or a wrong opcode).
 - **Turing-complete**: via counter machine simulation with Fredkin
   dispatch blocks. See `docs/tc_proof_sketch.md`.
-- **16-bit Hamming-protected cells**: each cell is a 16-bit
-  Hamming(16,11) SECDED codeword with 11 data bits and 5 parity bits.
-  Corrects 1-bit errors, detects 2-bit errors. The IP reads the payload
-  (data bits) as the opcode. Arithmetic ops automatically maintain the
-  Hamming invariant.
+- **16-bit cells with Hamming parity**: all 65,536 bit patterns are
+  allowed; 2,048 have valid Hamming(16,11) SECDED parity. The code enables
+  single-bit repair and double-bit detection by the correction program.
+  Instruction selection uses the raw data bits and ignores parity.
+  Arithmetic updates the payload and matching parity bits together.
 
 ## Quick Start
 
@@ -161,27 +161,42 @@ IX momentum ops for serpentine scanning with top-down rewind loop). See
 
 ### 16-Bit Cells
 
-Every cell is a 16-bit Hamming(16,11) SECDED codeword:
+Every cell stores 16 bits, laid out for Hamming(16,11) SECDED. Noise and
+raw bit operations can produce invalid codewords; these remain valid
+simulator states:
 
 ```
 Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
      d10 d9 d8 d7 d6 d5 d4 p3 d3 d2 d1 p2 d0 p1 p0 p_all
 ```
 
-- **Payload** (11 data bits): the opcode or data value (0-2047).
-  The IP reads `payload(cell)` to determine the opcode.
+- **Payload** (11 data bits): the opcode encoding or data value (0-2047).
+  Instruction fetch extracts these bits unchanged, then applies the
+  opcode decoder's distance-1 lookup. It does not check Hamming parity.
 - **Parity** (5 bits): Hamming check bits at positions 0, 1, 2, 4, 8.
   Maintained automatically by arithmetic ops (+, -, etc.).
-- **Syndrome**: when a single bit flips, the 4-bit Hamming syndrome
-  equals the position number (0-15) of the flipped bit, enabling
-  direct correction.
+- **Syndrome**: for a single error, the four-bit syndrome identifies the
+  flipped position. Overall parity distinguishes a bit-0 error from a
+  clean cell and single-bit errors from double-bit errors. These
+  guarantees assume at most two flips from a valid codeword.
 
-#### Error Protection (two layers)
+#### Instruction Interpretation and Explicit Repair
 
-| Layer | Code | Corrects | Detects |
-|-------|------|----------|---------|
-| Cell level | Hamming(16,11) SECDED, d_min=3 | 1-bit errors in the 16-bit cell | 2-bit errors |
-| Opcode level | [11,6,4] linear code, d_min=4 | 1 data-bit error in opcode identity | 2 data-bit errors (→ NOP) |
+| Mechanism | Code | Effect |
+|-----------|------|--------|
+| Instruction selection | [11,6,4] payload code, minimum distance 4 | One data-bit flip preserves a designated opcode; two data-bit flips give NOP. Parity bits never affect instruction selection. |
+| Explicit memory repair | Hamming(16,11) SECDED, minimum distance 4 | `I` inspects parity, `V` computes an inferred single-error mask, and the program applies it with `j`. Double-bit errors require additional information, such as the partner gadget's copy. |
+
+These are separate mechanisms, not two sequential instruction decoders.
+Of the 2,048 payload values, 744 select one of the 62 non-NOP instructions
+and 1,304 select NOP. All 2,048 remain usable as data.
+
+**Rotation operands are an explicit exception to raw data reads:** `R`,
+`L`, and `Y` read `cell_to_payload([CL]) & 15`, which still uses Hamming
+decoding. Ordinary payload arithmetic and conditional mirrors use raw
+data bits. Neither opcode interpretation nor rotation-amount decoding
+repairs a stored cell. See [the ISA reference](docs/isa.md) for the exact
+read rules and an example where the former fetch decoder miscorrected.
 
 #### Special Cell Values
 

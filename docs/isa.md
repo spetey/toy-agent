@@ -1,17 +1,19 @@
-# fb2d Instruction Set Architecture (v1.15)
+# fb2d Instruction Set Architecture (raw opcode fetch fork)
 
-62 opcodes + NOP. Every 16-bit cell value is valid: the IP reads
-`payload(cell)` (the 11 data bits of the Hamming(16,11) codeword) as
-the opcode. Payloads corresponding to opcodes 1-62 (or within Hamming
-distance 1 of such a payload) execute that opcode; everything else is NOP.
+62 opcodes + NOP. Every 16-bit cell value is a valid simulator state.
+The IP extracts the 11 data bits **without Hamming correction**, then
+uses the opcode decoder to select an instruction. The five parity bits
+do not participate in instruction selection.
 
-v1.15 changes: `I` (syndrome inspect) replaces the unused `M` (payload
+This fork retains the v1.15 instruction set: `I` (syndrome inspect) replaces the unused `M` (payload
 subtract via IX) at opcode 54. `M` was completely superseded by `m` (raw
-XOR) in the copy-down architecture.
+XOR) in the copy-down architecture. The change is the fetch rule, not the
+16-bit cell format or the semantics of the individual instructions.
 
 ## Cell Format
 
-Each cell is a 16-bit Hamming(16,11) SECDED codeword:
+Each cell stores 16 bits in the following Hamming(16,11) SECDED layout.
+All 65,536 patterns are allowed; exactly 2,048 have valid parity:
 
 ```
 Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
@@ -23,18 +25,76 @@ Bit: 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
 - Arithmetic ops (+, -, ., ,, :, ;, P, Q) maintain the Hamming invariant
 - Bit-level ops (r, l, R, L, Y, x, z, f, m, j, I) operate on all 16 raw bits
 
-## Opcode Encoding
+## Instruction Selection
+
+Forward and reverse stepping use the same read rule:
+
+```text
+16-bit cell -> raw 11-bit payload -> opcode lookup -> instruction
+```
+
+In `fb2d.py`, the lookup is
+`_PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD_RAW[cell]]`. Neither this read nor
+the lookup changes the stored cell. The CLI and GUI instruction labels
+use this same interpretation. Parity remains available to instructions
+that explicitly read or modify it.
+
+### Opcode Encoding
 
 Opcode payloads are drawn from an [11,6,4] linear code with minimum
 Hamming distance d_min = 4. This means no combination of 1, 2, or 3
-data-bit flips can turn one valid opcode payload into another.
+data-bit flips can turn one designated opcode payload into another
+designated payload. The numeric opcode IDs used in the instruction
+tables below are not their stored payloads: `OPCODE_PAYLOADS` in
+`fb2d.py` supplies the mapping (for example, opcode 15, `+`, has payload 975).
 
 **Nearest-codeword decoding**: each 11-bit payload within Hamming
-distance 1 of a valid opcode codeword decodes to that opcode (not NOP).
-A single data-bit error in an opcode cell still executes the *correct*
-opcode. Two-bit errors → NOP (guaranteed by d_min = 4). Each opcode has
-a "neighborhood" of 12 payloads (1 center + 11 single-bit neighbors).
-672 of 2048 payloads decode to valid opcodes.
+distance 1 of a designated non-NOP opcode payload selects that opcode.
+Starting from a designated encoding, one data-bit flip preserves the
+instruction and two data-bit flips give NOP. Three or more data-bit
+flips can select a different instruction. Parity-bit flips have no effect
+on this choice. Each non-NOP opcode accepts 12 payloads (one center and
+11 single-bit neighbors), so 744 of 2,048 payloads select non-NOP
+instructions and the remaining 1,304 select NOP.
+
+These error guarantees concern distance from a designated instruction
+payload, not from any Hamming-valid data word. A correct parity check
+alone does not make a payload a designated instruction encoding.
+
+### Why Fetch Does Not Perform Hamming Correction
+
+The former fetch path applied Hamming decoding before the opcode lookup.
+That could move a payload across an opcode boundary. For example, flipping
+cell bits 0, 1, and 6 in a designated `+` encoding changes its raw payload
+from 975 to 971. Raw opcode decoding still selects `+`, since 971 is one
+data bit from 975. Hamming decoding instead produces payload 963, two
+bits from 975, and the subsequent opcode lookup selects NOP.
+
+The fork avoids that interaction by using only raw payload extraction
+during fetch. This does not claim better survival for every noise pattern.
+
+### Other Reads and Explicit Repair
+
+| Use | Interpretation |
+|-----|----------------|
+| Instruction fetch, forward and reverse | Raw payload followed by opcode lookup |
+| Payload arithmetic and CL/EX zero tests | Raw data bits; no Hamming decoding |
+| `R`, `L`, `Y` rotation amounts | Hamming-decoded payload of `[CL]`, then `& 15` |
+| `I`, `V` | Explicit Hamming syndrome/parity operations on raw 16-bit values |
+| Raw swaps, XORs, and rotated data | Full 16-bit values, including parity positions |
+
+Hamming(16,11) has minimum distance 4. Its checks enable single-bit
+correction and double-bit detection across all 16 positions. The agent
+uses `I` to inspect cells, `V` to form a single-error mask, and `j` to
+write the repair. Double-bit errors need extra information; the current
+agent consults the corresponding cell in its partner gadget. Three or
+more errors can imitate the single- or double-error cases.
+
+Reversibility does not require Hamming decoding during fetch: the stored
+instruction bits are retained, both time directions use the same lookup,
+and the existing overlap guards protect the inputs needed to undo each
+instruction. The repair program preserves error information in its
+auxiliary cells and waste rather than discarding it.
 
 ## Heads
 
@@ -51,12 +111,14 @@ All heads point to cells on the same toroidal grid as the IP.
 ## Notation
 
 - `[H0]` = full 16-bit cell value at head H0's position
-- `payload(X)` = the 11 data bits extracted from cell X
+- `payload(X)` = the 11 data bits extracted from cell X without correction
+- `decoded_payload(X)` = the 11-bit result of the Hamming decoder; used
+  for rotation amounts only among the instruction operands below
 - Movement is on a torus: edges wrap
 
 ## Mirrors (6 opcodes)
 
-| Op | Payload | Description |
+| Op | Opcode | Description |
 |----|---------|-------------|
 | `/` | 1 | Unconditional `/` reflect |
 | `\` | 2 | Unconditional `\` reflect |
@@ -65,17 +127,15 @@ All heads point to cells on the same toroidal grid as the IP.
 | `&` | 5 | `\` reflect if payload([CL]) != 0 |
 | `!` | 6 | `\` reflect if payload([CL]) == 0 |
 
-Mirror geometry:
-
-- `/` maps E$\leftrightarrow$N, S$\leftrightarrow$W
-- `\` maps E$\leftrightarrow$S, N$\leftrightarrow$W
+Mirror geometry: `/` maps E$\leftrightarrow$N and S$\leftrightarrow$W;
+`\` maps E$\leftrightarrow$S and N$\leftrightarrow$W.
 
 Conditional mirrors test whether any data bit in [CL] is set
 (`[CL] & DATA_MASK`). Parity bits are ignored.
 
 ## Head Movement (20 opcodes)
 
-| Op | Payload | Description |
+| Op | Opcode | Description |
 |----|---------|-------------|
 | `N` | 7  | Move H0 north |
 | `S` | 8  | Move H0 south |
@@ -104,7 +164,7 @@ All movement wraps on the torus.
 
 These operate on Hamming-encoded cells, maintaining the parity invariant.
 
-| Op | Payload | Description | Inverse |
+| Op | Opcode | Description | Inverse |
 |----|---------|-------------|---------|
 | `+` | 15 | payload([H0])++ (mod 2048, with parity fixup) | `-` |
 | `-` | 16 | payload([H0])-- (mod 2048, with parity fixup) | `+` |
@@ -127,16 +187,16 @@ These operate on the full 16-bit raw cell value (including parity bits).
 They do **not** maintain the Hamming invariant — by design, the
 correction gadget uses them to manipulate raw bits.
 
-| Op | Payload | Description | Inverse |
+| Op | Opcode | Description | Inverse |
 |----|---------|-------------|---------|
 | `x` | 39 | [H0] ^= [H1] — XOR | self |
 | `r` | 40 | [H0] rotate right 1 bit | `l` |
 | `l` | 41 | [H0] rotate left 1 bit | `r` |
 | `f` | 42 | if [CL] & 1: swap([H0], [H1]) — bit-0 Fredkin | self |
-| `z` | 43 | swap(bit 0 of [H0], bit 0 of [EX]) | self |
-| `R` | 44 | [H0] rotate right by (payload([CL]) & 15) bits | `L` |
-| `L` | 45 | [H0] rotate left by (payload([CL]) & 15) bits | `R` |
-| `Y` | 46 | [H0] ^= ror([H1], payload([CL]) & 15) — fused rotate-XOR | self |
+| `z` | 43 | swap(bit 0 of [H0], bit 0 of [H1]) | self |
+| `R` | 44 | [H0] rotate right by (decoded_payload([CL]) & 15) bits | `L` |
+| `L` | 45 | [H0] rotate left by (decoded_payload([CL]) & 15) bits | `R` |
+| `Y` | 46 | [H0] ^= ror([H1], decoded_payload([CL]) & 15) — fused rotate-XOR | self |
 | `:` | 47 | payload([CL])++ (mod 2048, with parity fixup) | `;` |
 | `;` | 48 | payload([CL])-- (mod 2048, with parity fixup) | `:` |
 
@@ -146,14 +206,15 @@ Key distinctions:
   barrel-shifter correction gadget
 - **`F`** (uppercase) gates on **payload([CL]) != 0** — used for general
   conditional logic
-- **`R`/`L`/`Y`** read the rotation amount from `payload([CL]) & 15`
-  (0-15 positions, suitable for 16-bit cells)
-- **`z`** swaps raw bit 0 of [H0] with raw bit 0 of [EX] — used to
+- **`R`/`L`/`Y`** read the rotation amount from `decoded_payload([CL]) & 15`
+  (0-15 positions). This Hamming decoding is an operand rule, not opcode
+  selection, and does not write a correction back to CL.
+- **`z`** swaps raw bit 0 of [H0] with raw bit 0 of [H1] — used to
   extract single syndrome/parity bits
 
 ## EX (Exteroceptor) Ops (8 opcodes)
 
-| Op | Payload | Description | Inverse |
+| Op | Opcode | Description | Inverse |
 |----|---------|-------------|---------|
 | `P` | 27 | payload([EX])++ — leave breadcrumb | `Q` |
 | `Q` | 28 | payload([EX])-- — erase breadcrumb | `P` |
@@ -185,7 +246,7 @@ code cells. The copy-down pattern: `m` copies a remote codeword to a
 local cell, correction runs locally, then `j` writes the correction
 mask back to the remote cell.
 
-| Op | Payload | Description | Inverse |
+| Op | Opcode | Description | Inverse |
 |----|---------|-------------|---------|
 | `m` | 53 | [H0] ^= [IX] — raw 16-bit XOR (copy-in / uncompute) | self |
 | `I` | 54 | [H0] ^= syndrome_5bit([IX]) — syndrome inspect | self |
@@ -202,12 +263,16 @@ and XORs them into [H0]:
 - s0 → bit 3 (d0), s1 → bit 5 (d1), s2 → bit 6 (d2), s3 → bit 7 (d3)
 - p_all → bit 9 (d4)
 
-Result: `payload([H0]) != 0` iff [IX] has *any* error — including bit-0-only
-errors (syndrome=0, p_all=1). Self-inverse (XOR). NOP when H0 == IX.
+Starting with `[H0] = 0`, the result has `payload([H0]) != 0` exactly
+when [IX] fails at least one parity check, including bit-0-only errors
+(syndrome=0, p_all=1). Passing all checks does not prove that the cell
+still contains the original value: some larger error patterns produce
+another valid codeword. Self-inverse (XOR). NOP when H0 == IX.
 
 `I` enables a **pre-syndrome filter**: before copying in the remote cell,
-test its integrity with `I T ?`. Clean cells (syndrome=0, p_all=0) bypass
-the entire correction pipeline in ~8 ops instead of ~70. Cells with errors
+test its integrity with `I T ?`. Cells with valid parity (syndrome=0,
+p_all=0) bypass the entire correction pipeline in ~8 ops instead of ~70.
+Cells with failed checks
 continue to the full correction path. This replaces 123 ops of Phase C
 syndrome computation on the bypass path with a single opcode.
 
@@ -226,9 +291,11 @@ IS the error bit position, so `1 << syndrome` is the exact single-bit
 correction mask. Self-inverse (XOR). NOP when H0 == IX.
 
 `V` replaces Phases C+D+C' (~160 ops of syndrome computation, barrel
-shifting, and uncompute) with a single opcode. The pre-syndrome filter (`I`)
-guarantees only 1-bit errors reach `V` — 2-bit errors go to copy-over,
-clean cells bypass entirely. Shrinks the gadget from 379 to 147 ops.
+shifting, and uncompute) with a single opcode. Assuming at most two flipped
+bits per scanned cell, the pre-syndrome filter and overall-parity probe
+route single-bit errors to `V`, double-bit errors to copy-over, and clean
+cells to bypass. Larger error patterns can be misclassified. Shrinks the
+gadget from 379 to 147 ops.
 
 ## IX Horizontal Momentum Ops (3 opcodes)
 
@@ -238,7 +305,7 @@ east across a row, detects a boundary, then retreats, moves vertically,
 flips direction, and sweeps west — systematic row-by-row coverage
 without coprimality constraints.
 
-| Op | Payload | Description | Inverse |
+| Op | Opcode | Description | Inverse |
 |----|---------|-------------|---------|
 | `A` | 57 | Advance IX one step in `ix_dir` | `B` |
 | `B` | 58 | Retreat IX one step opposite `ix_dir` | `A` |
@@ -262,7 +329,7 @@ On vertical boundary: `D O C` bounces IX back (retreat, flip, re-advance).
 IX ping-pongs between the first code row and handler row without entering
 stomach/waste rows.
 
-| Op | Payload | Description | Inverse |
+| Op | Opcode | Description | Inverse |
 |----|---------|-------------|---------|
 | `C` | 60 | Advance IX one step in `ix_vdir` | `D` |
 | `D` | 61 | Retreat IX one step opposite `ix_vdir` | `C` |
@@ -327,3 +394,24 @@ Two non-opcode cell values have architectural significance:
 |--------|---------|-----------|-------------|
 | `o` | 1017 | 0x7E8E | **NOP filler**. The 64th (unused) codeword of the [11,6,4] opcode code. As a true codeword, it has d_min=4 from all opcode codewords: all 1-bit AND 2-bit data errors still decode to NOP (0/55 two-bit pairs produce a real opcode). Used for padding on code rows, bypass rows, return rows, and handler rows. Data-bit distance 8 from zero (robust boundary detection). |
 | `~` | 2047 | 0xFFFF | **Boundary marker**. All bits set. Decodes to NOP (not within Hamming distance 1 of any opcode). Used for IX scan boundary rows (top and bottom) and boundary columns (col 0 and col W-1). Detected via `m T : ? ; T m` — `:` wraps payload 2047→0, `?` fires on zero. Enables agents in non-zero environments where zero cells are not reliably empty. |
+
+
+## Reference Exports
+
+`docs/isa.md` is the editable source. Rebuild the HTML, plain-text, and
+PDF references after changing it:
+
+```sh
+pandoc docs/isa.md --standalone --mathml \
+  --metadata title="fb2d ISA: raw opcode fetch" -o docs/isa.html
+pandoc docs/isa.md --to=plain --wrap=auto --columns=100 \
+  -o docs/isa.text
+pandoc docs/isa.md --pdf-engine=xelatex \
+  --include-in-header=docs/isa-pdf-header.tex \
+  -V geometry:margin=0.65in -V fontsize=10pt \
+  -V mainfont="Arial" -V monofont="Menlo" -o docs/isa.pdf
+```
+
+The PDF command uses fonts available on macOS; use equivalent local fonts
+on other systems. These references describe the fork; historical design
+notes describe earlier implementations.
