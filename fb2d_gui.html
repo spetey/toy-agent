@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>fb2d GUI</title>
+<title>fb2d — raw opcode fetch</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1a2e; color: #e0e0e0; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
@@ -286,6 +286,8 @@ function popcount16(x) {
 }
 
 function cellToPayload(cell) {
+  // Instruction display uses the raw payload, matching simulator fetch.
+  // Parity bits are inspected separately for error coloring and repair.
   let payload = 0;
   for (let i = 0; i < 11; i++) {
     if (cell & (1 << DATA_POSITIONS[i])) payload |= (1 << i);

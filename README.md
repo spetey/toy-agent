@@ -1,5 +1,28 @@
 # The Wikivore: A Digital Deacon Autogen
 
+## Local fork: raw opcode fetch
+
+This fork selects instructions from the **raw 11 data bits** of each
+16-bit cell, followed by the existing opcode decoder. Instruction fetch
+does not perform Hamming correction. Changing only parity bits therefore
+cannot change which instruction is selected. Forward and reverse stepping
+use the same rule, as do the CLI and GUI instruction labels.
+
+The 16-bit cell format and instruction definitions remain compatible with
+existing programs. In particular, `I` and `V` still inspect Hamming parity
+for explicit repair, arithmetic still updates parity, and `R`, `L`, and
+`Y` still use Hamming-decoded rotation amounts. These are operand semantics,
+separate from instruction selection.
+
+To run the existing demo alongside another simulator, use
+`python3 fb2d_server.py 5002`, then load **agent-v1-narrow-w46**.
+The food and noise controls work as described below. Run
+`python3 -m unittest -v test_instruction_fetch` for the fork's regression
+tests, including parity-independent execution and agent repair.
+
+The instruction-fetch change can alter behavior under noise; it does not
+claim identical survival statistics to the original version.
+
 A self-correcting, self-fueling agent that resists its own degradation
 by noise on a 2D toroidal grid. Two mutually-correcting Hamming(16,11)
 gadgets repair each other's code while a metabolism phase compresses
