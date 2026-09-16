@@ -776,7 +776,9 @@ def test_copyover(width=195):
 
 
 if __name__ == '__main__':
-    width = 195  # v7: 379 ops, W=195 gives 2 code rows (West), RPG=10
+    width = 88   # v8: 147 ops. W=88 gives a west-going last code row (see
+                 # _place_probe_gadget). The old default 195 was a v7 leftover
+                 # (379 ops) and trips the last-row-direction assert for v8.
     for i, arg in enumerate(sys.argv):
         if arg == '--width' and i + 1 < len(sys.argv):
             width = int(sys.argv[i + 1])
