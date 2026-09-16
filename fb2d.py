@@ -15,7 +15,8 @@ A 2D reversible programming model where the instruction pointer moves
 on a toroidal grid and bounces off mirrors for control flow.
 
 Execution model:
-  1. Read instruction at grid[IP_row, IP_col]
+  1. Extract the raw 11-bit payload at grid[IP_row, IP_col] and decode
+     the opcode (no Hamming correction; parity bits do not select the opcode)
   2. Execute it (mirrors may change direction)
   3. IP advances one step in current direction
 
@@ -133,14 +134,14 @@ OPCODE_TO_CHAR[0] = '·'   # NOP displayed as middle dot
 
 # ─── d_min=4 Opcode Encoding ────────────────────────────────────────
 #
-# Maps internal opcode number (0–56) → 11-bit payload value.
+# Maps internal opcode number (0–62) → 11-bit payload value.
 # Constructed from an [11,6,4] linear code (parity rows 7,11,13,14,19,21).
 # Minimum pairwise Hamming distance between any two payloads = 4.
 #
-# Key property: NO combination of 1, 2, or 3 data-bit flips can turn one
-# valid opcode payload into another.  Every corrupted opcode becomes NOP.
-# This eliminates the cascading failure mode where noise creates rogue
-# opcodes (especially j/m) that corrupt remote cells via IX.
+# No combination of 1, 2, or 3 data-bit flips turns one designated payload
+# into another designated payload. With the distance-1 decoder below,
+# one data-bit error preserves the opcode and two decode to NOP.
+# Three or more data-bit errors can decode to another opcode.
 
 OPCODE_PAYLOADS = {
      0:    0,  1:  449,  2:  706,  3:  771,  4:  836,  5:  645,
@@ -243,8 +244,8 @@ for _p in range(2048):
             _c |= (1 << _bp)
     _PAYLOAD_TO_CELL[_p] = _c
 
-# Raw extraction (no correction): used internally by Δp arithmetic ops
-# which must preserve error patterns through arithmetic.
+# Raw extraction (no correction): used for instruction selection and by
+# Δp arithmetic ops, which must preserve error patterns through arithmetic.
 _CELL_TO_PAYLOAD_RAW = [0] * 65536
 for _v in range(65536):
     _p = 0
@@ -253,7 +254,9 @@ for _v in range(65536):
             _p |= (1 << _i)
     _CELL_TO_PAYLOAD_RAW[_v] = _p
 
-# Inline-ECC extraction: correct single-bit errors before extracting payload.
+# ECC extraction for explicit operand semantics (R/L/Y rotation amounts)
+# and data inspection. Instruction selection uses raw extraction instead.
+# Correct single-bit errors before extracting payload.
 # For each cell value, compute syndrome + p_all. If single-bit error
 # (syndrome≠0, p_all=1), flip the indicated bit, then extract.
 # 2-bit errors (syndrome≠0, p_all=0) and valid codewords (syndrome=0)
@@ -527,7 +530,7 @@ class FB2DSimulator:
     def step(self):
         """Execute one instruction: read, execute, advance IP."""
         flat_ip = self._ip_flat()
-        opcode = _PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD[self.grid[flat_ip]]]
+        opcode = _PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD_RAW[self.grid[flat_ip]]]
         old_dir = self.ip_dir
 
         # ── Execute ──
@@ -791,7 +794,7 @@ class FB2DSimulator:
         prev_row = (self.ip_row - DR[self.ip_dir]) % self.rows
         prev_col = (self.ip_col - DC[self.ip_dir]) % self.cols
         prev_flat = self._to_flat(prev_row, prev_col)
-        opcode = _PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD[self.grid[prev_flat]]]
+        opcode = _PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD_RAW[self.grid[prev_flat]]]
 
         # ── Determine previous direction ──
         if opcode == 1:      # / always reflects
@@ -1192,7 +1195,7 @@ class FB2DSimulator:
     def _cell_char(self, value):
         """Get display character for a grid cell value (always 1-3 chars).
         Uses d_min=4 payload→opcode lookup."""
-        payload = _CELL_TO_PAYLOAD[value]
+        payload = _CELL_TO_PAYLOAD_RAW[value]
         opcode = _PAYLOAD_TO_OPCODE[payload]
         if opcode in OPCODE_TO_CHAR:
             # Boundary marker: payload 2047 (0xFFFF) decodes to NOP but
@@ -1962,7 +1965,7 @@ def interactive_session():
                         else:
                             sim.grid[flat] = int(v) & CELL_MASK
                     val = sim.grid[flat]
-                    pl = _CELL_TO_PAYLOAD[val]
+                    pl = _CELL_TO_PAYLOAD_RAW[val]
                     op = _PAYLOAD_TO_OPCODE[pl]
                     ch = OPCODE_TO_CHAR.get(op, f'data(pl={pl})')
                     print(f"grid[{r},{c}] = 0x{val:04x} (payload={pl}, op={op} '{ch}')")

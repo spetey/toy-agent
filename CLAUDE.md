@@ -1,5 +1,21 @@
 # The Wikivore: A Digital Deacon Autogen
 
+## Current Fork: Raw Opcode Fetch
+
+The `codex/raw-opcode-fetch` fork selects instructions using
+`_PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD_RAW[cell]]`. Both `step()` and
+`step_back()` ignore parity during instruction selection. CLI and GUI
+instruction labels follow the same rule. Do not reintroduce the former
+Hamming-decoding stage into fetch when using the older design notes below.
+
+The cells still contain 16 bits. Explicit parity operations (`I`, `V`),
+parity-preserving arithmetic, and the agent's repair program are unchanged.
+`R`, `L`, and `Y` still use `_CELL_TO_PAYLOAD[grid[CL]] & 15` for their
+rotation amounts; this is part of those instructions' operand semantics.
+Hamming decoding must therefore not be removed globally as a fetch change.
+See `docs/isa.md` for the current read rules and
+`python3 -m unittest -v test_instruction_fetch` for regression checks.
+
 ## Project Goal
 
 Build a "toy agent" in a digital world that can resist its own degradation
@@ -11,11 +27,11 @@ Computational Life paper (itself based on Brainfuck).
 
 - **Reversible**: every state has a unique predecessor, inferred from state
   alone (no history needed). `step_back()` is purely deductive.
-- **Valid everywhere**: every byte value (0-255) is either a known opcode
-  or NOP. Any byte sequence is a valid program.
+- **Valid everywhere**: every 16-bit cell value selects an opcode or NOP.
+  Every grid configuration is a valid program state, even with invalid parity.
 - **Turing-complete**: proven via counter machine simulation (see
-  `docs/tc_proof_sketch.md`). The 8-bit cell size makes the implementation
-  a finite approximation; true TC requires unbounded integers (see below).
+  `docs/tc_proof_sketch.md`). A fixed finite grid of 16-bit cells has a
+  finite state space; unbounded computation requires unbounded storage.
 
 ## Architecture
 
@@ -213,11 +229,14 @@ Mirror geometry: `/` maps E<->N, S<->W. `\` maps E<->S, N<->W.
 | `l` | 41 | [H0] rotate left 1 bit — inverse: `r` |
 | `f` | 42 | if [CL]&1: swap([H0], [H1]) — bit-0 Fredkin |
 | `z` | 43 | swap(bit0 of [H0], bit0 of [H1]) |
-| `R` | 44 | [H0] rotate right by ([CL]&15) bits — inverse: `L` |
-| `L` | 45 | [H0] rotate left by ([CL]&15) bits — inverse: `R` |
-| `Y` | 46 | [H0] ^= ror([H1], [CL]&15) — fused rotate-XOR, self-inverse |
+| `R` | 44 | [H0] rotate right by (decoded_payload([CL])&15) bits — inverse: `L` |
+| `L` | 45 | [H0] rotate left by (decoded_payload([CL])&15) bits — inverse: `R` |
+| `Y` | 46 | [H0] ^= ror([H1], decoded_payload([CL])&15) — fused rotate-XOR, self-inverse |
 | `:` | 47 | [CL]++ — inverse: `;` |
 | `;` | 48 | [CL]-- — inverse: `:` |
+
+Here `decoded_payload` means Hamming-decoded payload, as returned by
+`cell_to_payload`; rotation data itself is a raw 16-bit value.
 
 ### EX (Exteroceptor) Ops
 | Op | Code | Meaning |
@@ -306,8 +325,8 @@ aliasing occurs:
 parameter (rotation amount) are non-reversible when H0 == CL, because
 the write changes the parameter that step_back would read. These are
 NOP when H0 == CL:
-- `R`, `L`: rotate [H0] by payload([CL])&15 — rotation changes the amount
-- `Y`: [H0] ^= ror([H1], payload([CL])&15) — XOR changes the rotation amount
+- `R`, `L`: rotate [H0] by decoded_payload([CL])&15 — rotation changes the amount
+- `Y`: [H0] ^= ror([H1], decoded_payload([CL])&15) — XOR changes the rotation amount
 
 **IP-cell write guard** (v1.13): if a data op writes to the grid cell
 the IP is currently sitting on, it changes the opcode that `step_back()`
@@ -331,18 +350,22 @@ cell value — even on corrupted cells with multi-bit errors. Nearest-
 codeword decoding is only used for opcode dispatch (which instruction
 to execute), never for arithmetic.
 
-**Inline ECC** (v1.16): `_CELL_TO_PAYLOAD` corrects single-bit errors
-on read (computes syndrome, flips the indicated bit if syndrome≠0 and
-p_all=1, then extracts payload). The IP always reads the correct
-payload from corrupted cells, without waiting for the immunity gadget.
-Δp arithmetic ops (+, -, ., ,, :, ;, P, Q) use `_CELL_TO_PAYLOAD_RAW`
-(uncorrected extraction) to preserve bijection on all 65536 values.
-Empirical MTTF testing (10 trials at 100/200/300 flips/1M, 2M step
-cap) showed **no significant benefit** — the immunity gadget + [11,6,4]
-opcode code handle errors adequately without inline ECC. Merged for
-theoretical cleanliness (the IP reads the "true" payload), but if
-this is found to cause problems it can be reverted by replacing
-`_CELL_TO_PAYLOAD` with `_CELL_TO_PAYLOAD_RAW` everywhere.
+**Fetch and operand decoding in this fork**: instruction selection and
+Δp arithmetic use `_CELL_TO_PAYLOAD_RAW`. `_CELL_TO_PAYLOAD` retains
+Hamming decoding for the R/L/Y rotation amounts and data inspection.
+It computes the syndrome, flips the indicated bit in a temporary value
+when syndrome≠0 and p_all=1, then extracts the payload. It does not
+repair the stored cell. Three or more errors can lead to miscorrection.
+
+The original v1.16 fetch path also used `_CELL_TO_PAYLOAD`. That behavior
+is superseded in this fork: a three-bit corruption of `+` at positions
+0, 1, 6 gives raw payload 971 (still `+`), but Hamming decoding gives
+963 (NOP). Removing that stage makes opcode selection independent of
+parity. This is not a claim of better survival for all noise patterns.
+
+The explicit repair instructions still consume parity information:
+`I` reads syndrome and overall parity, `V` constructs a correction mask,
+and `j` writes the repair. These do not depend on automatic fetch decoding.
 
 **Multi-IP reversibility**: `step_back_all()` undoes IPs in reverse
 order (last IP first). This ensures each IP's undo sees the grid state
@@ -538,7 +561,8 @@ gadgets correcting each other**.
 Cells are 16-bit with systematic Hamming(16,11) SECDED:
 - 11 data bits (payload) at DATA_MASK=0xFEE8 positions
 - 5 parity bits at positions 0, 1, 2, 4, 8
-- IP extracts payload → nearest-codeword opcode decoding ([11,6,4] code)
+- IP extracts raw payload → nearest-codeword opcode decoding ([11,6,4] code);
+  no Hamming decoding during instruction selection
 - 63 opcodes use 63 of 64 codewords; the 64th (payload 1017) is NOP filler
 - Bit-level ops (r, l, R, L, Y, z, x) act on full 16 bits — needed by
   the correction gadget to access parity bit positions.
@@ -617,7 +641,7 @@ range check using existing ops. For now, hardcode sweep ranges.
    Not triggered in normal gadget operation (heads on stomach, IP on code
    rows), but prevents irreversibility during cascading failures.
    Note: Δp operations (+, -, ., ,, :, ;, P, Q) were confirmed to be
-   already bijective on ALL 65536 cell values because `_CELL_TO_PAYLOAD`
+   already bijective on ALL 65536 cell values because `_CELL_TO_PAYLOAD_RAW`
    extracts raw data bits (not nearest-codeword payloads). The error
    syndrome is preserved through arithmetic — no fix was needed.
 8. ~~Cross-gadget consultation for 2+-bit errors.~~ ✓
@@ -727,7 +751,8 @@ range check using existing ops. For now, hardcode sweep ranges.
   means a single data-bit error in an opcode cell still executes the
   CORRECT opcode. Safety: 2-bit errors → NOP (guaranteed by d_min=4).
   Each opcode has a "neighborhood" of 12 payloads (1 center + 11
-  single-bit neighbors). 672 of 2048 payloads decode to valid opcodes.
+  single-bit neighbors). With the current 62 non-NOP opcodes, 744 of
+  2048 payloads select non-NOP instructions and 1304 select NOP.
 - **NOP filler = payload 1017**: the 64th (last unused) codeword of the
   [11,6,4] opcode code. As a true codeword, it has d_min=4 from all
   other codewords: all 1-bit AND 2-bit data errors still decode to NOP
@@ -783,12 +808,9 @@ range check using existing ops. For now, hardcode sweep ranges.
   round-trip testing at 262207 steps — the first step where head
   degradation caused H0 and CL to alias the same cell. Verified with
   2M-step round-trip (466 noise flips, 1588 cells changed, 0 diffs).
-- **Inline ECC (v1.16)**: `_CELL_TO_PAYLOAD` now corrects single-bit
-  errors on read via Hamming syndrome. Motivation: the IP should read
-  the "true" payload, not a corrupted one. Δp arithmetic uses a separate
-  `_CELL_TO_PAYLOAD_RAW` table (uncorrected) for bijection. Empirical
-  MTTF comparison (10 trials × 3 noise rates, 2M cap) showed no
-  significant difference — the immunity gadget corrects errors fast
-  enough that the IP rarely encounters them, and the [11,6,4] opcode
-  code already handles most single-bit dispatch errors. Merged for
-  cleanliness; revert if found harmful.
+- **Inline ECC (original v1.16; fetch use superseded in this fork)**:
+  the original implementation added Hamming decoding to instruction
+  fetch as well as rotation operands. This fork removes it from forward
+  and reverse fetch and CLI instruction labels. Rotation operands keep
+  their existing decoding. The dedicated repair instructions and parity
+  updates remain available; see "Current Fork: Raw Opcode Fetch" above.
