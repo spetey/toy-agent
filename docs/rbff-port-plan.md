@@ -25,9 +25,13 @@ geometry.
 ### Cells
 
 - 16-bit cells, systematic Hamming(16,11) SECDED, exactly fb2d's
-  encoding (`DATA_MASK`, `hamming_encode`, `_CELL_TO_PAYLOAD` with
-  inline single-bit correction on read, `_CELL_TO_PAYLOAD_RAW` for
-  arithmetic).  Import the tables from `fb2d.py` rather than copying.
+  encoding (`DATA_MASK`, `hamming_encode`, `_CELL_TO_PAYLOAD_RAW` for
+  instruction fetch and arithmetic; `_CELL_TO_PAYLOAD` with inline
+  single-bit correction only for R/L/Y rotation operands, per fb2d
+  v1.17).  Import the tables from `fb2d.py` rather than copying.
+  Fetch must NOT Hamming-correct the instruction cell: the [11,6,4]
+  opcode decoder already handles all 1- and 2-bit errors, and parity
+  bits are for the repair program, not the physics.
 - Opcodes are payload codewords from the same [11,6,4] code with
   nearest-codeword decoding: a 1-bit data flip still executes the right
   op, 2-bit flips decode to NOP.  Reuse fb2d's `OPCODE_PAYLOADS`

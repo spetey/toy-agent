@@ -1,20 +1,23 @@
 # The Wikivore: A Digital Deacon Autogen
 
-## Current Fork: Raw Opcode Fetch
+## Instruction Fetch Rule (v1.17, raw opcode fetch)
 
-The `codex/raw-opcode-fetch` fork selects instructions using
-`_PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD_RAW[cell]]`. Both `step()` and
-`step_back()` ignore parity during instruction selection. CLI and GUI
-instruction labels follow the same rule. Do not reintroduce the former
-Hamming-decoding stage into fetch when using the older design notes below.
+Instruction fetch is `_PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD_RAW[cell]]`:
+read the 11 data bits of the cell as-is, then apply the [11,6,4] opcode
+decoder. Both `step()` and `step_back()` use this rule, as do the CLI
+and GUI instruction labels. The five parity bits never affect which
+instruction executes. (v1.16 briefly ran a Hamming single-bit correction
+on the instruction cell before the opcode decoder; v1.17, contributed by
+Martin Biehl, removed it. See the Design Decisions Log for why it was
+redundant.)
 
-The cells still contain 16 bits. Explicit parity operations (`I`, `V`),
-parity-preserving arithmetic, and the agent's repair program are unchanged.
-`R`, `L`, and `Y` still use `_CELL_TO_PAYLOAD[grid[CL]] & 15` for their
-rotation amounts; this is part of those instructions' operand semantics.
-Hamming decoding must therefore not be removed globally as a fetch change.
-See `docs/isa.md` for the current read rules and
-`python3 -m unittest -v test_instruction_fetch` for regression checks.
+Cells are still 16 bits with Hamming(16,11) SECDED layout. The explicit
+parity operations (`I`, `V`), parity-preserving arithmetic, and the
+agent's repair program are unchanged. `R`, `L`, and `Y` still read their
+rotation amount via `_CELL_TO_PAYLOAD[grid[CL]] & 15` (Hamming-decoded);
+that is part of those instructions' operand semantics, not fetch.
+See `docs/isa.md` for the exact read rules and
+`python3 -m unittest -v test_instruction_fetch` for regression tests.
 
 ## Project Goal
 
@@ -350,18 +353,26 @@ cell value — even on corrupted cells with multi-bit errors. Nearest-
 codeword decoding is only used for opcode dispatch (which instruction
 to execute), never for arithmetic.
 
-**Fetch and operand decoding in this fork**: instruction selection and
+**Fetch and operand decoding (v1.17)**: instruction selection and
 Δp arithmetic use `_CELL_TO_PAYLOAD_RAW`. `_CELL_TO_PAYLOAD` retains
 Hamming decoding for the R/L/Y rotation amounts and data inspection.
 It computes the syndrome, flips the indicated bit in a temporary value
 when syndrome≠0 and p_all=1, then extracts the payload. It does not
 repair the stored cell. Three or more errors can lead to miscorrection.
 
-The original v1.16 fetch path also used `_CELL_TO_PAYLOAD`. That behavior
-is superseded in this fork: a three-bit corruption of `+` at positions
-0, 1, 6 gives raw payload 971 (still `+`), but Hamming decoding gives
-963 (NOP). Removing that stage makes opcode selection independent of
-parity. This is not a claim of better survival for all noise patterns.
+The v1.16 fetch path also used `_CELL_TO_PAYLOAD` ("inline ECC").
+v1.17 removed it. The set of valid opcode cells is a [16,6,4] code
+(64 codewords, minimum distance 4), so no fetch-time decoder can do
+better than correct-1/detect-2, and the [11,6,4] opcode decoder alone
+already achieves that: a parity-bit flip never reaches it, a data-bit
+flip is absorbed by the distance-1 neighborhood, and two data-bit flips
+go to NOP. The inline stage could only differ on 3+ flips, where its
+miscorrection adds a 4th flip: e.g. a three-bit corruption of `+` at
+positions 0, 1, 6 gives raw payload 971 (still `+`), but Hamming
+decoding gives 963 (NOP). Over all 3-bit patterns on all opcodes, the
+inline stage produced a wrong opcode 10980 times vs 6344 for raw fetch.
+Removing it makes opcode selection independent of parity; it is not a
+claim of better survival for all noise patterns.
 
 The explicit repair instructions still consume parity information:
 `I` reads syndrome and overall parity, `V` constructs a correction mask,
@@ -808,9 +819,17 @@ range check using existing ops. For now, hardcode sweep ranges.
   round-trip testing at 262207 steps — the first step where head
   degradation caused H0 and CL to alias the same cell. Verified with
   2M-step round-trip (466 noise flips, 1588 cells changed, 0 diffs).
-- **Inline ECC (original v1.16; fetch use superseded in this fork)**:
-  the original implementation added Hamming decoding to instruction
-  fetch as well as rotation operands. This fork removes it from forward
-  and reverse fetch and CLI instruction labels. Rotation operands keep
-  their existing decoding. The dedicated repair instructions and parity
-  updates remain available; see "Current Fork: Raw Opcode Fetch" above.
+- **Inline ECC (v1.16, reverted in v1.17)**: v1.16 made
+  `_CELL_TO_PAYLOAD` correct single-bit errors on read via the Hamming
+  syndrome, and used it for instruction fetch. Motivation: the IP should
+  read the "true" payload, not a corrupted one. Δp arithmetic kept a
+  separate `_CELL_TO_PAYLOAD_RAW` table (uncorrected) for bijection.
+  Empirical MTTF comparison (10 trials × 3 noise rates, 2M cap) showed
+  no significant difference. v1.17 (Martin Biehl) removed the inline
+  stage from forward and reverse fetch and from CLI/GUI labels, since
+  the [11,6,4] opcode decoder already gives the same result on all
+  1- and 2-bit errors (see "Instruction Fetch Rule" at the top). The
+  instruction fetch is now independent of parity bits; the parity bits
+  are a resource for the repair program (`I`, `V`, `j`), not for the
+  physics of fetch. Rotation operands (`R`, `L`, `Y`) keep the decoded
+  read. Regression tests: `test_instruction_fetch.py`.

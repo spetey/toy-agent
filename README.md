@@ -1,28 +1,5 @@
 # The Wikivore: A Digital Deacon Autogen
 
-## Local fork: raw opcode fetch
-
-This fork selects instructions from the **raw 11 data bits** of each
-16-bit cell, followed by the existing opcode decoder. Instruction fetch
-does not perform Hamming correction. Changing only parity bits therefore
-cannot change which instruction is selected. Forward and reverse stepping
-use the same rule, as do the CLI and GUI instruction labels.
-
-The 16-bit cell format and instruction definitions remain compatible with
-existing programs. In particular, `I` and `V` still inspect Hamming parity
-for explicit repair, arithmetic still updates parity, and `R`, `L`, and
-`Y` still use Hamming-decoded rotation amounts. These are operand semantics,
-separate from instruction selection.
-
-To run the existing demo alongside another simulator, use
-`python3 fb2d_server.py 5002`, then load **agent-v1-narrow-w46**.
-The food and noise controls work as described below. Run
-`python3 -m unittest -v test_instruction_fetch` for the fork's regression
-tests, including parity-independent execution and agent repair.
-
-The instruction-fetch change can alter behavior under noise; it does not
-claim identical survival statistics to the original version.
-
 A self-correcting, self-fueling agent that resists its own degradation
 by noise on a 2D toroidal grid. Two mutually-correcting Hamming(16,11)
 gadgets repair each other's code while a metabolism phase compresses
@@ -123,6 +100,9 @@ python3 test_reversibility.py
 
 # Reversible pool tests (waste cleanup + noise injection)
 python3 test_pools.py
+
+# Instruction fetch rule (raw data bits, parity-independent; agent repair)
+python3 -m unittest -v test_instruction_fetch
 ```
 
 ### CLI REPL
@@ -196,7 +176,8 @@ and 1,304 select NOP. All 2,048 remain usable as data.
 decoding. Ordinary payload arithmetic and conditional mirrors use raw
 data bits. Neither opcode interpretation nor rotation-amount decoding
 repairs a stored cell. See [the ISA reference](docs/isa.md) for the exact
-read rules and an example where the former fetch decoder miscorrected.
+read rules and an example where the former (v1.16) fetch decoder
+miscorrected.
 
 #### Special Cell Values
 
@@ -347,6 +328,7 @@ ifbc.py                          ifb-to-fb2d compiler
 pools.py                         Reversible waste pool + noise pool
 test_pools.py                    Pool tests (waste, noise, integration)
 test_reversibility.py            Exhaustive opcode reversibility proof
+test_instruction_fetch.py        Instruction fetch rule tests (v1.17)
 programs/                        Example programs and demos
   agent-v1-narrow.py                 Narrow self-fueling agent (W=46, ★ flagship)
   agent-v1-narrow-w46.fb2d          Loadable state: narrow agent

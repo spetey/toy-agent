@@ -224,14 +224,14 @@
 <header id="title-block-header">
 <h1 class="title">fb2d ISA: raw opcode fetch</h1>
 </header>
-<h1 id="fb2d-instruction-set-architecture-raw-opcode-fetch-fork">fb2d
-Instruction Set Architecture (raw opcode fetch fork)</h1>
+<h1 id="fb2d-instruction-set-architecture-v117-raw-opcode-fetch">fb2d
+Instruction Set Architecture (v1.17, raw opcode fetch)</h1>
 <p>62 opcodes + NOP. Every 16-bit cell value is a valid simulator state.
 The IP extracts the 11 data bits <strong>without Hamming
 correction</strong>, then uses the opcode decoder to select an
 instruction. The five parity bits do not participate in instruction
 selection.</p>
-<p>This fork retains the v1.15 instruction set: <code>I</code> (syndrome
+<p>v1.17 retains the v1.15 instruction set: <code>I</code> (syndrome
 inspect) replaces the unused <code>M</code> (payload subtract via IX) at
 opcode 54. <code>M</code> was completely superseded by <code>m</code>
 (raw XOR) in the copy-down architecture. The change is the fetch rule,
@@ -289,7 +289,7 @@ encoding changes its raw payload from 975 to 971. Raw opcode decoding
 still selects <code>+</code>, since 971 is one data bit from 975.
 Hamming decoding instead produces payload 963, two bits from 975, and
 the subsequent opcode lookup selects NOP.</p>
-<p>The fork avoids that interaction by using only raw payload extraction
+<p>v1.17 avoids that interaction by using only raw payload extraction
 during fetch. This does not claim better survival for every noise
 pattern.</p>
 <h3 id="other-reads-and-explicit-repair">Other Reads and Explicit
@@ -1188,7 +1188,7 @@ plain-text, and PDF references after changing it:</p>
 <span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">-V</span> geometry:margin=0.65in <span class="at">-V</span> fontsize=10pt <span class="dt">\</span></span>
 <span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">-V</span> mainfont=<span class="st">&quot;Arial&quot;</span> <span class="at">-V</span> monofont=<span class="st">&quot;Menlo&quot;</span> <span class="at">-o</span> docs/isa.pdf</span></code></pre></div>
 <p>The PDF command uses fonts available on macOS; use equivalent local
-fonts on other systems. These references describe the fork; historical
+fonts on other systems. These references describe v1.17; historical
 design notes describe earlier implementations.</p>
 </body>
 </html>

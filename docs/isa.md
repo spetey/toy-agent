@@ -1,11 +1,11 @@
-# fb2d Instruction Set Architecture (raw opcode fetch fork)
+# fb2d Instruction Set Architecture (v1.17, raw opcode fetch)
 
 62 opcodes + NOP. Every 16-bit cell value is a valid simulator state.
 The IP extracts the 11 data bits **without Hamming correction**, then
 uses the opcode decoder to select an instruction. The five parity bits
 do not participate in instruction selection.
 
-This fork retains the v1.15 instruction set: `I` (syndrome inspect) replaces the unused `M` (payload
+v1.17 retains the v1.15 instruction set: `I` (syndrome inspect) replaces the unused `M` (payload
 subtract via IX) at opcode 54. `M` was completely superseded by `m` (raw
 XOR) in the copy-down architecture. The change is the fetch rule, not the
 16-bit cell format or the semantics of the individual instructions.
@@ -70,7 +70,7 @@ from 975 to 971. Raw opcode decoding still selects `+`, since 971 is one
 data bit from 975. Hamming decoding instead produces payload 963, two
 bits from 975, and the subsequent opcode lookup selects NOP.
 
-The fork avoids that interaction by using only raw payload extraction
+v1.17 avoids that interaction by using only raw payload extraction
 during fetch. This does not claim better survival for every noise pattern.
 
 ### Other Reads and Explicit Repair
@@ -413,5 +413,5 @@ pandoc docs/isa.md --pdf-engine=xelatex \
 ```
 
 The PDF command uses fonts available on macOS; use equivalent local fonts
-on other systems. These references describe the fork; historical design
+on other systems. These references describe v1.17; historical design
 notes describe earlier implementations.
