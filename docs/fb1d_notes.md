@@ -1,5 +1,15 @@
 # fb1d: A 1D Reversible Tape Simulator (and Why It Doesn't Quite Work)
 
+> **Update 2026-09-07: the "wall" below is not a wall.**  A 1D
+> reversible, valid-everywhere, Turing-complete BFF exists; see
+> `docs/rbff_notes.md` and `rbff.py`.  The fix is to make *both*
+> brackets jump on the same condition (`tape[a] != 0`) and land one
+> past the partner bracket.  Then the jump-or-not bit is a function of
+> the post-state (the unchanged condition cell), so it never has to be
+> stored, on the tape or off it.  The argument in "The apparent wall"
+> assumed the decision had to be stored somewhere; that was the flaw.
+> The rest of this file is kept as a record of the attempts.
+
 ## What this is
 
 `fb1d.py` is a 1D analog of `fb2d.py` — a single tape (code + data + fuel)
@@ -112,6 +122,15 @@ function isn't injective, therefore not reversible.
 
 This isn't a proof (we haven't shown *no* scheme could work), but
 after several attempts we haven't found a way around it.
+
+**Resolved (2026-09-07):** the construction in the "formally" paragraph
+above only goes through when the skip condition at `[` and the
+fall-through condition at `]` coincide (both zero, as in BFF).  With
+`[` skipping on nonzero and `]` falling through on zero, the two
+candidate predecessors of any post-bracket state differ in the
+condition cell, so `step()` is injective.  The bracket-pair attempt
+above failed at the join point for exactly this reason, not because of
+the skip-mode register.  See `docs/rbff_notes.md`.
 
 ## What could still be worth pursuing
 

@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RBFF Workbench</title>
+<!--
+  RBFF Workbench: browser front end for the 1D reversible BFF (see rbff.py,
+  docs/rbff_notes.md).  Self-contained; open this file directly in a browser.
+  Authored or modified by Claude, 2026-09-07.
+-->
+<style>
+  :root {
+    --bg: #fafaf7; --fg: #222; --muted: #777; --panel: #fff; --line: #ddd;
+    --code-bg: #f1efe6; --sel: #ffec8a;
+    --c-a: #1f6fd0; --c-b: #8a3fc4; --c-inc: #1a8a3a; --c-xor: #d8731a;
+    --c-br: #c8202a; --c-nop: #aaa;
+    --head-a: #1f6fd0; --head-b: #8a3fc4; --head-p: #c8202a;
+    --seg-cur: #fff3c2; --partner: #ffd6d9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: 1fr 340px; gap: 14px; padding: 14px 16px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+                  padding: 10px 12px; margin-bottom: 14px; }
+  section.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+                     color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .controls button, .controls input, .controls select, button {
+    font: inherit; padding: 4px 10px; border: 1px solid #bbb; border-radius: 6px;
+    background: #fff; cursor: pointer; }
+  .controls input[type=number] { width: 84px; }
+  .controls input[type=range] { width: 110px; }
+  button:hover { background: #f3f3f3; }
+  button.primary { background: #2b5fb3; color: #fff; border-color: #2b5fb3; }
+  button.primary:hover { background: #244f95; }
+  .status { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px;
+            margin-top: 8px; white-space: pre-wrap; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 16px; font-size: 12px; color: var(--muted); }
+  .legend span b { font-family: ui-monospace, Menlo, monospace; font-size: 14px; }
+
+  /* tape */
+  #tape { overflow-x: auto; }
+  .row { display: flex; align-items: flex-start; margin-bottom: 4px; }
+  .addr { width: 46px; flex: none; color: var(--muted); font: 11px ui-monospace, Menlo, monospace;
+          padding-top: 8px; text-align: right; padding-right: 6px; }
+  .cell { width: 27px; height: 40px; flex: none; margin-right: 1px; border: 1px solid var(--line);
+          border-radius: 4px; background: #fff; display: flex; flex-direction: column;
+          align-items: center; justify-content: flex-start; cursor: pointer; position: relative;
+          font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .cell.code { background: var(--code-bg); }
+  .cell .v { font-size: 15px; line-height: 22px; font-weight: 600; }
+  .cell.data .v { font-size: 12px; font-weight: 500; }
+  .cell .lab { font-size: 8px; line-height: 9px; color: var(--muted); max-width: 25px;
+               overflow: hidden; white-space: nowrap; }
+  .cell .heads { position: absolute; bottom: 0; left: 0; right: 0; height: 9px; display: flex;
+                 justify-content: center; gap: 1px; }
+  .cell .heads i { display: block; width: 7px; height: 7px; border-radius: 50%; }
+  .cell .heads i.a { background: var(--head-a); }
+  .cell .heads i.b { background: var(--head-b); }
+  .cell .heads i.p { background: var(--head-p); }
+  .cell.ip { outline: 2px solid var(--head-p); outline-offset: -1px; }
+  .cell.sel { box-shadow: 0 0 0 2px var(--sel) inset; }
+  .cell.partner { background: var(--partner); }
+  .cell.segcur { border-color: #e0b000; }
+  .cell.hover { background: #e8f0ff; }
+  .op-a { color: var(--c-a); } .op-b { color: var(--c-b); } .op-inc { color: var(--c-inc); }
+  .op-xor { color: var(--c-xor); } .op-br { color: var(--c-br); } .op-nop { color: var(--c-nop); }
+  .seg-tick { position: absolute; top: 0; left: 0; right: 0; height: 3px; border-radius: 3px 3px 0 0; }
+
+  /* inspector */
+  #inspector { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
+               min-height: 150px; white-space: pre-wrap; }
+  #inspector .k { color: var(--muted); }
+  #segments { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
+              max-height: 380px; overflow: auto; }
+  #segments div { padding: 1px 4px; border-radius: 3px; cursor: pointer; white-space: nowrap;
+                  display: flex; gap: 8px; }
+  #segments div:hover { background: #eef; }
+  #segments div.cur { background: var(--seg-cur); }
+  #segments .off { color: var(--muted); width: 34px; text-align: right; flex: none; }
+  #segments .lab { width: 190px; flex: none; overflow: hidden; text-overflow: ellipsis; }
+  #segments .txt { color: #555; overflow: hidden; text-overflow: ellipsis; }
+  textarea { width: 100%; font: 13px ui-monospace, Menlo, Consolas, monospace; min-height: 70px;
+             border: 1px solid #bbb; border-radius: 6px; padding: 6px; resize: vertical; }
+  .note { font-size: 12.5px; color: #444; white-space: pre-wrap; margin-top: 6px; }
+  .cellEdit { width: 26px; font: 12px ui-monospace, monospace; text-align: center; padding: 0; }
+  kbd { font: 11px ui-monospace, monospace; border: 1px solid #ccc; border-bottom-width: 2px;
+        border-radius: 3px; padding: 0 4px; background: #f7f7f7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>RBFF Workbench</h1>
+  <span class="sub">1D reversible BFF &middot; hover any cell for an explanation &middot; click a cell to edit it</span>
+  <span class="legend">
+    <span><b class="op-a">&lt; &gt;</b> move a</span>
+    <span><b class="op-b">{ }</b> move b</span>
+    <span><b class="op-inc">- +</b> tape[a] &plusmn;1</span>
+    <span><b class="op-xor">. ,</b> xor</span>
+    <span><b class="op-br">[ ]</b> brackets</span>
+    <span><b class="op-nop">&middot;</b> no-op</span>
+    <span><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--head-a)"></i> a &nbsp;
+          <i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--head-b)"></i> b &nbsp;
+          <i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--head-p)"></i> IP</span>
+  </span>
+</header>
+
+<main>
+<div>
+  <section class="panel">
+    <h2>Run</h2>
+    <div class="controls">
+      <label>example <select id="exampleSel"></select></label>
+      <button id="btnReset" title="reload the example from scratch">reset</button>
+      <span style="width:8px"></span>
+      <button id="btnBack" title="step back (deductive)">&#9664; back</button>
+      <button id="btnStep" class="primary" title="step forward">step &#9654;</button>
+      <button id="btnStepN">step <input id="nSteps" type="number" value="10" min="1"></button>
+      <button id="btnLoop" title="run until the IP returns to address 1 (one outer-loop pass)">one pass</button>
+      <button id="btnRunTo">run to p = <input id="runTo" type="number" value="0" min="0"></button>
+      <span style="width:8px"></span>
+      <button id="btnPlay">&#9654; play</button>
+      <button id="btnPlayBack">&#9664; play backward</button>
+      <label>speed <input id="speed" type="range" min="0" max="100" value="35"></label>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Tape</h2>
+    <div class="controls" style="margin-bottom:8px">
+      <label>view up to <input id="viewHi" type="number" value="64" min="1"></label>
+      <label>per row <input id="perRow" type="number" value="32" min="8" max="64"></label>
+      <span style="width:8px"></span>
+      <span>selected: <b id="selAddr">none</b></span>
+      <button id="btnAsel">a &rarr; selected</button>
+      <button id="btnBsel">b &rarr; selected</button>
+      <button id="btnPsel">IP &rarr; selected</button>
+    </div>
+    <div id="tape"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Code (editable)</h2>
+    <textarea id="codeText" spellcheck="false"></textarea>
+    <div class="controls" style="margin-top:6px">
+      <button id="btnLoadCode">load code at address 0 (keeps data, IP to 0)</button>
+      <span class="sub" style="color:var(--muted);font-size:12px">Any character that is not one of the ten ops is a no-op.</span>
+    </div>
+    <div class="note" id="note"></div>
+  </section>
+</div>
+
+<div>
+  <section class="panel">
+    <h2>Inspector</h2>
+    <div id="inspector">hover a cell</div>
+  </section>
+  <section class="panel">
+    <h2>Program segments</h2>
+    <div id="segments"></div>
+  </section>
+  <section class="panel">
+    <h2>Semantics</h2>
+    <div class="note">Each step executes tape[p], then p += 1 (always, even after a jump, so a jump lands one past the partner bracket). All of p, a, b wrap modulo the tape size.
+
+<b class="op-br">[</b>  if tape[a] &ne; 0: jump to matching ]  &mdash; enter the body only when zero
+<b class="op-br">]</b>  if tape[a] &ne; 0: jump to matching [  &mdash; repeat the body while nonzero
+
+Guards: a write to tape[p] is a no-op; an xor with a = b is a no-op; an unmatched bracket is a no-op. With these, every step is a bijection, so <i>back</i> needs no history: it decrements p, reads the op there, and applies its inverse.</div>
+  </section>
+</div>
+</main>
+
+<script>
+'use strict';
+// ------------------------------------------------------------ interpreter
+const OPS = '<>{}-+.,[]';
+const OP_INFO = {
+  '<': ['op-a',   'a -= 1  (move head a left)'],
+  '>': ['op-a',   'a += 1  (move head a right)'],
+  '{': ['op-b',   'b -= 1  (move head b left)'],
+  '}': ['op-b',   'b += 1  (move head b right)'],
+  '-': ['op-inc', 'tape[a] -= 1'],
+  '+': ['op-inc', 'tape[a] += 1'],
+  '.': ['op-xor', 'tape[b] ^= tape[a]   (copy a into a zero cell at b)'],
+  ',': ['op-xor', 'tape[a] ^= tape[b]   (copy b into a zero cell at a)'],
+  '[': ['op-br',  'if tape[a] != 0: jump to matching ]   (enter body only when zero)'],
+  ']': ['op-br',  'if tape[a] != 0: jump to matching [   (repeat body while nonzero)'],
+};
+const isBr = v => v === 91 || v === 93;
+
+class RBFF {
+  constructor(n) { this.tape = new Uint8Array(n); this.a = 0; this.b = 0; this.p = 0;
+                   this.steps = 0; this.mt = null; }
+  get N() { return this.tape.length; }
+  matches() {
+    if (this.mt) return this.mt;
+    const mt = new Int32Array(this.N).fill(-1), st = [];
+    for (let i = 0; i < this.N; i++) {
+      const c = this.tape[i];
+      if (c === 91) st.push(i);
+      else if (c === 93 && st.length) { const j = st.pop(); mt[i] = j; mt[j] = i; }
+    }
+    return this.mt = mt;
+  }
+  write(addr, val) {
+    if (addr === this.p) return;                       // executing-byte guard
+    val &= 255;
+    if (isBr(this.tape[addr]) || isBr(val)) this.mt = null;
+    this.tape[addr] = val;
+  }
+  exec(inv) {
+    const t = this.tape, a = this.a, b = this.b, p = this.p, N = this.N, s = inv ? -1 : 1;
+    switch (t[p]) {
+      case 60: this.a = (a - s + N) % N; break;
+      case 62: this.a = (a + s + N) % N; break;
+      case 123: this.b = (b - s + N) % N; break;
+      case 125: this.b = (b + s + N) % N; break;
+      case 45: this.write(a, t[a] - s); break;
+      case 43: this.write(a, t[a] + s); break;
+      case 46: if (a !== b) this.write(b, t[b] ^ t[a]); break;
+      case 44: if (a !== b) this.write(a, t[a] ^ t[b]); break;
+      case 91: case 93: {
+        const m = this.matches()[p];
+        if (m >= 0 && t[a] !== 0) this.p = m;
+      }
+    }
+  }
+  step() { this.exec(false); this.p = (this.p + 1) % this.N; this.steps++; }
+  back() { this.p = (this.p - 1 + this.N) % this.N; this.exec(true); this.steps--; }
+  poke(addr, val) {                                    // editor write, no guard
+    val &= 255;
+    if (isBr(this.tape[addr]) || isBr(val)) this.mt = null;
+    this.tape[addr] = val;
+  }
+}
+
+// ------------------------------------------------------------ macros
+const mv = (h, k) => (h === 'a' ? (k > 0 ? '>' : '<') : (k > 0 ? '}' : '{')).repeat(Math.abs(k));
+function FOR(xoff, work, label) {
+  const bx = mv('b', xoff), bb = mv('b', -xoff);
+  const init = '>>' + bx + ',' + bb + '<<', cond = '<<' + bx + ',' + bb + '>>',
+        clean = '>' + bx + ',' + bb + '<';
+  return [[label + ': init d=c^x', init], [label + ': [', '['],
+          [label + ': uncompute t', '>>[' + cond + ']<.'], [label + ': uncompute d', '}}.{{'],
+          [label + ': work', work], [label + ': c+=1', '+'],
+          [label + ': recompute d', '}}.{{'], [label + ': recompute t', '.>[' + cond + ']<<'],
+          [label + ': ]', ']'], [label + ': clean c', clean]];
+}
+const ADD = (xoff, dst, label) => FOR(xoff, mv('a', dst) + '+' + mv('a', -dst), label);
+
+// ------------------------------------------------------------ examples
+// each: {doc, size, segments, setup(m) -> {labels:{addr:name}, viewHi, note, a, b, p}}
+const EXAMPLES = {
+  copy: {
+    doc: '[.>}] copies a zero-terminated string by xor into zeros',
+    size: 48,
+    segments: () => [['copy loop', '[.>}]']],
+    setup(m) {
+      const src = 8, dst = 20, labels = {};
+      'RBFF'.split('').forEach((ch, i) => m.poke(src + 1 + i, ch.charCodeAt(0)));
+      labels[src] = 'src0'; labels[dst] = 'dst0';
+      for (let i = 1; i <= 4; i++) { labels[src + i] = 'src' + i; labels[dst + i] = 'dst' + i; }
+      labels[src + 5] = 'term';
+      return { a: src, b: dst, p: 0, labels, viewHi: 32,
+        note: 'a starts on the zero before the source (8), b on the zero before the destination (20).\n' +
+              '[ enters because tape[a] == 0; each pass xors one byte into a zero cell at b and moves both heads;\n' +
+              '] repeats while the source byte under a is nonzero. Stops at the terminator.\n' +
+              'Try: step through it, then back all the way. Then set a source byte to 0 and see it stop early.' };
+    }
+  },
+  counter: {
+    doc: 'unbounded binary counter [>[,>][,<,]<-+] (from the ChatGPT design)',
+    size: 48,
+    segments: () => [['outer [', '['], ['to sentinel', '>'], ['clear trailing ones', '[,>]'],
+                     ['set next bit, walk back', '[,<,]'], ['home, -+, loop', '<-+]']],
+    setup(m) {
+      const W = 16, labels = { [W]: 'one', [W + 1]: 'sent' };
+      for (let i = 0; i < 12; i++) labels[W + 2 + i] = 'bit' + i;
+      return { a: W, b: W, p: 13, labels, viewHi: 32,
+        note: 'tape[16] = constant 1 (created at startup), tape[17] = sentinel, bits from 18, least significant first.\n' +
+              'b sits on the constant, so , flips the bit under a. Execution starts at the final + (p = 13):\n' +
+              'it creates the constant and ] jumps to the top; the outer [ is only ever a jump target.\n' +
+              '"one pass" runs a single increment (until p returns to 1).' };
+    }
+  },
+  add: {
+    doc: 'acc += x with the garbage-free FOR idiom',
+    size: 96,
+    segments: () => [['heads to t', '>}'], ...ADD(3, -2, 'add')],
+    setup(m, codeEnd) {
+      const D = codeEnd + 2, labels = { [D]: 'acc', [D + 1]: 't', [D + 2]: 'c', [D + 3]: 'd', [D + 4]: 'x' };
+      m.poke(D + 4, 5);
+      return { a: D, b: D, p: 0, labels, viewHi: D + 8,
+        note: 'Layout acc t c d x at ' + D + '..' + (D + 4) + ', x = 5. Computes acc += x, leaving x intact.\n' +
+              't is the cell the brackets test: zero on entry, zero on exit, nonzero between.\n' +
+              'd = c ^ x (zero iff c == x); t = c except when d == 0, where an extra xor with x cancels it.\n' +
+              'Ends with acc = 5 and all scratch cells zero: no garbage.' };
+    }
+  },
+  fib: {
+    doc: 'Fibonacci sequence, one number per 4-cell slot [S t c d]',
+    size: 640,
+    segments: () => {
+      const S = 4, walk = mv('a', S) + mv('b', S), back = mv('a', -S) + mv('b', -S);
+      return [['outer [', '['], ['K += 1', '+'], ['a to Z', '>'],
+              ['walk to first zero slot', '[' + walk + ']'], ['heads to t', '>}'],
+              ...ADD(-5, -2, 'add S[-1]'), ...ADD(-9, -2, 'add S[-2]'),
+              ['heads to S', '<{'], ['advance', walk], ['walk back to Z', '[' + back + ']'],
+              ['a to K', '<'], ['outer ]', ']']];
+    },
+    setup(m, codeEnd) {
+      const D = codeEnd + 2, labels = { [D]: 'K', [D + 1]: 'Z' };
+      m.poke(D + 5, 1); m.poke(D + 9, 1);
+      for (let j = 1; j < 40; j++) {
+        const s = D + 1 + 4 * j; if (s + 3 >= m.N) break;
+        labels[s] = 'S' + j; labels[s + 1] = 't'; labels[s + 2] = 'c'; labels[s + 3] = 'd';
+      }
+      return { a: D, b: D + 1, p: 0, labels, viewHi: D + 1 + 4 * 14,
+        note: 'K = pass counter at ' + D + ', Z = zero anchor at ' + (D + 1) + ', slots of 4 cells [S t c d] from ' + (D + 5) + '.\n' +
+              'Each pass: walk right in strides of 4 to the first empty slot (both heads together), then add the\n' +
+              'two previous S values into it with two FOR loops, walk back to Z, and test K.\n' +
+              '"one pass" computes the next number. Values are mod 256.' };
+    }
+  },
+  fact: {
+    doc: 'factorials, one per 8-cell slot: S = S[-1] * k via nested FOR',
+    size: 640,
+    segments: () => {
+      const S = 8, walk = mv('a', S) + mv('b', S), back = mv('a', -S) + mv('b', -S);
+      const inner = [['  heads to t2', '>>}}}'], ...ADD(-12, -5, '  inner add S[-1]'), ['  heads back', '<<{{{']];
+      const innerText = inner.map(s => s[1]).join('');
+      return [['outer [', '['], ['K += 1', '+'], ['a to Z', '>'],
+              ['walk to first zero slot', '[' + walk + ']'],
+              ['k = k[-1] + 1', '>>>>>>>{,+}<<<<<<<'], ['heads to t1', '>}'],
+              ...FOR(6, innerText, 'mul: for k'),
+              ['heads to S', '<{'], ['advance', walk], ['walk back to Z', '[' + back + ']'],
+              ['a to K', '<'], ['outer ]', ']']];
+    },
+    setup(m, codeEnd) {
+      const D = codeEnd + 2, labels = { [D]: 'K', [D + 1]: 'Z' };
+      m.poke(D + 9, 1); m.poke(D + 16, 1);
+      const names = ['S', 't1', 'c1', 'd1', 't2', 'c2', 'd2', 'k'];
+      for (let j = 1; j < 20; j++) {
+        const s = D + 1 + 8 * j; if (s + 7 >= m.N) break;
+        names.forEach((nm, i) => labels[s + i] = i === 0 ? 'S' + j : nm);
+      }
+      return { a: D, b: D + 1, p: 0, labels, viewHi: D + 1 + 8 * 9,
+        note: 'K at ' + D + ', Z at ' + (D + 1) + ', slots of 8 [S t1 c1 d1 t2 c2 d2 k] from ' + (D + 9) + '.\n' +
+              'Each pass: walk to the first empty slot, copy k from the previous slot and add 1, then\n' +
+              'S = S[-1] * k as a FOR over k whose body is a FOR-add of S[-1]. Mod 256: 6! = 208, 7! = 176.' };
+    }
+  },
+};
+
+// ------------------------------------------------------------ state
+let m, segments = [], codeEnd = 0, labels = {}, exampleName = 'counter', selected = null, timer = null;
+
+function loadExample(name) {
+  stopPlay();
+  exampleName = name;
+  const ex = EXAMPLES[name];
+  m = new RBFF(ex.size);
+  segments = ex.segments();
+  const code = segments.map(s => s[1]).join('');
+  for (let i = 0; i < code.length; i++) m.poke(i, code.charCodeAt(i));
+  codeEnd = code.length;
+  const info = ex.setup(m, codeEnd);
+  m.a = info.a; m.b = info.b; m.p = info.p; m.steps = 0;
+  labels = info.labels || {};
+  $('viewHi').value = info.viewHi;
+  $('codeText').value = code;
+  $('note').textContent = info.note || '';
+  selected = null;
+  renderAll();
+}
+
+function loadCodeFromText() {
+  stopPlay();
+  const code = $('codeText').value.replace(/\s+/g, '');
+  const need = Math.max(m.N, code.length + 16);
+  if (need > m.N) { const t = new Uint8Array(need); t.set(m.tape); m.tape = t; m.mt = null; }
+  for (let i = 0; i < Math.max(code.length, codeEnd); i++)
+    m.poke(i, i < code.length ? code.charCodeAt(i) : 0);
+  codeEnd = code.length;
+  segments = [['code', code]];
+  m.p = 0; m.steps = 0;
+  renderAll();
+}
+
+// ------------------------------------------------------------ helpers
+const $ = id => document.getElementById(id);
+const ch = v => OPS.includes(String.fromCharCode(v)) ? String.fromCharCode(v) : null;
+function segmentAt(p) {
+  let off = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const len = segments[i][1].length;
+    if (p >= off && p < off + len) return { i, label: segments[i][0], off: p - off, start: off, end: off + len };
+    off += len;
+  }
+  return null;
+}
+function describeCell(addr) {
+  const v = m.tape[addr], op = ch(v), lines = [];
+  const lab = labels[addr] ? '  "' + labels[addr] + '"' : '';
+  lines.push('<span class="k">address</span> ' + addr + lab);
+  const printable = v >= 32 && v < 127 ? " '" + String.fromCharCode(v) + "'" : '';
+  lines.push('<span class="k">value</span>   ' + v + '  (0x' + v.toString(16).padStart(2, '0') + printable + ')');
+  lines.push('<span class="k">as op</span>   ' + (op ? '<b class="' + OP_INFO[op][0] + '">' + op + '</b>  ' + OP_INFO[op][1] : 'no-op'));
+  if (addr < codeEnd) {
+    const s = segmentAt(addr);
+    if (s) lines.push('<span class="k">segment</span> ' + s.label + '  (+' + s.off + ')');
+  }
+  if (op === '[' || op === ']') {
+    const partner = m.matches()[addr];
+    if (partner < 0) lines.push('<span class="k">partner</span> none (unmatched: no-op)');
+    else {
+      const ta = m.tape[m.a];
+      lines.push('<span class="k">partner</span> ' + op2(op) + ' at ' + partner);
+      lines.push('<span class="k">now</span>     tape[a] = ' + ta + (ta ? ' -> would jump, landing at ' + ((partner + 1) % m.N)
+                 : ' -> would fall through to ' + ((addr + 1) % m.N)));
+    }
+  }
+  if (addr === m.a) lines.push('<span class="k">head a is here</span>');
+  if (addr === m.b) lines.push('<span class="k">head b is here</span>');
+  if (addr === m.p) lines.push('<span class="k">IP is here: this executes next</span>');
+  return lines.join('\n');
+}
+const op2 = op => op === '[' ? ']' : '[';
+
+// ------------------------------------------------------------ rendering
+const cellEls = [];
+function buildTape() {
+  const tapeEl = $('tape'); tapeEl.innerHTML = ''; cellEls.length = 0;
+  const hi = Math.min(m.N, Math.max(codeEnd, +$('viewHi').value || 64));
+  const per = Math.max(8, Math.min(64, +$('perRow').value || 32));
+  for (let start = 0; start < hi; start += per) {
+    const row = document.createElement('div'); row.className = 'row';
+    const ad = document.createElement('div'); ad.className = 'addr'; ad.textContent = start; row.appendChild(ad);
+    for (let i = start; i < Math.min(hi, start + per); i++) {
+      const c = document.createElement('div'); c.className = 'cell'; c.dataset.addr = i;
+      c.innerHTML = '<div class="seg-tick"></div><div class="v"></div><div class="lab"></div><div class="heads"></div>';
+      c.addEventListener('mouseenter', () => onHover(i));
+      c.addEventListener('mouseleave', () => onHover(null));
+      c.addEventListener('click', () => onClick(i));
+      row.appendChild(c); cellEls[i] = c;
+    }
+    tapeEl.appendChild(row);
+  }
+}
+const SEG_COLORS = ['#7aa7e8', '#c19be0', '#8fd19a', '#f2b56b', '#f39aa0', '#9ad0d8', '#d9c36f', '#c0c0c0'];
+function updateCells() {
+  const mt = m.matches();
+  const cur = m.p < codeEnd ? segmentAt(m.p) : null;
+  const ipPartner = (m.p < m.N && isBr(m.tape[m.p])) ? mt[m.p] : -1;
+  for (let i = 0; i < cellEls.length; i++) {
+    const c = cellEls[i]; if (!c) continue;
+    const v = m.tape[i], op = ch(v), inCode = i < codeEnd;
+    c.className = 'cell ' + (inCode ? 'code' : 'data');
+    const ve = c.children[1];
+    if (inCode) { ve.textContent = op || '·'; ve.className = 'v ' + (op ? OP_INFO[op][0] : 'op-nop'); }
+    else { ve.textContent = v; ve.className = 'v' + (op ? ' ' + OP_INFO[op][0] : ''); }
+    c.children[2].textContent = labels[i] || (inCode ? '' : (op ? op : ''));
+    const s = inCode ? segmentAt(i) : null;
+    c.children[0].style.background = s ? SEG_COLORS[s.i % SEG_COLORS.length] : 'transparent';
+    if (cur && s && s.i === cur.i) c.classList.add('segcur');
+    if (i === m.p) c.classList.add('ip');
+    if (i === ipPartner) c.classList.add('partner');
+    if (i === selected) c.classList.add('sel');
+    c.children[3].innerHTML = (i === m.a ? '<i class="a"></i>' : '') + (i === m.b ? '<i class="b"></i>' : '') +
+                              (i === m.p ? '<i class="p"></i>' : '');
+  }
+}
+function updateStatus() {
+  const v = m.tape[m.p], op = ch(v);
+  let next = op ? op + '  ' + OP_INFO[op][1] : 'no-op (value ' + v + ')';
+  if (op === '[' || op === ']') {
+    const partner = m.matches()[m.p], ta = m.tape[m.a];
+    next += partner < 0 ? '  [unmatched: no-op]'
+          : (ta ? '  -> tape[a]=' + ta + ' so JUMP to ' + (partner + 1) : '  -> tape[a]=0 so fall through');
+  }
+  const s = m.p < codeEnd ? segmentAt(m.p) : null;
+  $('status').textContent =
+    'step ' + m.steps + '    p=' + m.p + '  a=' + m.a + '  b=' + m.b +
+    '    tape[a]=' + m.tape[m.a] + '  tape[b]=' + m.tape[m.b] + '\n' +
+    'next: ' + next + (s ? '\nin segment: ' + s.label : (m.p >= codeEnd ? '\nIP is outside the code (executing data as ops until it wraps)' : ''));
+  $('selAddr').textContent = selected === null ? 'none' : selected + (labels[selected] ? ' (' + labels[selected] + ')' : '');
+}
+function updateSegments() {
+  const el = $('segments'); el.innerHTML = '';
+  const cur = m.p < codeEnd ? segmentAt(m.p) : null;
+  let off = 0;
+  segments.forEach((s, i) => {
+    const d = document.createElement('div');
+    if (cur && cur.i === i) d.className = 'cur';
+    d.innerHTML = '<span class="off">' + off + '</span><span class="lab" style="border-left:3px solid ' +
+                  SEG_COLORS[i % SEG_COLORS.length] + ';padding-left:4px">' + s[0] + '</span><span class="txt">' + s[1] + '</span>';
+    const start = off;
+    d.addEventListener('mouseenter', () => highlightRange(start, start + s[1].length, true));
+    d.addEventListener('mouseleave', () => highlightRange(start, start + s[1].length, false));
+    d.addEventListener('click', () => { selected = start; updateCells(); updateStatus(); });
+    el.appendChild(d);
+    off += s[1].length;
+  });
+  if (cur) { const c = el.children[cur.i]; if (c) c.scrollIntoView({ block: 'nearest' }); }
+}
+function highlightRange(s, e, on) {
+  for (let i = s; i < e; i++) if (cellEls[i]) cellEls[i].classList.toggle('hover', on);
+}
+function renderAll() { buildTape(); updateCells(); updateStatus(); updateSegments(); }
+function refresh() { updateCells(); updateStatus(); updateSegments(); }
+
+function onHover(addr) {
+  if (addr === null) { $('inspector').innerHTML = describeCell(m.p); return; }
+  $('inspector').innerHTML = describeCell(addr);
+  const op = ch(m.tape[addr]);
+  document.querySelectorAll('.cell.partner-h').forEach(e => e.classList.remove('partner-h', 'partner'));
+  if (op === '[' || op === ']') {
+    const p = m.matches()[addr];
+    if (p >= 0 && cellEls[p]) cellEls[p].classList.add('partner', 'partner-h');
+  }
+}
+function onClick(addr) {
+  selected = addr; updateCells(); updateStatus();
+  const c = cellEls[addr], ve = c.children[1];
+  const inp = document.createElement('input'); inp.className = 'cellEdit';
+  inp.value = addr < codeEnd ? (ch(m.tape[addr]) || '') : m.tape[addr];
+  ve.textContent = ''; ve.appendChild(inp); inp.focus(); inp.select();
+  const done = commit => {
+    if (commit) {
+      const s = inp.value.trim();
+      let v = null;
+      if (/^\d+$/.test(s)) v = +s & 255;
+      else if (s.length === 1) v = s.charCodeAt(0);
+      else if (s === '') v = 0;
+      if (v !== null) m.poke(addr, v);
+    }
+    refresh();
+  };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+  inp.addEventListener('blur', () => done(true));
+}
+
+// ------------------------------------------------------------ running
+function runSteps(n, back) { for (let i = 0; i < n; i++) back ? m.back() : m.step(); refresh(); }
+function runUntil(p, back, max = 2e6) {
+  let n = 0;
+  do { back ? m.back() : m.step(); n++; } while (m.p !== p && n < max);
+  refresh(); return n;
+}
+function stopPlay() { if (timer) { clearInterval(timer); timer = null; } $('btnPlay').textContent = '▶ play'; $('btnPlayBack').textContent = '◀ play backward'; }
+function play(back) {
+  if (timer) { stopPlay(); return; }
+  (back ? $('btnPlayBack') : $('btnPlay')).textContent = '⏸ pause';
+  const tick = () => {
+    const sp = +$('speed').value;                      // 0..100
+    const batch = sp < 50 ? 1 : Math.round(Math.pow(10, (sp - 50) / 25));  // 1 .. 100 per tick
+    for (let i = 0; i < batch; i++) back ? m.back() : m.step();
+    refresh();
+  };
+  const restart = () => {
+    if (timer) clearInterval(timer);
+    const sp = +$('speed').value;
+    const ms = sp < 50 ? Math.round(600 - sp * 11) : 50;
+    timer = setInterval(tick, ms);
+  };
+  restart();
+  $('speed').oninput = () => { if (timer) restart(); };
+}
+
+// ------------------------------------------------------------ wiring
+const sel = $('exampleSel');
+for (const [k, ex] of Object.entries(EXAMPLES)) {
+  const o = document.createElement('option'); o.value = k; o.textContent = k + ' — ' + ex.doc; sel.appendChild(o);
+}
+sel.value = 'counter';
+sel.addEventListener('change', () => loadExample(sel.value));
+$('btnReset').addEventListener('click', () => loadExample(exampleName));
+$('btnStep').addEventListener('click', () => { stopPlay(); runSteps(1, false); });
+$('btnBack').addEventListener('click', () => { stopPlay(); runSteps(1, true); });
+$('btnStepN').addEventListener('click', e => { if (e.target.tagName === 'INPUT') return; stopPlay(); runSteps(+$('nSteps').value || 1, false); });
+$('btnLoop').addEventListener('click', () => { stopPlay(); runUntil(1, false); });
+$('btnRunTo').addEventListener('click', e => { if (e.target.tagName === 'INPUT') return; stopPlay(); runUntil(+$('runTo').value || 0, false); });
+$('btnPlay').addEventListener('click', () => play(false));
+$('btnPlayBack').addEventListener('click', () => play(true));
+$('btnLoadCode').addEventListener('click', loadCodeFromText);
+$('viewHi').addEventListener('change', renderAll);
+$('perRow').addEventListener('change', renderAll);
+$('btnAsel').addEventListener('click', () => { if (selected !== null) { m.a = selected; refresh(); } });
+$('btnBsel').addEventListener('click', () => { if (selected !== null) { m.b = selected; refresh(); } });
+$('btnPsel').addEventListener('click', () => { if (selected !== null) { m.p = selected; refresh(); } });
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'ArrowRight' || e.key === 's') { stopPlay(); runSteps(1, false); }
+  if (e.key === 'ArrowLeft' || e.key === 'b') { stopPlay(); runSteps(1, true); }
+  if (e.key === ' ') { e.preventDefault(); play(false); }
+});
+loadExample('counter');
+</script>
+</body>
+</html>
