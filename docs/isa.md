@@ -410,6 +410,11 @@ pandoc docs/isa.md --to=plain --wrap=auto --columns=100 \
 pandoc docs/isa.md --pdf-engine=pdflatex \
   --include-in-header=docs/isa-pdf-header.tex \
   -V geometry:margin=0.65in -V fontsize=10pt -o docs/isa.pdf
+# PDF, with tectonic (XeTeX-based, self-contained, fetches packages itself;
+# `brew install tectonic`); this is what the checked-in PDF was built with:
+pandoc docs/isa.md --pdf-engine=tectonic \
+  --include-in-header=docs/isa-pdf-header.tex \
+  -V geometry:margin=0.65in -V fontsize=10pt -o docs/isa.pdf
 # PDF, with xelatex (lets you pick system fonts):
 pandoc docs/isa.md --pdf-engine=xelatex \
   --include-in-header=docs/isa-pdf-header.tex \
