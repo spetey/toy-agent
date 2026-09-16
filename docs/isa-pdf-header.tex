@@ -3,3 +3,8 @@
 \usepackage{etoolbox}
 \pretocmd{\subsection}{\Needspace{8\baselineskip}}{}{}
 \pretocmd{\subsubsection}{\Needspace{8\baselineskip}}{}{}
+% pdflatex compatibility: the ISA text uses a literal "→" (U+2192), which
+% pdflatex's default font encoding does not provide. Map it to the math
+% arrow. Harmless under xelatex/lualatex. (Em dashes need no mapping.)
+\usepackage{newunicodechar}
+\newunicodechar{→}{\ensuremath{\rightarrow}}

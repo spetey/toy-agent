@@ -406,12 +406,18 @@ pandoc docs/isa.md --standalone --mathml \
   --metadata title="fb2d ISA: raw opcode fetch" -o docs/isa.html
 pandoc docs/isa.md --to=plain --wrap=auto --columns=100 \
   -o docs/isa.text
+# PDF, with a plain pdflatex install (default Latin Modern fonts):
+pandoc docs/isa.md --pdf-engine=pdflatex \
+  --include-in-header=docs/isa-pdf-header.tex \
+  -V geometry:margin=0.65in -V fontsize=10pt -o docs/isa.pdf
+# PDF, with xelatex (lets you pick system fonts):
 pandoc docs/isa.md --pdf-engine=xelatex \
   --include-in-header=docs/isa-pdf-header.tex \
   -V geometry:margin=0.65in -V fontsize=10pt \
   -V mainfont="Arial" -V monofont="Menlo" -o docs/isa.pdf
 ```
 
-The PDF command uses fonts available on macOS; use equivalent local fonts
-on other systems. These references describe v1.17; historical design
+The header maps the literal "→" character to a math arrow so pdflatex
+can typeset it; the xelatex font names are macOS ones, so use equivalent
+local fonts on other systems. These references describe v1.17; historical design
 notes describe earlier implementations.
