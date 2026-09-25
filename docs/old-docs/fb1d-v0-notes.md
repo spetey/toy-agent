@@ -1,8 +1,13 @@
-# fb1d: A 1D Reversible Tape Simulator (and Why It Doesn't Quite Work)
+# fb1d v0: A 1D Reversible Tape Simulator (and Why It Doesn't Quite Work)
+
+> **Deprecated 2026-09-25.**  This describes the April 2026 simulator,
+> now at `old-files/1d-and-before/fb1d-v0-extrail.py`.  The name `fb1d`
+> now belongs to the 16-bit bracket language (formerly RBFF); the 8-bit
+> version is `fb1d8.py`.
 
 > **Update 2026-09-07: the "wall" below is not a wall.**  A 1D
 > reversible, valid-everywhere, Turing-complete BFF exists; see
-> `docs/rbff_notes.md` and `rbff.py`.  The fix is to make *both*
+> `docs/fb1d8_notes.md` and `fb1d8.py`.  The fix is to make *both*
 > brackets jump on the same condition (`tape[a] != 0`) and land one
 > past the partner bracket.  Then the jump-or-not bit is a function of
 > the post-state (the unchanged condition cell), so it never has to be
@@ -12,13 +17,13 @@
 
 ## What this is
 
-`fb1d.py` is a 1D analog of `fb2d.py` — a single tape (code + data + fuel)
+`fb1d-v0-extrail.py` is a 1D analog of `fb2d.py` — a single tape (code + data + fuel)
 with five heads (IP, H0, H1, CL, EX), a small ISA (21 opcodes), and a
 conditional jump `J`. The simulator runs the built-in `dec_loop` example
 end-to-end: 3 → 2 → 1 → 0 forward, then a full backward reversal that
 restores the initial state and clears the EX trail.
 
-Run `python3 fb1d.py` and type `help` or `ops` for the REPL and ISA
+Run `python3 old-files/1d-and-before/fb1d-v0-extrail.py` and type `help` or `ops` for the REPL and ISA
 reference. It works. But it doesn't quite achieve the property we wanted.
 
 ## The property we wanted
@@ -130,7 +135,7 @@ fall-through condition at `]` coincide (both zero, as in BFF).  With
 candidate predecessors of any post-bracket state differ in the
 condition cell, so `step()` is injective.  The bracket-pair attempt
 above failed at the join point for exactly this reason, not because of
-the skip-mode register.  See `docs/rbff_notes.md`.
+the skip-mode register.  See `docs/fb1d8_notes.md`.
 
 ## What could still be worth pursuing
 
@@ -148,7 +153,7 @@ requirement rather than an unstated assumption.
 
 ## Files
 
-- `fb1d.py` — the simulator. REPL with `s` / `b` for forward/back
+- `fb1d-v0-extrail.py` — the simulator. REPL with `s` / `b` for forward/back
   stepping, `d` for tape display, `ex` for trail inspection, `ops`
   for ISA reference. Auto-loads the `dec_loop` example on startup.
 

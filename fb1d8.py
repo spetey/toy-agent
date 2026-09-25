@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-RBFF: Reversible BFF on a 1D tape
+fb1d8: Reversible BFF on a 1D tape, 8-bit didactic version (formerly RBFF)
 Authored or modified by Claude
-Version: 2026-09-07 v0.1
+Version: 2026-09-25 v0.2 (renamed from rbff.py; 16-bit agent host is fb1d.py)
 
 A 1D, reversible, valid-everywhere, Turing-complete variant of BFF.
 The design comes from a ChatGPT conversation forwarded by a friend of
 Steve's; this file is an independent re-implementation from the prose
-spec, plus a REPL and example programs.  See docs/rbff_notes.md.
+spec, plus a REPL and example programs.  See docs/fb1d8_notes.md.
 
 State: (tape, a, b, p).  tape is N bytes; a, b are data heads; p is the
 instruction pointer.  All three wrap modulo N.  Each step executes the
@@ -39,8 +39,8 @@ join point unambiguous: landing after a bracket with tape[a]!=0 means
 you jumped; with tape[a]==0 means you fell through.
 
 Usage:
-  python3 rbff.py            REPL (type help)
-  python3 rbff.py --test     verification suite
+  python3 fb1d8.py            REPL (type help)
+  python3 fb1d8.py --test     verification suite
 """
 
 import sys
@@ -77,7 +77,7 @@ def match_table(tape):
     return mt
 
 
-class RBFF:
+class FB1D8:
     def __init__(self, size=256):
         self.tape = [0] * size
         self.a = self.b = self.p = 0
@@ -302,7 +302,7 @@ def ex_counter(m):
                      "Use `loop` to run one increment (until p==1).")
 
 
-@example('add', "acc += x using the garbage-free FOR idiom (see docs/rbff_notes.md)")
+@example('add', "acc += x using the garbage-free FOR idiom (see docs/fb1d8_notes.md)")
 def ex_add(m):
     m.load_program([('heads to t', '>}')] + ADD(xoff=3, dst_off_from_c=-2),
                    size=128)
@@ -390,7 +390,7 @@ def _exhaustive(N, alphabet):
         for a in range(N):
             for b in range(N):
                 for p in range(N):
-                    m = RBFF(N)
+                    m = FB1D8(N)
                     m.tape = list(tape); m.a, m.b, m.p = a, b, p
                     s0 = m.state()
                     m.step(); s1 = m.state()
@@ -418,7 +418,7 @@ def run_tests():
     rng = random.Random(1); bad = 0
     for _ in range(200):
         N = rng.randint(4, 24)
-        m = RBFF(N)
+        m = FB1D8(N)
         m.tape = [rng.choice(alpha) if rng.random() < 0.9 else rng.randrange(256)
                   for _ in range(N)]
         m.a, m.b, m.p = rng.randrange(N), rng.randrange(N), rng.randrange(N)
@@ -431,14 +431,14 @@ def run_tests():
     ok &= bad == 0
 
     print("== examples ==")
-    m = RBFF()
+    m = FB1D8()
     EXAMPLES['copy'][1](m)
     s0 = m.state(); n = m.run(100, stop_at=m.code_end)
     got = bytes(m.tape[21:25])
     print(f"  copy: {got!r} in {n} steps, reversed={_reverse_check(m, n, s0)}")
     ok &= got == b'RBFF'
 
-    m = RBFF()
+    m = FB1D8()
     EXAMPLES['counter'][1](m)
     s0 = m.state(); m.step(); m.step(); total = 2
     good = True
@@ -452,7 +452,7 @@ def run_tests():
           f"reversed={_reverse_check(m, total, s0)}")
     ok &= good
 
-    m = RBFF()
+    m = FB1D8()
     EXAMPLES['add'][1](m)
     s0 = m.state(); n = m.run(10**5, stop_at=m.code_end)
     D = m.code_end + 2
@@ -460,7 +460,7 @@ def run_tests():
     print(f"  add: cells={cells} in {n} steps, reversed={_reverse_check(m, n, s0)}")
     ok &= cells == [5, 0, 0, 0, 5]
 
-    m = RBFF()
+    m = FB1D8()
     info = EXAMPLES['fib'][1](m)
     s0 = m.state(); D = m.code_end + 2; total = 0
     for _ in range(11):
@@ -473,7 +473,7 @@ def run_tests():
           f"reversed={_reverse_check(m, total, s0)}")
     ok &= got == want and scratch_clean
 
-    m = RBFF()
+    m = FB1D8()
     EXAMPLES['fact'][1](m)
     s0 = m.state(); D = m.code_end + 2; total = 0
     for _ in range(8):           # first run is the single step [ -> p=1
@@ -507,7 +507,7 @@ commands:
 
 
 def repl():
-    m = RBFF()
+    m = FB1D8()
     view = {}
 
     def show():
@@ -524,11 +524,11 @@ def repl():
         print(info.get('note', ''))
         show()
 
-    print("RBFF REPL -- type help.  Loading `counter`.")
+    print("fb1d8 REPL -- type help.  Loading `counter`.")
     load('counter')
     while True:
         try:
-            line = input("rbff> ").strip()
+            line = input("fb1d8> ").strip()
         except (EOFError, KeyboardInterrupt):
             print(); break
         if not line:

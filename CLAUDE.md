@@ -67,15 +67,19 @@ fb2d is a 2D reversible esoteric language where:
   with dirty working-area cells). NoisePool provides deterministic,
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
-- **`rbff.py`** — RBFF: a 1D reversible, valid-everywhere, Turing-complete
-  BFF variant (XOR copying, symmetric bracket conditions, executing-byte
-  guard). Interpreter + REPL + examples (copy, binary counter, add, fib,
+- **`fb1d.py`** — *(planned, M1 of `docs/fb1d-port-plan.md`)* fb1d:
+  the 16-bit Hamming extension of fb1d8 that will host the 1D Wikivore
+  (ix head, m/I/V/j, multi-IP, noise).
+- **`fb1d8.py`** — fb1d8 (formerly RBFF): the 8-bit didactic 1D
+  reversible, valid-everywhere, Turing-complete BFF variant (XOR
+  copying, symmetric bracket conditions, executing-byte guard).
+  Interpreter + REPL + examples (copy, binary counter, add, fib,
   factorial) + garbage-free FOR loop macro. Refutes the 1D "wall" in
-  `docs/fb1d_notes.md`; see `docs/rbff_notes.md`. REPL: `python3 rbff.py`.
-  Tests: `python3 rbff.py --test`
-- **`rbff.html`** — Browser workbench for RBFF (self-contained, open the
+  `docs/old-docs/fb1d-v0-notes.md`; see `docs/fb1d8_notes.md`.
+  REPL: `python3 fb1d8.py`. Tests: `python3 fb1d8.py --test`
+- **`fb1d8.html`** — Browser workbench for fb1d8 (self-contained, open the
   file directly, no server). Own JS interpreter + the same example
-  programs and macros as rbff.py. Color-coded ops, hover inspector
+  programs and macros as fb1d8.py. Color-coded ops, hover inspector
   (value, op meaning, segment, bracket partner, jump prediction),
   click-to-edit cells, step/back/play in both directions, editable code.
 - **`programs/agent-v1-narrow.py`** — Narrow self-fueling agent (★ current
@@ -130,19 +134,22 @@ fb2d is a 2D reversible esoteric language where:
   for resolving ambiguity in the 1D predecessor.
 - **`docs/theory-notes.md`** — Local vs global reversibility, Landauer's
   principle, Poincaré recurrence. Thermodynamic analogies for metabolism.
-- **`docs/rbff_notes.md`** — RBFF: why symmetric bracket conditions give
-  1D reversibility with no history, verification summary, programming
-  idioms (IF-ZERO, walk, garbage-free FOR), caveats (nonlocal jumps).
-- **`docs/fb1d_notes.md`** — The earlier 1D attempts and the (now
-  refuted) "reversibility wall" argument, with the correction noted.
-- **`docs/rbff-port-plan.md`** — Plan for porting the Wikivore to RBFF:
-  the RBFF-16 language extension (16-bit Hamming cells, ix head with
+- **`docs/fb1d8_notes.md`** — fb1d8 (formerly RBFF): why symmetric
+  bracket conditions give 1D reversibility with no history, verification
+  summary, programming idioms (IF-ZERO, walk, garbage-free FOR), caveats
+  (nonlocal jumps).
+- **`docs/fb1d-port-plan.md`** — Plan for porting the Wikivore to fb1d:
+  the 16-bit language extension (16-bit Hamming cells, ix head with
   m/I/V/j, multi-IP), tape layout, gadget program sketch with the
   IF-NONZERO flag idiom, milestones M1–M5, risks.
 
 ### Historical
 
-- **`old-files/1d-and-before/`** — Earlier 1D simulators and programs.
+- **`old-files/1d-and-before/`** — Earlier 1D simulators and programs,
+  including `fb1d-v0-extrail.py` (the April 2026 run-length-EX-trail
+  simulator formerly named `fb1d.py`; notes in
+  `docs/old-docs/fb1d-v0-notes.md`, with the refuted "reversibility
+  wall" argument).
 - **`old-files/2d-older/`** — Earlier 2D simulator iterations.
 - **`old-files/ifbc-02.py`** — Previous compiler version.
 
@@ -479,10 +486,10 @@ python3 programs/carry-demo.py
 # Exhaustive reversibility test (all opcodes × all head aliasings):
 python3 test_reversibility.py
 
-# RBFF 1D language: bijectivity + counter/add/fib/factorial round-trips:
-python3 rbff.py --test
-python3 rbff.py                     # REPL: load fib, loop, s, b, src
-open rbff.html                      # browser workbench (no server needed)
+# fb1d8 (8-bit 1D language, formerly RBFF): bijectivity + round-trips:
+python3 fb1d8.py --test
+python3 fb1d8.py                    # REPL: load fib, loop, s, b, src
+open fb1d8.html                     # browser workbench (no server needed)
 
 # Interactive GUI (load immunity-gadgets-v4-loop-w99 for the main example):
 python3 fb2d_server.py              # port 5001 (default)

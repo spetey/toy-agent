@@ -1,7 +1,10 @@
-# Plan: porting the Wikivore to RBFF
+# Plan: porting the Wikivore to fb1d
 
-*2026-09-07.  Draft plan; nothing here is built yet except `rbff.py` and
-`rbff.html`.*
+*2026-09-07, renamed 2026-09-25.  Naming: the 8-bit bracket language
+formerly called RBFF is now **fb1d8** (`fb1d8.py`, `fb1d8.html`); the
+16-bit extension described here, formerly "RBFF-16", is **fb1d**
+(`fb1d.py`).  The April 2026 1D simulator that used to be `fb1d.py` is
+archived as `old-files/1d-and-before/fb1d-v0-extrail.py`.*
 
 ## Goal
 
@@ -11,12 +14,12 @@ noise, a metabolism that turns compressible fuel into the zeros the
 corrections consume, and a hunger timer so it eats before it starves.
 The host language must stay reversible and valid everywhere.
 
-Plain RBFF (8-bit ASCII cells, two heads, one IP) cannot host this.  The
-port is really two jobs: extend RBFF into "RBFF-16", then rewrite the
+Plain fb1d8 (8-bit ASCII cells, two heads, one IP) cannot host this.  The
+port is really two jobs: extend fb1d8 into 16-bit fb1d, then rewrite the
 agent as nested-bracket code instead of 2D routing.  Most of the
 extension is a straight transplant from `fb2d.py`.
 
-## Part 1: RBFF-16, the language extension
+## Part 1: fb1d, the language extension
 
 Everything below already exists in fb2d and is reversible there; in 1D
 the arguments carry over unchanged because none of it depends on
@@ -49,7 +52,7 @@ Per IP: `a`, `b`, `ix`, `p`.  All wrap modulo N.
 
 | Group | Ops | Notes |
 |---|---|---|
-| RBFF core | `< > { } [ ]` | brackets test `tape[a] & DATA_MASK` (payload nonzero), like fb2d's mirrors |
+| fb1d8 core | `< > { } [ ]` | brackets test `tape[a] & DATA_MASK` (payload nonzero), like fb2d's mirrors |
 | Payload arithmetic | `+ -` on `tape[a]` | fb2d's delta-p inc/dec: bijective on all 65536 values, parity fixed up |
 | Raw XOR | `. ,` | full 16-bit `tape[b] ^= tape[a]` / `tape[a] ^= tape[b]`; this is fb2d's `x`, not fb2d's `.` |
 | Interoceptor | `ix` moves (two ops), `m`, `I`, `V`, `j` | `tape[a] ^= tape[ix]`, `^= syndrome_5bit(tape[ix])`, `^= 1 << syndrome_4bit(tape[ix])`, `tape[ix] ^= tape[a]`; all XOR-shaped, self-inverse |
@@ -91,9 +94,9 @@ milestone, so keep the hook.
 
 ### Deliverable
 
-`rbff16.py`: simulator + `--test` (random-state bijectivity on 16-bit
+`fb1d.py`: simulator + `--test` (random-state bijectivity on 16-bit
 cells, multi-IP round trips, opcode aliasing sweep like
-`test_reversibility.py`).  Keep `rbff.py` as the didactic 8-bit
+`test_reversibility.py`).  Keep `fb1d8.py` as the didactic 8-bit
 version.
 
 ## Part 2: tape layout
@@ -114,9 +117,9 @@ version.
 
 Control flow is the real translation work.  fb2d's gadget is a route
 through rows: probe, bypass row, correction rows, copy-over rows,
-handler, metabolism rows, corridor.  In RBFF every one of those becomes
-a nested block, and RBFF only has IF-ZERO natively.  Three idioms cover
-it (all already exercised in `rbff.py` or trivially derived):
+handler, metabolism rows, corridor.  In fb1d every one of those becomes
+a nested block, and fb1d only has IF-ZERO natively.  Three idioms cover
+it (all already exercised in `fb1d8.py` or trivially derived):
 
 - **IF-ZERO** `[X]`: run `X` iff `tape[a] == 0`, `X` must return `a`
   and leave the tested cell unchanged.
@@ -160,7 +163,7 @@ Points to settle when writing it for real:
    own block, one `m`, walk back, one `j`.  Defer to M5; single-bit
    correction first.
 3. **Metabolism loop polarity.**  fb2d's compression is "advance while
-   XOR gives zero, walk back on mismatch".  RBFF's `]` repeats on
+   XOR gives zero, walk back on mismatch".  fb1d's `]` repeats on
    nonzero, the opposite polarity, so write it as a FOR over the bite
    size with an IF-NONZERO mismatch flag that ends the bite early, or
    keep the flag and let the FOR run out.  Reference cell in `b`,
@@ -175,14 +178,14 @@ Points to settle when writing it for real:
    1 cell like the counter does, with the start-at-`+` convention.
 
 Estimated size: fb2d's correction gadget is 147 ops plus routing; the
-RBFF version should land in the same range, with the routing rows
+fb1d version should land in the same range, with the routing rows
 replaced by bracket nesting.  Metabolism plus hunger perhaps 60 to 100
 ops.  Whole gadget under 300 cells; two gadgets plus stomach and fuel
 comfortably under 1000 cells.
 
 ## Part 4: tooling
 
-- **`rbff.html` extension** (or `rbff16.html`): render 16-bit cells as
+- **`fb1d8.html` extension** (or a new `fb1d.html`): render 16-bit cells as
   opcode char plus payload, colour syndrome-nonzero cells, show all
   three heads per IP with an IP selector, noise controls (seed, rate,
   enable), free-food button, step counters, "corrections so far".
@@ -197,7 +200,7 @@ comfortably under 1000 cells.
 
 | # | Deliverable | Done when |
 |---|---|---|
-| M1 | `rbff16.py` core, tests, noise hook, boundary-barrier decision | bijectivity tests pass; 2M-step multi-IP round trip with noise gives zero diffs |
+| M1 | `fb1d.py` core, tests, noise hook, boundary-barrier decision | bijectivity tests pass; 2M-step multi-IP round trip with noise gives zero diffs |
 | M2 | Single gadget correcting a static partner block (no partner IP) | corrects injected 1-bit errors anywhere in the block; garbage per correction measured |
 | M3 | Dual gadgets, mutual correction, MTTF harness | MTTF curves at 100/200/300 flips per 1M, compared to fb2d narrow agent |
 | M4 | Metabolism + hunger + free-food cheat + GUI | agent runs indefinitely with free food at 200 flips per 1M; starves without it, as fb2d does |

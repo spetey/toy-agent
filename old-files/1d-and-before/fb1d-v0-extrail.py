@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-F***brain 1D Tape Simulator — fb1d
+F***brain 1D Tape Simulator — fb1d v0 (DEPRECATED: see fb1d.py / fb1d8.py)
 Authored or modified by Claude
 Version: 2026-04-15 v0.1
 

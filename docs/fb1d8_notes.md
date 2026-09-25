@@ -1,9 +1,13 @@
-# RBFF: a 1D reversible, valid-everywhere, Turing-complete BFF
+# fb1d8: a 1D reversible, valid-everywhere, Turing-complete BFF
+
+*Formerly called fb1d8.  This is the 8-bit didactic version; the 16-bit
+Hamming version that will host the Wikivore is `fb1d.py` (see
+`docs/fb1d-port-plan.md`).*
 
 *2026-09-07.  Design from a ChatGPT conversation forwarded by a friend of
-Steve's; independently re-implemented and verified in `rbff.py`.*
+Steve's; independently re-implemented and verified in `fb1d8.py`.*
 
-This corrects the conclusion in `fb1d_notes.md`.  A 1D reversible BFF
+This corrects the conclusion in `old-docs/fb1d-v0-notes.md`.  A 1D reversible BFF
 with all three properties exists, and it is small.
 
 ## The language
@@ -62,29 +66,29 @@ enter only if the cell is zero, repeat while nonzero.  It is not BFF's
 
 ## Why our "wall" argument was wrong
 
-`fb1d_notes.md` argued: jumps are nonlocal, the jump-or-not decision
+`old-docs/fb1d-v0-notes.md` argued: jumps are nonlocal, the jump-or-not decision
 is one bit per jump, no finite off-tape register can hold unbounded
 history, therefore history must go on the tape, therefore an
 adversarial initial tape can fake it.
 
 The missing case: the decision need not be *stored* anywhere if it is
-a *function of the post-state*.  RBFF makes it one by (a) pairing jump
+a *function of the post-state*.  fb1d8 makes it one by (a) pairing jump
 sites so the origin is recoverable from the landing site, and (b)
 using the same, unchanged condition cell at both ends.  Nothing about
 this needs 2D.  fb2d's off-grid direction register solves the same
-problem a different way (and locally); RBFF solves it nonlocally,
+problem a different way (and locally); fb1d8 solves it nonlocally,
 exactly as BFF's own bracket matching already is.
 
 ## Tools
 
-- `rbff.py`: interpreter, terminal REPL, examples, `--test` suite.
-- `rbff.html`: browser workbench with the same interpreter in JavaScript
+- `fb1d8.py`: interpreter, terminal REPL, examples, `--test` suite.
+- `fb1d8.html`: browser workbench with the same interpreter in JavaScript
   and the same examples.  Open the file directly.  Hover any cell for
   its value, op meaning, segment, bracket partner and whether it would
   jump right now; click a cell to edit it; step and play in both
   directions; edit the code in the text box and reload it.
 
-## Verification (`python3 rbff.py --test`)
+## Verification (`python3 fb1d8.py --test`)
 
 - Exhaustive bijectivity: every tape over a 12-symbol alphabet at N=3
   and an 8-symbol alphabet at N=4, times every `(a, b, p)`.  Image
@@ -93,7 +97,7 @@ exactly as BFF's own bracket matching already is.
 - 200 random self-modifying trajectories × 500 steps reverse exactly.
 - The binary counter, `add`, `fib`, and `fact` examples all run
   forward and are then stepped back deductively to their initial state.
-- The ChatGPT compilation of Brainfuck into RBFF's `+ - < > [ ]` subset
+- The ChatGPT compilation of Brainfuck into fb1d8's `+ - < > [ ]` subset
   was also checked (in a scratch script) on six programs including
   triple-nested loops: outputs match plain Brainfuck and reverse.
 
@@ -103,15 +107,15 @@ The `+ - < > [ ]` subset with an unbounded tape simulates Brainfuck by
 Bennett's method: each source loop decision records one history flag in
 a fresh cell.  Byte cells with unbounded tape is the same finite caveat
 fb2d carries.  Garbage grows with runtime when simulating an
-*irreversible* program; RBFF programs written reversibly (the counter,
+*irreversible* program; fb1d8 programs written reversibly (the counter,
 the FOR idiom below) run garbage-free.
 
 For the agent this is the important point: given spare zero cells,
-RBFF can do ordinary irreversible-style computation, paying one fresh
+fb1d8 can do ordinary irreversible-style computation, paying one fresh
 cell per branch.  That is the same economy the fb2d agent already lives
 in (zeros on the EX row are the fuel).
 
-## Programming idioms (used in `rbff.py` examples)
+## Programming idioms (used in `fb1d8.py` examples)
 
 **IF-ZERO.**  With `a` on cell `x`, `[ X ]` runs `X` iff `x == 0`,
 provided `X` leaves `x` unchanged and returns `a` to `x`.  (`[` enters
@@ -133,7 +137,7 @@ so `,` flips the bit under `a`.  `[,>]` clears trailing ones,
 restoring the sentinel.  Startup: begin at the final `+` so the
 constant gets created and `]` jumps to the top.
 
-**FOR (garbage-free counted loop).**  The hard part of RBFF is that
+**FOR (garbage-free counted loop).**  The hard part of fb1d8 is that
 `[` needs zero to enter and `]` needs zero to exit, at the same head
 position, with the same body on first entry and re-entry.  So the
 tested cell must be zero at the start, zero at the end, nonzero in
@@ -146,7 +150,7 @@ Body: uncompute `t` and `d`, run the work, `c += 1`, recompute `d`
 and `t`; `]` tests `t`.  Afterwards `c == x`, and one more XOR clears
 it.  Costs about 40 ops of overhead per iteration but leaves every
 scratch cell zero.  `add`, `fib` (two FORs) and `fact` (a FOR whose
-body is a FOR) are built from it.  See `FOR()` in `rbff.py`.
+body is a FOR) are built from it.  See `FOR()` in `fb1d8.py`.
 
 ## Caveats
 

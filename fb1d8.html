@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RBFF Workbench</title>
+<title>fb1d8 Workbench</title>
 <!--
-  RBFF Workbench: browser front end for the 1D reversible BFF (see rbff.py,
-  docs/rbff_notes.md).  Self-contained; open this file directly in a browser.
+  fb1d8 Workbench (formerly RBFF): browser front end for the 8-bit 1D reversible BFF (see fb1d8.py,
+  docs/fb1d8_notes.md).  Self-contained; open this file directly in a browser.
   Authored or modified by Claude, 2026-09-07.
 -->
 <style>
@@ -97,7 +97,7 @@
 </head>
 <body>
 <header>
-  <h1>RBFF Workbench</h1>
+  <h1>fb1d8 Workbench</h1>
   <span class="sub">1D reversible BFF &middot; hover any cell for an explanation &middot; click a cell to edit it</span>
   <span class="legend">
     <span><b class="op-a">&lt; &gt;</b> move a</span>
@@ -197,7 +197,7 @@ const OP_INFO = {
 };
 const isBr = v => v === 91 || v === 93;
 
-class RBFF {
+class FB1D8 {
   constructor(n) { this.tape = new Uint8Array(n); this.a = 0; this.b = 0; this.p = 0;
                    this.steps = 0; this.mt = null; }
   get N() { return this.tape.length; }
@@ -368,7 +368,7 @@ function loadExample(name) {
   stopPlay();
   exampleName = name;
   const ex = EXAMPLES[name];
-  m = new RBFF(ex.size);
+  m = new FB1D8(ex.size);
   segments = ex.segments();
   const code = segments.map(s => s[1]).join('');
   for (let i = 0; i < code.length; i++) m.poke(i, code.charCodeAt(i));
