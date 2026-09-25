@@ -67,9 +67,13 @@ fb2d is a 2D reversible esoteric language where:
   with dirty working-area cells). NoisePool provides deterministic,
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
-- **`fb1d.py`** — *(planned, M1 of `docs/fb1d-port-plan.md`)* fb1d:
-  the 16-bit Hamming extension of fb1d8 that will host the 1D Wikivore
-  (ix head, m/I/V/j, multi-IP, noise).
+- **`fb1d.py`** — fb1d: the 16-bit Hamming extension of fb1d8 that
+  will host the 1D Wikivore (M1 of `docs/fb1d-port-plan.md`, done).
+  fb2d's cells and raw-payload fetch, heads a/b/ix/p per IP, ops
+  `< > { } B A - + . , m I V j [ ]`, boundary cells as bracket-matching
+  barriers, multi-IP, NoisePool noise. REPL: `python3 fb1d.py`.
+  Tests: `python3 fb1d.py --test [--long]`. Decisions and per-milestone
+  model recommendations are in the port plan.
 - **`fb1d8.py`** — fb1d8 (formerly RBFF): the 8-bit didactic 1D
   reversible, valid-everywhere, Turing-complete BFF variant (XOR
   copying, symmetric bracket conditions, executing-byte guard).
@@ -485,6 +489,11 @@ python3 programs/carry-demo.py
 
 # Exhaustive reversibility test (all opcodes × all head aliasings):
 python3 test_reversibility.py
+
+# fb1d (16-bit 1D language, Wikivore port host): fetch, exhaustive
+# bijectivity, multi-IP noisy round trips, barriers, ix ops, examples:
+python3 fb1d.py --test              # ~4 s
+python3 fb1d.py --test --long       # + 2M-round noisy round trip (~15 s)
 
 # fb1d8 (8-bit 1D language, formerly RBFF): bijectivity + round-trips:
 python3 fb1d8.py --test

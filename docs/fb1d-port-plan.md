@@ -1,6 +1,6 @@
 # Plan: porting the Wikivore to fb1d
 
-*2026-09-07, renamed 2026-09-25.  Naming: the 8-bit bracket language
+*2026-09-07, renamed 2026-09-25; M1 done 2026-09-25.  Naming: the 8-bit bracket language
 formerly called RBFF is now **fb1d8** (`fb1d8.py`, `fb1d8.html`); the
 16-bit extension described here, formerly "RBFF-16", is **fb1d**
 (`fb1d.py`).  The April 2026 1D simulator that used to be `fb1d.py` is
@@ -196,11 +196,66 @@ comfortably under 1000 cells.
   report mean and spread.  Same units as fb2d so numbers compare
   directly, with the caveat that steps per pass differ.
 
+## M1 status (done 2026-09-25) and decisions taken
+
+`fb1d.py` implements Part 1.  `python3 fb1d.py --test` (~4 s) passes;
+`--test --long` adds a 2M-round, 2-IP noisy round trip (603 flips,
+every cell changed, 0 diffs after reversing; ~15 s, ~420 MB because
+`NoisePool` caches every round's event).  Deliberately breaking any
+guard, the barrier rule, or the `-` inverse makes the suite fail.
+
+Decisions, so later milestones don't reopen them:
+
+- **Opcode numbering.**  Each fb1d op uses the fb2d opcode number of the
+  *same character* (`[` = 30, `+` = 15, `m` = 53, ...).  Semantics can
+  differ from fb2d's op of that character: fb1d `.` and `,` are raw XOR.
+  Codewords of fb2d-only ops are NOPs in fb1d, so 6144 of 65536 words
+  are live ops.
+- **ix moves are `A` (ix += 1) and `B` (ix -= 1)**, fb2d's IX
+  advance/retreat codes.  This avoids a clash with the head named `a`.
+- **Boundary barrier: adopted.**  A cell whose *raw payload* is 2047
+  empties the bracket stack, so brackets never pair across a boundary.
+  Raw payload rather than exact 0xFFFF, so a parity-bit flip on a
+  boundary cell leaves it a barrier.  `Machine(barriers=False)` turns it
+  off for MTTF comparisons in M3/M5.
+- **Bracket test** is `tape[a] & DATA_MASK != 0`, as fb2d's mirrors.
+- **`( )` brackets on `b`: not added.**  Revisit in M2 if head
+  shuffling hurts.
+- **Noise** reuses `pools.NoisePool` with one "row" and a flat column
+  range; applied after each `step_all()`, undone first in
+  `step_back_all()`, indexed by the round count (as `fb2d_server.py`).
+- **Examples:** fb1d8's copy / counter / add / fib / fact run unchanged
+  on fb1d (payloads mod 2048), reusing fb1d8's `FOR` / `ADD` macros.
+- **Guards** are exactly the list in Part 1, and `I` / `V` share `m`'s
+  `a == ix` guard.
+
+## Recommended model and effort per stage
+
+Written 2026-09-25 as budget guidance: spend on the strongest model
+where the hard part is inventing reversible control flow, and use
+cheaper models where a strong test suite catches mistakes.
+
+| Stage | Why | Model | Effort |
+|---|---|---|---|
+| M1 `fb1d.py` core | transplant, test-checked | Opus 5.5 | high (done) |
+| M2 single gadget | novel bracket-nested reversible gadget, uncompute bookkeeping | Fable 5.1 | high |
+| M3 dual gadgets | cross-IP interaction | Opus 5.5 | high |
+| M3 MTTF harness | port of `compare-agents-mttf.py` | Sonnet 5 | medium |
+| M4 metabolism + hunger | loop-polarity redesign, same difficulty as M2 | Fable 5.1 | high |
+| M4 GUI + free food | extend `fb1d8.html` | Sonnet 5 | medium |
+| M5 2-bit copy-over | builds on M2 idioms | Opus 5.5 | high |
+| docs / renames | mechanical | Haiku 4.5 or Sonnet 5 | low |
+
+Cost-saving pattern for M2 and M4: have Fable write an op-by-op design
+(tape layout, head positions at each phase, what is uncomputed and what
+is dumped as garbage), commit it to `docs/`, then have Opus implement
+and debug it against the tests.
+
 ## Milestones
 
 | # | Deliverable | Done when |
 |---|---|---|
-| M1 | `fb1d.py` core, tests, noise hook, boundary-barrier decision | bijectivity tests pass; 2M-step multi-IP round trip with noise gives zero diffs |
+| M1 ✓ | `fb1d.py` core, tests, noise hook, boundary-barrier decision | bijectivity tests pass; 2M-step multi-IP round trip with noise gives zero diffs |
 | M2 | Single gadget correcting a static partner block (no partner IP) | corrects injected 1-bit errors anywhere in the block; garbage per correction measured |
 | M3 | Dual gadgets, mutual correction, MTTF harness | MTTF curves at 100/200/300 flips per 1M, compared to fb2d narrow agent |
 | M4 | Metabolism + hunger + free-food cheat + GUI | agent runs indefinitely with free food at 200 flips per 1M; starves without it, as fb2d does |
