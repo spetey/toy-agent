@@ -2,7 +2,7 @@
 """
 fb1d: 16-bit reversible bracket language on a 1D tape
 Authored or modified by Claude
-Version: 2026-09-25 v0.1 (M1 of docs/fb1d-port-plan.md)
+Version: 2026-09-26 v0.2 (M1 + M2 `( )` extension, docs/fb1d-port-plan.md)
 
 fb1d is fb1d8 (formerly RBFF; see fb1d8.py, docs/fb1d8_notes.md) with
 fb2d's cells and interoceptor transplanted in, so that the Wikivore can
@@ -32,9 +32,16 @@ the op at tape[p], then p += 1 (a jump lands one past the partner).
   j  tape[ix] ^= tape[a]                              (write-back)
   [  if payload(tape[a]) != 0: p = matching ]   (enter body only when zero)
   ]  if payload(tape[a]) != 0: p = matching [   (repeat while nonzero)
+  (  if payload(tape[b]) != 0: p = matching )   (same, testing b's cell)
+  )  if payload(tape[b]) != 0: p = matching (
   anything else: no-op
 
 "payload != 0" means tape[a] & DATA_MASK != 0, as in fb2d's mirrors.
+`( )` were added in M2 (v0.2): a block that tests one head may move the
+other head freely, which the immunity gadget's merge needs (see
+programs/fb1d-immunity-m2.py and docs/fb1d-port-plan.md).  The two
+bracket families are matched independently (own stacks); barriers
+empty both.
 
 Guards (each makes the op a NOP, in both step and step_back):
   * a write to tape[p] of the executing IP (executing-cell guard)
@@ -62,6 +69,7 @@ Usage:
   python3 fb1d.py --test --long   adds the 2M-round noisy round trip
 """
 
+import os
 import sys
 import random
 import itertools
@@ -80,9 +88,9 @@ import fb1d8
 
 # ─── Opcodes ────────────────────────────────────────────────────────
 
-OP_CHARS = '<>{}BA-+.,mIVj[]'
+OP_CHARS = '<>{}BA-+.,mIVj[]()'
 (OP_AL, OP_AR, OP_BL, OP_BR, OP_XL, OP_XR, OP_DEC, OP_INC, OP_DOT,
- OP_COMMA, OP_M, OP_I, OP_V, OP_J, OP_LB, OP_RB) = range(1, 17)
+ OP_COMMA, OP_M, OP_I, OP_V, OP_J, OP_LB, OP_RB, OP_LP, OP_RP) = range(1, 19)
 OP_DOC = [
     ('<', 'a -= 1'), ('>', 'a += 1'),
     ('{', 'b -= 1'), ('}', 'b += 1'),
@@ -96,6 +104,8 @@ OP_DOC = [
     ('j', 'tape[ix] ^= tape[a]     (NOP if a == ix)'),
     ('[', 'if payload(tape[a]) != 0: jump to matching ]'),
     (']', 'if payload(tape[a]) != 0: jump to matching ['),
+    ('(', 'if payload(tape[b]) != 0: jump to matching )   (M2: b-tested bracket)'),
+    (')', 'if payload(tape[b]) != 0: jump to matching (   (M2: b-tested bracket)'),
     ('other', 'no-op (NOP filler `_` = payload 1017, boundary `~` = 0xFFFF)'),
 ]
 
@@ -113,8 +123,10 @@ for _op, _num in FB2D_NUM.items():
     _FB2D_TO_OP[_num] = _op
 CELL_OP = [_FB2D_TO_OP[_PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD_RAW[v]]]
            for v in range(65536)]
-# bracket-matching class: 1 = '[', 2 = ']', 3 = barrier, 0 = other
+# bracket-matching class: 1 = '[', 2 = ']', 4 = '(', 5 = ')', 3 = barrier,
+# 0 = other.  The two bracket families are matched independently.
 CELL_CLASS = [1 if CELL_OP[v] == OP_LB else 2 if CELL_OP[v] == OP_RB else
+              4 if CELL_OP[v] == OP_LP else 5 if CELL_OP[v] == OP_RP else
               3 if _CELL_TO_PAYLOAD_RAW[v] == 2047 else 0
               for v in range(65536)]
 del _op, _num
@@ -163,21 +175,27 @@ def assemble(text):
 
 
 def match_table(tape, barriers=True):
-    """Stack matching over linear order.  Returns dict pos -> partner."""
-    st, mt = [], {}
+    """Stack matching over linear order, one stack per bracket family
+    (`[ ]` on a, `( )` on b).  Returns dict pos -> partner.  A barrier
+    empties both stacks."""
+    st_a, st_b, mt = [], [], {}
     for i, v in enumerate(tape):
         c = CELL_CLASS[v]
         if not c:
             continue
         if c == 1:
-            st.append(i)
-        elif c == 2:
+            st_a.append(i)
+        elif c == 4:
+            st_b.append(i)
+        elif c == 2 or c == 5:
+            st = st_a if c == 2 else st_b
             if st:
                 j = st.pop()
                 mt[i] = j
                 mt[j] = i
         elif barriers:
-            st.clear()
+            st_a.clear()
+            st_b.clear()
     return mt
 
 
@@ -205,6 +223,7 @@ class Machine:
         self.code_end = 0
         self.segments = []
         self.example = None
+        self.loop_stop = 1       # REPL `loop`: run until IP0's p is here
 
     @property
     def N(self):
@@ -270,8 +289,13 @@ class Machine:
                 self._write(ip, a, t[a] ^ CORRECTION_XOR_MASK[t[x]])
             else:
                 self._write(ip, x, t[x] ^ t[a])
-        else:                                # [ ]
+        elif op <= OP_RB:                    # [ ]  test tape[a]
             if t[a] & DATA_MASK:
+                mt = self.matches()
+                if ip.p in mt:
+                    ip.p = mt[ip.p]
+        else:                                # ( )  test tape[b]
+            if t[ip.b] & DATA_MASK:
                 mt = self.matches()
                 if ip.p in mt:
                     ip.p = mt[ip.p]
@@ -388,7 +412,8 @@ class Machine:
         if lo is None:
             lo = self.code_end
         if hi is None:
-            hi = min(self.N, lo + 48)
+            hi = lo + 48
+        hi = min(self.N, hi)
         for start in range(lo, hi, width):
             addrs = range(start, min(hi, start + width))
             cells = ''
@@ -465,6 +490,28 @@ def ex_fib(m):
     m.ips[0].a, m.ips[0].b = D, D + 1
     return dict(lo=D, hi=D + 1 + 4 * 12,
                 note=f"K at {D}, Z at {D+1}, slots [S t c d] from {D+5}.")
+
+
+@example('immunity', "M2 immunity gadget correcting a static partner block (programs/fb1d-immunity-m2.py)")
+def ex_immunity(m):
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'programs', 'fb1d-immunity-m2.py')
+    spec = importlib.util.spec_from_file_location('fb1d_immunity_m2', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    built, lay = mod.build(fuel=120)
+    m.tape, m.ips, m.segments = built.tape, built.ips, built.segments
+    m.code_end, m.rounds, m.noise, m.noise_on = built.code_end, 0, None, False
+    m.loop_stop = lay.p_start
+    m.invalidate()
+    lo, hi = lay.partner_range()
+    return dict(lo=lay.frame0 - 1, hi=lay.frame0 + 31,
+                note=f"frame [M s g] at {lay.frame0} (b on M, a on s), fuel to "
+                     f"{lay.p_lead - 1}, partner block {lo}..{hi} (ix on {lo}).\n"
+                     f"`loop` = run until p == {lay.p_start} (one full pass, ~{6370} "
+                     f"rounds).  Try: flip {lo + 20} 5, loop, d {lo} {hi}, noise 300 "
+                     f"{lo} {hi}.")
 
 
 @example('fact', "factorials via nested FOR (payloads mod 2048)")
@@ -550,7 +597,7 @@ def test_bijectivity():
     # arbitrary (corrupted) data under the data-touching ops
     rng = random.Random(7)
     junk = [rng.randrange(65536) for _ in range(3)]
-    for group in ('+-.,', 'mIVj', '[]<>'):
+    for group in ('+-.,', 'mIVj', '[]<>', '(){}'):
         alpha = [OP_CELL[c] for c in group] + junk
         ok &= _exhaustive(3, alpha, f"{group}+junk")
     # random single-IP self-modifying runs on larger tapes
@@ -603,7 +650,48 @@ def test_barriers():
     # a corrupted gadget cannot capture its neighbour's brackets
     t = assemble('[[]~[]]')
     ok &= match_table(t, True) == {1: 2, 2: 1, 4: 5, 5: 4}
-    return _check(ok, "boundary barrier: brackets never pair across `~`")
+    # the two families match independently: [ ( ] ) pairs 0-2 and 1-3
+    t = assemble('[(])')
+    ok &= match_table(t) == {0: 2, 2: 0, 1: 3, 3: 1}
+    t = assemble('([~)]')
+    ok &= match_table(t) == {}
+    return _check(ok, "boundary barrier: brackets never pair across `~`; "
+                      "`[ ]` and `( )` match independently")
+
+
+def test_b_brackets():
+    """`( X )` runs X iff payload(tape[b]) == 0 and repeats while it is
+    nonzero, exactly `[ ]` with b in place of a; a is free inside."""
+    ok = True
+    # b on a zero: enter, bump a's cell, exit (b's cell still zero)
+    m = Machine(16)
+    m.tape[0:3] = assemble('(+)')
+    m.ips[0].a, m.ips[0].b = 8, 9
+    m.run(3)
+    ok &= m.peek(8) == 1 and m.ips[0].p == 3
+    # b on a nonzero: skip
+    m = Machine(16)
+    m.tape[0:3] = assemble('(+)')
+    m.poke(9, 5)
+    m.ips[0].a, m.ips[0].b = 8, 9
+    m.run(1)                     # the jump is one step: `(` -> past `)`
+    ok &= m.peek(8) == 0 and m.ips[0].p == 3
+    # walk: ( } ) from a zero over two nonzero cells lands on the next zero
+    m = Machine(16)
+    m.tape[0:3] = assemble('(})')
+    m.poke(10, 1); m.poke(11, 1)
+    m.ips[0].b = 9
+    m.run(20, stop_at=3)
+    ok &= m.ips[0].b == 12
+    # a-tested block moving b: [ }} ] with a on zero moves b, untested
+    m = Machine(16)
+    m.tape[0:4] = assemble('[}}]')
+    m.poke(10, 1); m.poke(11, 1)
+    m.ips[0].a, m.ips[0].b = 8, 9
+    m.run(4)
+    ok &= m.ips[0].b == 11 and m.ips[0].p == 4
+    return _check(ok, "( ) brackets: enter on b==0, repeat while b!=0, "
+                      "a free inside; [ ] leaves b untested")
 
 
 def test_ix_ops():
@@ -703,6 +791,7 @@ def run_tests(long=False):
                                        rate=300, seed=5)
     print("== brackets / ix ==")
     ok &= test_barriers()
+    ok &= test_b_brackets()
     ok &= test_ix_ops()
     print("== fb1d8 examples on 16-bit cells ==")
     ok &= test_examples()
@@ -716,7 +805,7 @@ HELP = """\
 commands:
   examples            list examples          load NAME       load one
   d [lo hi]           display                src             show segments
-  s [n] / b [n]       step / back n rounds   loop            run until IP0 p == 1
+  s [n] / b [n]       step / back n rounds   loop            run one outer-loop pass
   run [n]             run until IP0 leaves code or n rounds (default 100000)
   until P             run until IP0 p == P
   set ADDR PAYLOAD    store clean codeword   raw ADDR HEX    store raw 16-bit
@@ -741,6 +830,7 @@ def repl():
         if name not in EXAMPLES:
             print("unknown example; try `examples`")
             return
+        m.loop_stop = 1
         info = EXAMPLES[name][1](m)
         m.example = name
         view = {'lo': info.get('lo'), 'hi': info.get('hi')}
@@ -791,7 +881,7 @@ def repl():
                     n = m.run(int(args[0]) if args else 100000,
                               stop_at=m.code_end)
                 else:
-                    n = m.run(10**7, stop_at=1 if cmd == 'loop' else int(args[0]))
+                    n = m.run(10**7, stop_at=m.loop_stop if cmd == 'loop' else int(args[0]))
                 print(f"ran {n} rounds")
                 show()
             elif cmd == 'set':

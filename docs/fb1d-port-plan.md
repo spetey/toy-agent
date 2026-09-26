@@ -1,6 +1,6 @@
 # Plan: porting the Wikivore to fb1d
 
-*2026-09-07, renamed 2026-09-25; M1 done 2026-09-25.  Naming: the 8-bit bracket language
+*2026-09-07, renamed 2026-09-25; M1 done 2026-09-25, M2 done 2026-09-26.  Naming: the 8-bit bracket language
 formerly called RBFF is now **fb1d8** (`fb1d8.py`, `fb1d8.html`); the
 16-bit extension described here, formerly "RBFF-16", is **fb1d**
 (`fb1d.py`).  The April 2026 1D simulator that used to be `fb1d.py` is
@@ -229,6 +229,68 @@ Decisions, so later milestones don't reopen them:
 - **Guards** are exactly the list in Part 1, and `I` / `V` share `m`'s
   `a == ix` guard.
 
+## M2 status (done 2026-09-26) and decisions taken
+
+`programs/fb1d-immunity-m2.py` builds and tests a 131-cell gadget that
+corrects a static partner block (a copy of its own code, boundaries
+included).  `python3 programs/fb1d-immunity-m2.py` (~18 s) passes:
+
+- every (cell, bit) single-bit error in the partner block, 2128 cases,
+  is corrected within one pass, with the frame healthy afterwards and
+  the trail contiguous nonzero; 40 of them stepped back to the initial
+  state exactly;
+- two errors in one pass; 60 passes under 300 flips/1M noise (94 flips,
+  24 single-bit errors corrected, 0 missed), 383k-round exact reversal.
+
+Measured costs:
+
+| Quantity | Value |
+|---|---|
+| Garbage per correction | 2 fuel cells (old marker `M`, bumped mask), same as fb2d's EV + PA |
+| Fuel per pass | 1 cell (the "moult" that resets `M`, see below) |
+| Steps per cell visit | ~24 clean (`WORK` is 34 ops; a skipped block costs one step) |
+| Steps per pass | 2L+3 visits, 6370 rounds at L = 131 |
+| Code size | 131 cells; both sweeps carry a full `WORK`, so ~40% is duplicated |
+
+Decisions:
+
+- **`( )` brackets on `b`: added** (fb2d opcode numbers 34/35, own
+  matching stack, barriers empty both stacks).  Not for head shuffling
+  but for the merge: a block that tests `a` can move `b` to any cell
+  without testing it, and vice versa.  `fb1d.py --test` covers them.
+- **The merge needs a clean-path trace, as in fb2d.**  Exhaustive
+  scratch searches over all `[ ]`/`( )` programs up to 9 ops, with the
+  garbage trail modelled as a periodic pattern, found no way to bring
+  the clean and dirty paths to the same frame-relative state when the
+  clean path writes nothing.  The reason is that every block exits with
+  its tested head on a zero cell, so the last conditional leaves both
+  cases on cells of the same type.  fb2d pays this with `P` on the EX
+  cell on the bypass path; fb1d pays with `M += 2` per clean cell
+  (`<+>` at both ends of `WORK`), where `M` is the marker cell under
+  `b` whose zero-ness is the merge witness.
+- **`M` is bounded by a pass-end moult**, `}+>`: b and a step right by
+  one, the old `s` becomes `M' = 1`, the old `g` becomes `s'`.  One
+  fuel cell per pass; `M` stays in `[1, 4L+5]` and never wraps.  The
+  alternative, decrementing during the rewind, fails when the
+  correction happens on the first scanned cell (`M` lands on 0).
+- **Frame, not stomach.**  The working cells `[M s g]` move right
+  through the fuel with the garbage (2 cells per correction) left
+  behind; there is no fixed stomach and no walking.  All code is
+  position-relative.  Hence the free-food cheat for M4 must refill
+  *ahead* of the frame.
+- **`WORK` runs in both sweep directions and before every boundary
+  test**, so a data-bit flip on a `~` is repaired before it can
+  misdirect `ix`.  Coverage is therefore fb2d-v3-style ping-pong (each
+  cell visited twice per pass), not v4 rewind-loop; revisit in M3 if
+  the MTTF comparison wants uniform gaps.  No opcode payload is one
+  flip from 2047, so a false boundary cannot arise from one flip.
+- **2-bit errors are miscorrected** (a 2-bit error has a nonzero
+  syndrome, `V` then flips a third bit), exactly as fb2d before its
+  copy-over row.  M5.
+- **Not needed after all:** the "IF-NONZERO via flag" idiom is used
+  once (`[>+<]` sets `g`), and its uncompute is the merge above; no
+  `FOR` loops; no `WastePool`.
+
 ## Recommended model and effort per stage
 
 Written 2026-09-25 as budget guidance: spend on the strongest model
@@ -238,7 +300,7 @@ cheaper models where a strong test suite catches mistakes.
 | Stage | Why | Model | Effort |
 |---|---|---|---|
 | M1 `fb1d.py` core | transplant, test-checked | Opus 5.5 | high (done) |
-| M2 single gadget | novel bracket-nested reversible gadget, uncompute bookkeeping | Fable 5.1 | high |
+| M2 single gadget | novel bracket-nested reversible gadget, uncompute bookkeeping | Fable 5.1 | high (done) |
 | M3 dual gadgets | cross-IP interaction | Opus 5.5 | high |
 | M3 MTTF harness | port of `compare-agents-mttf.py` | Sonnet 5 | medium |
 | M4 metabolism + hunger | loop-polarity redesign, same difficulty as M2 | Fable 5.1 | high |
@@ -256,7 +318,7 @@ and debug it against the tests.
 | # | Deliverable | Done when |
 |---|---|---|
 | M1 ✓ | `fb1d.py` core, tests, noise hook, boundary-barrier decision | bijectivity tests pass; 2M-step multi-IP round trip with noise gives zero diffs |
-| M2 | Single gadget correcting a static partner block (no partner IP) | corrects injected 1-bit errors anywhere in the block; garbage per correction measured |
+| M2 ✓ | Single gadget correcting a static partner block (no partner IP) | corrects injected 1-bit errors anywhere in the block; garbage per correction measured |
 | M3 | Dual gadgets, mutual correction, MTTF harness | MTTF curves at 100/200/300 flips per 1M, compared to fb2d narrow agent |
 | M4 | Metabolism + hunger + free-food cheat + GUI | agent runs indefinitely with free food at 200 flips per 1M; starves without it, as fb2d does |
 | M5 | 2-bit copy-over, boundary tweak if adopted, notes | MTTF gain measured; `docs/` updated |

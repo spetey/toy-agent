@@ -68,12 +68,20 @@ fb2d is a 2D reversible esoteric language where:
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
 - **`fb1d.py`** — fb1d: the 16-bit Hamming extension of fb1d8 that
-  will host the 1D Wikivore (M1 of `docs/fb1d-port-plan.md`, done).
+  hosts the 1D Wikivore (M1 and M2 of `docs/fb1d-port-plan.md` done).
   fb2d's cells and raw-payload fetch, heads a/b/ix/p per IP, ops
-  `< > { } B A - + . , m I V j [ ]`, boundary cells as bracket-matching
-  barriers, multi-IP, NoisePool noise. REPL: `python3 fb1d.py`.
+  `< > { } B A - + . , m I V j [ ] ( )` (`( )` test tape[b], added in
+  M2), boundary cells as bracket-matching barriers, multi-IP, NoisePool
+  noise. REPL: `python3 fb1d.py` (`load immunity` for the M2 gadget).
   Tests: `python3 fb1d.py --test [--long]`. Decisions and per-milestone
   model recommendations are in the port plan.
+- **`programs/fb1d-immunity-m2.py`** — M2: one fb1d gadget (131 cells)
+  correcting a static partner block. Moving 3-cell frame `[M s g]`
+  through the fuel, `I` probe, `V`+`j` repair, clean/dirty merge via
+  `( )` on b with an fb2d-style clean-path trace (`M += 2`) reset by a
+  1-cell-per-pass moult. 2 garbage cells per correction. Tests
+  (every single-bit error in the block, noise, exact reversal):
+  `python3 programs/fb1d-immunity-m2.py [--quick]`.
 - **`fb1d8.py`** — fb1d8 (formerly RBFF): the 8-bit didactic 1D
   reversible, valid-everywhere, Turing-complete BFF variant (XOR
   copying, symmetric bracket conditions, executing-byte guard).
@@ -492,8 +500,13 @@ python3 test_reversibility.py
 
 # fb1d (16-bit 1D language, Wikivore port host): fetch, exhaustive
 # bijectivity, multi-IP noisy round trips, barriers, ix ops, examples:
-python3 fb1d.py --test              # ~4 s
+python3 fb1d.py --test              # ~5 s
 python3 fb1d.py --test --long       # + 2M-round noisy round trip (~15 s)
+
+# fb1d M2 immunity gadget: all single-bit errors in the partner block,
+# two errors per pass, 300/1M noise for 60 passes, exact reversal:
+python3 programs/fb1d-immunity-m2.py          # ~18 s
+python3 programs/fb1d-immunity-m2.py --quick  # ~6 s
 
 # fb1d8 (8-bit 1D language, formerly RBFF): bijectivity + round-trips:
 python3 fb1d8.py --test
