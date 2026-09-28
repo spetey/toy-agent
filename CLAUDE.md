@@ -82,6 +82,12 @@ fb2d is a 2D reversible esoteric language where:
   1-cell-per-pass moult. 2 garbage cells per correction. Tests
   (every single-bit error in the block, noise, exact reversal):
   `python3 programs/fb1d-immunity-m2.py [--quick]`.
+- **`fb1d.html`** — Browser workbench for fb1d (self-contained, open
+  the file directly). Own JS interpreter verified against `fb1d.py`.
+  Loads the M2 immunity gadget by default: color-coded ops, red for
+  nonzero syndrome, heads a/b/ix/IP, frame cells labelled M/s/g, hover
+  inspector with Hamming diagnosis and jump prediction, click a cell to
+  edit or flip a bit, "next cell" / "one pass", reversible noise.
 - **`fb1d8.py`** — fb1d8 (formerly RBFF): the 8-bit didactic 1D
   reversible, valid-everywhere, Turing-complete BFF variant (XOR
   copying, symmetric bracket conditions, executing-byte guard).
@@ -507,6 +513,7 @@ python3 fb1d.py --test --long       # + 2M-round noisy round trip (~15 s)
 # two errors per pass, 300/1M noise for 60 passes, exact reversal:
 python3 programs/fb1d-immunity-m2.py          # ~18 s
 python3 programs/fb1d-immunity-m2.py --quick  # ~6 s
+open fb1d.html                                # browser workbench, loads the gadget
 
 # fb1d8 (8-bit 1D language, formerly RBFF): bijectivity + round-trips:
 python3 fb1d8.py --test

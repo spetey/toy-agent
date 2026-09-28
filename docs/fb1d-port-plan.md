@@ -185,12 +185,16 @@ comfortably under 1000 cells.
 
 ## Part 4: tooling
 
-- **`fb1d8.html` extension** (or a new `fb1d.html`): render 16-bit cells as
-  opcode char plus payload, colour syndrome-nonzero cells, show all
-  three heads per IP with an IP selector, noise controls (seed, rate,
-  enable), free-food button, step counters, "corrections so far".
-  The current inspector already explains brackets; add "which IP's ix
-  points here".
+- **`fb1d.html`** (done with M2, 2026-09-28): a new workbench built on
+  the `fb1d8.html` skeleton with its own JavaScript fb1d interpreter,
+  checked against `fb1d.py` on 3021 table vectors and a full pass with
+  a correction (exact heads, tape and reversal).  Cells show op char or
+  payload, syndrome-nonzero cells are red, heads a/b/ix/IP, frame cells
+  labelled M/s/g, hover inspector (raw, payload, Hamming diagnosis, op,
+  segment, bracket partner and jump prediction for either family),
+  click to edit or `^n` to flip a bit, "next cell" and "one pass",
+  reversible noise over the partner block.  Still to add for M3/M4: an
+  IP selector for multi-IP, the free-food button, a corrections counter.
 - **MTTF harness**: port `compare-agents-mttf.py` logic: run to failure
   under a given rate, classify opcode corruption vs zero starvation,
   report mean and spread.  Same units as fb2d so numbers compare

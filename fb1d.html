@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fb1d Workbench</title>
+<!--
+  fb1d Workbench: browser front end for fb1d, the 16-bit Hamming 1D reversible
+  bracket language that hosts the 1D Wikivore (see fb1d.py, docs/fb1d-port-plan.md,
+  programs/fb1d-immunity-m2.py).  Self-contained; open this file directly.
+  Own JavaScript interpreter, checked against fb1d.py (see "verify" in the
+  M2 notes of the port plan).  Authored or modified by Claude, 2026-09-28 v0.1.
+-->
+<style>
+  :root {
+    --bg: #fafaf7; --fg: #222; --muted: #777; --panel: #fff; --line: #ddd;
+    --code-bg: #f1efe6; --sel: #ffec8a;
+    --c-a: #1f6fd0; --c-b: #8a3fc4; --c-x: #0a8f8f; --c-inc: #1a8a3a; --c-xor: #d8731a;
+    --c-ix: #b0006e; --c-br: #c8202a; --c-brb: #7a3fc4; --c-nop: #aaa; --c-bound: #555;
+    --head-a: #1f6fd0; --head-b: #8a3fc4; --head-x: #0a8f8f; --head-p: #c8202a;
+    --seg-cur: #fff3c2; --partner: #ffd6d9; --dirty: #ffb3b3; --pblock: #eef4ff; --fuel: #f6fbf0;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: 1fr 360px; gap: 14px; padding: 14px 16px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+                  padding: 10px 12px; margin-bottom: 14px; }
+  section.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+                     color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .controls button, .controls input, .controls select, button {
+    font: inherit; padding: 4px 10px; border: 1px solid #bbb; border-radius: 6px;
+    background: #fff; cursor: pointer; }
+  .controls input[type=number] { width: 84px; }
+  .controls input[type=range] { width: 110px; }
+  button:hover { background: #f3f3f3; }
+  button.primary { background: #2b5fb3; color: #fff; border-color: #2b5fb3; }
+  button.primary:hover { background: #244f95; }
+  button.on { background: #ffe9a8; border-color: #d0a000; }
+  .status { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px;
+            margin-top: 8px; white-space: pre-wrap; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; color: var(--muted); }
+  .legend span b { font-family: ui-monospace, Menlo, monospace; font-size: 14px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+
+  #tape { overflow-x: auto; }
+  .row { display: flex; align-items: flex-start; margin-bottom: 4px; }
+  .addr { width: 46px; flex: none; color: var(--muted); font: 11px ui-monospace, Menlo, monospace;
+          padding-top: 8px; text-align: right; padding-right: 6px; }
+  .cell { width: 27px; height: 42px; flex: none; margin-right: 1px; border: 1px solid var(--line);
+          border-radius: 4px; background: #fff; display: flex; flex-direction: column;
+          align-items: center; justify-content: flex-start; cursor: pointer; position: relative;
+          font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .cell.code { background: var(--code-bg); }
+  .cell.pblock { background: var(--pblock); }
+  .cell.fuel { background: var(--fuel); }
+  .cell .v { font-size: 15px; line-height: 22px; font-weight: 600; }
+  .cell.data .v { font-size: 11px; font-weight: 500; }
+  .cell .lab { font-size: 8px; line-height: 9px; color: var(--muted); max-width: 25px;
+               overflow: hidden; white-space: nowrap; }
+  .cell .heads { position: absolute; bottom: 0; left: 0; right: 0; height: 9px; display: flex;
+                 justify-content: center; gap: 1px; }
+  .cell .heads i { display: block; width: 7px; height: 7px; border-radius: 50%; }
+  .cell .heads i.a { background: var(--head-a); }
+  .cell .heads i.b { background: var(--head-b); }
+  .cell .heads i.x { background: var(--head-x); }
+  .cell .heads i.p { background: var(--head-p); }
+  .cell.ip { outline: 2px solid var(--head-p); outline-offset: -1px; }
+  .cell.sel { box-shadow: 0 0 0 2px var(--sel) inset; }
+  .cell.partner { background: var(--partner); }
+  .cell.dirty { background: var(--dirty); border-color: #d04040; }
+  .cell.segcur { border-color: #e0b000; }
+  .cell.hover { background: #e8f0ff; }
+  .cell.frame .lab { color: #8a3fc4; font-weight: 700; }
+  .op-a { color: var(--c-a); } .op-b { color: var(--c-b); } .op-x { color: var(--c-x); }
+  .op-inc { color: var(--c-inc); } .op-xor { color: var(--c-xor); } .op-ix { color: var(--c-ix); }
+  .op-br { color: var(--c-br); } .op-brb { color: var(--c-brb); } .op-nop { color: var(--c-nop); }
+  .op-bound { color: var(--c-bound); }
+  .seg-tick { position: absolute; top: 0; left: 0; right: 0; height: 3px; border-radius: 3px 3px 0 0; }
+
+  #inspector { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
+               min-height: 150px; white-space: pre-wrap; }
+  #inspector .k { color: var(--muted); }
+  #segments { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
+              max-height: 420px; overflow: auto; }
+  #segments div { padding: 1px 4px; border-radius: 3px; cursor: pointer; white-space: nowrap;
+                  display: flex; gap: 8px; }
+  #segments div:hover { background: #eef; }
+  #segments div.cur { background: var(--seg-cur); }
+  #segments .off { color: var(--muted); width: 34px; text-align: right; flex: none; }
+  #segments .lab { width: 200px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+  #segments .txt { color: #555; overflow: hidden; text-overflow: ellipsis; }
+  .note { font-size: 12.5px; color: #444; white-space: pre-wrap; margin-top: 6px; }
+  .cellEdit { width: 26px; font: 12px ui-monospace, monospace; text-align: center; padding: 0; }
+  kbd { font: 11px ui-monospace, monospace; border: 1px solid #ccc; border-bottom-width: 2px;
+        border-radius: 3px; padding: 0 4px; background: #f7f7f7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>fb1d Workbench</h1>
+  <span class="sub">16-bit Hamming 1D reversible bracket language &middot; hover a cell &middot; click a cell to edit or flip a bit</span>
+  <span class="legend">
+    <span><b class="op-a">&lt; &gt;</b> a</span>
+    <span><b class="op-b">{ }</b> b</span>
+    <span><b class="op-x">B A</b> ix</span>
+    <span><b class="op-inc">- +</b> payload[a] &plusmn;1</span>
+    <span><b class="op-xor">. ,</b> xor a,b</span>
+    <span><b class="op-ix">m I V j</b> via ix</span>
+    <span><b class="op-br">[ ]</b> test a</span>
+    <span><b class="op-brb">( )</b> test b</span>
+    <span><b class="op-bound">~</b> boundary</span>
+    <span><b class="op-nop">&middot;</b> no-op</span>
+    <span><i class="dot" style="background:var(--head-a)"></i> a &nbsp;<i class="dot" style="background:var(--head-b)"></i> b &nbsp;
+          <i class="dot" style="background:var(--head-x)"></i> ix &nbsp;<i class="dot" style="background:var(--head-p)"></i> IP</span>
+    <span><i class="dot" style="background:var(--dirty);border:1px solid #d04040"></i> nonzero syndrome</span>
+  </span>
+</header>
+
+<main>
+<div>
+  <section class="panel">
+    <h2>Run</h2>
+    <div class="controls">
+      <label>example <select id="exampleSel"></select></label>
+      <button id="btnReset" title="reload the example from scratch">reset</button>
+      <span style="width:8px"></span>
+      <button id="btnBack" title="step back (deductive)">&#9664; back</button>
+      <button id="btnStep" class="primary" title="step forward">step &#9654;</button>
+      <button id="btnStepN">step <input id="nSteps" type="number" value="10" min="1"></button>
+      <button id="btnCell" title="run to the start of the next WORK block (next partner cell)">next cell</button>
+      <button id="btnLoop" title="run until the IP returns to the start of the outer loop body">one pass</button>
+      <button id="btnRunTo">run to p = <input id="runTo" type="number" value="0" min="0"></button>
+      <span style="width:8px"></span>
+      <button id="btnPlay">&#9654; play</button>
+      <button id="btnPlayBack">&#9664; play backward</button>
+      <label>speed <input id="speed" type="range" min="0" max="100" value="35"></label>
+    </div>
+    <div class="controls" style="margin-top:6px">
+      <button id="btnNoise" title="random bit flips in the partner block, reversible with back">noise off</button>
+      <label>flips / 1M rounds <input id="noiseRate" type="number" value="300" min="0"></label>
+      <label>seed <input id="noiseSeed" type="number" value="1" min="0"></label>
+      <span id="noiseInfo" class="sub"></span>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Tape</h2>
+    <div class="controls" style="margin-bottom:8px">
+      <label>view <input id="viewLo" type="number" value="0" min="0"> to <input id="viewHi" type="number" value="64" min="1"></label>
+      <label>per row <input id="perRow" type="number" value="32" min="8" max="64"></label>
+      <span style="width:8px"></span>
+      <span>selected: <b id="selAddr">none</b></span>
+      <label>bit <input id="flipBit" type="number" value="5" min="0" max="15" style="width:52px"></label>
+      <button id="btnFlip" title="xor one bit of the selected cell (inject an error)">flip bit of sel</button>
+      <button id="btnAsel">a &rarr; sel</button>
+      <button id="btnBsel">b &rarr; sel</button>
+      <button id="btnXsel">ix &rarr; sel</button>
+      <button id="btnPsel">IP &rarr; sel</button>
+    </div>
+    <div id="tape"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Code (editable)</h2>
+    <textarea id="codeText" spellcheck="false"></textarea>
+    <div class="controls" style="margin-top:6px">
+      <button id="btnLoadCode">load code at address 1 (keeps data, IP to 1)</button>
+      <span class="sub" style="color:var(--muted);font-size:12px">Ops, plus <b>~</b> boundary, <b>_</b> NOP filler, <b>0</b> zero; whitespace ignored.</span>
+    </div>
+    <div class="note" id="note"></div>
+  </section>
+</div>
+
+<div>
+  <section class="panel">
+    <h2>Inspector</h2>
+    <div id="inspector">hover a cell</div>
+  </section>
+  <section class="panel">
+    <h2>Program segments</h2>
+    <div id="segments"></div>
+  </section>
+  <section class="panel">
+    <h2>Semantics</h2>
+    <div class="note">Cells are 16-bit Hamming(16,11) words: 11 payload bits, 5 parity bits. The op is chosen from the raw payload by the [11,6,4] opcode code: one flipped payload bit still gives the same op, two give a no-op, and parity bits never affect fetch. Each step executes tape[p] then p += 1.
+
+<b class="op-a">&lt; &gt;</b> <b class="op-b">{ }</b> <b class="op-x">B A</b>  move a, b, ix by one
+<b class="op-inc">- +</b>  payload of tape[a] &minus;1 / +1 (parity kept valid)
+<b class="op-xor">.</b> tape[b] ^= tape[a]   <b class="op-xor">,</b> tape[a] ^= tape[b]   (raw 16 bits; no-op if a = b)
+<b class="op-ix">m</b> tape[a] ^= tape[ix]      <b class="op-ix">I</b> tape[a] ^= syndrome5(tape[ix])
+<b class="op-ix">V</b> tape[a] ^= 1 &lt;&lt; syndrome4(tape[ix])      <b class="op-ix">j</b> tape[ix] ^= tape[a]   (no-op if a = ix)
+<b class="op-br">[</b> if payload(tape[a]) &ne; 0: jump to matching ]   <b class="op-br">]</b> if payload(tape[a]) &ne; 0: jump to matching [
+<b class="op-brb">( )</b>  the same, testing tape[b]; own matching stack
+
+A block enters only when the tested cell is zero and repeats while it is nonzero. A <b class="op-bound">~</b> cell (payload 2047) is a barrier: brackets never pair across it. A write to the IP's own cell is a no-op. Every step is a bijection, so <i>back</i> is deductive.</div>
+  </section>
+</div>
+</main>
+
+<script>
+'use strict';
+// @core-begin  (this part is also run under node against vectors from fb1d.py)
+// ------------------------------------------------------------ Hamming(16,11) tables, as fb2d.py
+const DATA_POS = [3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15];
+const DATA_MASK = 0xFEE8;
+const SYN_MASKS = [0xAAAA, 0xCCCC, 0xF0F0, 0xFF00];
+const PAR_MASKS = [0xAAA8, 0xCCC8, 0xF0E0, 0xFE00];
+const popc = x => { let c = 0; while (x) { x &= x - 1; c++; } return c; };
+const P2C = new Uint16Array(2048), C2P = new Uint16Array(65536);
+for (let p = 0; p < 2048; p++) { let c = 0; DATA_POS.forEach((bp, i) => { if (p >> i & 1) c |= 1 << bp; }); P2C[p] = c; }
+for (let v = 0; v < 65536; v++) { let p = 0; DATA_POS.forEach((bp, i) => { if (v >> bp & 1) p |= 1 << i; }); C2P[v] = p; }
+function encode(p) {
+  let c = P2C[p & 2047];
+  for (let i = 0; i < 4; i++) if (popc(c & PAR_MASKS[i]) & 1) c |= 1 << (1 << i);
+  if (popc(c) & 1) c |= 1;
+  return c;
+}
+function syndrome(v) {            // [4-bit syndrome, overall parity error]
+  let s = 0;
+  for (let i = 0; i < 4; i++) if (popc(v & SYN_MASKS[i]) & 1) s |= 1 << i;
+  return [s, popc(v) & 1];
+}
+const PFLIP = new Uint16Array(2048);
+for (let pf = 0; pf < 2048; pf++) {
+  let cf = P2C[pf];
+  for (let i = 0; i < 4; i++) if (popc(cf & PAR_MASKS[i]) & 1) cf ^= 1 << (1 << i);
+  if (popc(cf) & 1) cf ^= 1;
+  PFLIP[pf] = cf;
+}
+const INC = new Uint16Array(2048), DEC = new Uint16Array(2048);
+for (let p = 0; p < 2048; p++) { INC[p] = PFLIP[p ^ ((p + 1) & 2047)]; DEC[p] = PFLIP[p ^ ((p - 1) & 2047)]; }
+const SYNMASK = new Uint16Array(65536), CORR = new Uint16Array(65536);
+for (let v = 0; v < 65536; v++) {
+  const [s, pa] = syndrome(v);
+  let mk = 0;
+  if (s & 1) mk |= 1 << 3; if (s & 2) mk |= 1 << 5; if (s & 4) mk |= 1 << 6; if (s & 8) mk |= 1 << 7; if (pa) mk |= 1 << 9;
+  SYNMASK[v] = mk; CORR[v] = 1 << s;
+}
+
+// ------------------------------------------------------------ opcodes: fb2d payload codewords of the same chars
+const OP_CHARS = '<>{}BA-+.,mIVj[]()';
+const OP_CW = { '<': 1880, '>': 1175, '{': 1376, '}': 1823, 'B': 250, 'A': 189, '-': 1232, '+': 975,
+                '.': 1297, ',': 1554, 'm': 821, 'I': 54, 'V': 568, 'j': 503, '[': 1758, ']': 1501, '(': 1954, ')': 1635 };
+const NOP_FILLER = encode(1017), BOUNDARY = 0xFFFF;
+const OP_CELL = {}; for (const c of OP_CHARS) OP_CELL[c] = encode(OP_CW[c]);
+const PAYLOAD_OP = new Uint8Array(2048);        // 1-based index into OP_CHARS, 0 = no-op
+for (let k = 0; k < OP_CHARS.length; k++) {
+  const cw = OP_CW[OP_CHARS[k]]; PAYLOAD_OP[cw] = k + 1;
+  for (let i = 0; i < 11; i++) PAYLOAD_OP[cw ^ (1 << i)] = k + 1;
+}
+const CELL_OP = new Uint8Array(65536), CELL_CLASS = new Uint8Array(65536);   // class: 1 [ 2 ] 3 ~ 4 ( 5 )
+for (let v = 0; v < 65536; v++) {
+  const op = PAYLOAD_OP[C2P[v]]; CELL_OP[v] = op;
+  const ch = op ? OP_CHARS[op - 1] : '';
+  CELL_CLASS[v] = ch === '[' ? 1 : ch === ']' ? 2 : ch === '(' ? 4 : ch === ')' ? 5 : C2P[v] === 2047 ? 3 : 0;
+}
+const opChar = v => CELL_OP[v] ? OP_CHARS[CELL_OP[v] - 1] : null;
+function assemble(text) {
+  const out = [];
+  for (const ch of text.replace(/\s+/g, '')) {
+    if (ch in OP_CELL) out.push(OP_CELL[ch]);
+    else if (ch === '~') out.push(BOUNDARY);
+    else if (ch === '_') out.push(NOP_FILLER);
+    else if (ch === '0') out.push(0);
+    else throw new Error('not an fb1d op: ' + ch);
+  }
+  return out;
+}
+
+// ------------------------------------------------------------ machine (one IP here; fb1d.py has several)
+class FB1D {
+  constructor(n) { this.tape = new Uint16Array(n); this.a = 0; this.b = 0; this.ix = 0; this.p = 0;
+                   this.steps = 0; this.mt = null; this.noise = null; }
+  get N() { return this.tape.length; }
+  matches() {
+    if (this.mt) return this.mt;
+    const mt = new Int32Array(this.N).fill(-1), sa = [], sb = [];
+    for (let i = 0; i < this.N; i++) {
+      const c = CELL_CLASS[this.tape[i]];
+      if (c === 1) sa.push(i);
+      else if (c === 4) sb.push(i);
+      else if (c === 2 || c === 5) { const st = c === 2 ? sa : sb; if (st.length) { const j = st.pop(); mt[i] = j; mt[j] = i; } }
+      else if (c === 3) { sa.length = 0; sb.length = 0; }
+    }
+    return this.mt = mt;
+  }
+  write(addr, val) {
+    if (addr === this.p) return;                       // executing-cell guard
+    if (CELL_CLASS[this.tape[addr]] || CELL_CLASS[val]) this.mt = null;
+    this.tape[addr] = val;
+  }
+  poke(addr, val) { if (CELL_CLASS[this.tape[addr]] || CELL_CLASS[val]) this.mt = null; this.tape[addr] = val & 0xFFFF; }
+  exec(inv) {
+    const t = this.tape, a = this.a, N = this.N, op = CELL_OP[t[this.p]];
+    if (!op) return;
+    const ch = OP_CHARS[op - 1], s = inv ? -1 : 1;
+    switch (ch) {
+      case '<': this.a = (a - s + N) % N; break;
+      case '>': this.a = (a + s + N) % N; break;
+      case '{': this.b = (this.b - s + N) % N; break;
+      case '}': this.b = (this.b + s + N) % N; break;
+      case 'B': this.ix = (this.ix - s + N) % N; break;
+      case 'A': this.ix = (this.ix + s + N) % N; break;
+      case '+': this.write(a, t[a] ^ (inv ? DEC : INC)[C2P[t[a]]]); break;
+      case '-': this.write(a, t[a] ^ (inv ? INC : DEC)[C2P[t[a]]]); break;
+      case '.': if (a !== this.b) this.write(this.b, t[this.b] ^ t[a]); break;
+      case ',': if (a !== this.b) this.write(a, t[a] ^ t[this.b]); break;
+      case 'm': if (a !== this.ix) this.write(a, t[a] ^ t[this.ix]); break;
+      case 'I': if (a !== this.ix) this.write(a, t[a] ^ SYNMASK[t[this.ix]]); break;
+      case 'V': if (a !== this.ix) this.write(a, t[a] ^ CORR[t[this.ix]]); break;
+      case 'j': if (a !== this.ix) this.write(this.ix, t[this.ix] ^ t[a]); break;
+      case '[': case ']': if (t[a] & DATA_MASK) { const m = this.matches()[this.p]; if (m >= 0) this.p = m; } break;
+      case '(': case ')': if (t[this.b] & DATA_MASK) { const m = this.matches()[this.p]; if (m >= 0) this.p = m; } break;
+    }
+  }
+  step() {
+    this.exec(false); this.p = (this.p + 1) % this.N;
+    if (this.noise) this.noise.forward(this);
+    this.steps++;
+  }
+  back() {
+    this.steps--;
+    if (this.noise) this.noise.backward(this);
+    this.p = (this.p - 1 + this.N) % this.N; this.exec(true);
+  }
+}
+// Reversible noise: a seeded PRNG decides one flip per round with probability rate/1e6 over
+// [lo, hi]; applied flips are logged so `back` can undo them exactly.
+class Noise {
+  constructor(rate, lo, hi, seed) { this.rate = rate; this.lo = lo; this.hi = hi; this.seed = seed >>> 0;
+                                    this.log = []; this.total = 0; this.rounds = 0; }
+  rnd() { let x = (this.seed += 0x9E3779B9) >>> 0; x = Math.imul(x ^ (x >>> 16), 0x21F0AAAD); x = Math.imul(x ^ (x >>> 15), 0x735A2D97); return ((x ^ (x >>> 15)) >>> 0) / 4294967296; }
+  forward(m) {
+    this.rounds++;
+    if (this.rnd() * 1e6 < this.rate) {
+      const addr = this.lo + Math.floor(this.rnd() * (this.hi - this.lo + 1)), bit = Math.floor(this.rnd() * 16);
+      m.poke(addr, m.tape[addr] ^ (1 << bit)); this.log.push([this.rounds, addr, bit]); this.total++;
+    }
+  }
+  backward(m) {
+    const top = this.log[this.log.length - 1];
+    if (top && top[0] === this.rounds) { this.log.pop(); m.poke(top[1], m.tape[top[1]] ^ (1 << top[2])); this.total--; }
+    this.rounds--;
+  }
+}
+// @core-end
+if (typeof module !== 'undefined') { module.exports = { FB1D, assemble, encode, syndrome, C2P, INC, DEC, SYNMASK, CORR, CELL_OP, OP_CELL, NOP_FILLER, BOUNDARY }; }
+</script>
+<script>
+'use strict';
+if (typeof document === 'undefined') throw new Error('browser only past this point');
+// ------------------------------------------------------------ op descriptions
+const OP_INFO = {
+  '<': ['op-a', 'a -= 1'], '>': ['op-a', 'a += 1'],
+  '{': ['op-b', 'b -= 1'], '}': ['op-b', 'b += 1'],
+  'B': ['op-x', 'ix -= 1'], 'A': ['op-x', 'ix += 1'],
+  '-': ['op-inc', 'payload(tape[a]) -= 1'], '+': ['op-inc', 'payload(tape[a]) += 1'],
+  '.': ['op-xor', 'tape[b] ^= tape[a]   (no-op if a = b)'], ',': ['op-xor', 'tape[a] ^= tape[b]   (no-op if a = b)'],
+  'm': ['op-ix', 'tape[a] ^= tape[ix]   (copy in / uncompute)'],
+  'I': ['op-ix', 'tape[a] ^= syndrome5(tape[ix])   (probe: nonzero iff the ix cell has an error)'],
+  'V': ['op-ix', 'tape[a] ^= 1 << syndrome4(tape[ix])   (the correction mask)'],
+  'j': ['op-ix', 'tape[ix] ^= tape[a]   (write the mask back: repair)'],
+  '[': ['op-br', 'if payload(tape[a]) != 0: jump to matching ]   (enter only when zero)'],
+  ']': ['op-br', 'if payload(tape[a]) != 0: jump to matching [   (repeat while nonzero)'],
+  '(': ['op-brb', 'if payload(tape[b]) != 0: jump to matching )   (enter only when zero)'],
+  ')': ['op-brb', 'if payload(tape[b]) != 0: jump to matching (   (repeat while nonzero)'],
+};
+const isBrA = v => CELL_CLASS[v] === 1 || CELL_CLASS[v] === 2, isBrB = v => CELL_CLASS[v] === 4 || CELL_CLASS[v] === 5;
+const isBr = v => isBrA(v) || isBrB(v);
+function cellChar(v) { const op = opChar(v); if (op) return op; if (v === 0) return '0'; if (v === NOP_FILLER) return '_'; if (C2P[v] === 2047) return '~'; return '·'; }
+function cellClass(v) { const op = opChar(v); if (op) return OP_INFO[op][0]; if (C2P[v] === 2047) return 'op-bound'; return 'op-nop'; }
+function synText(v) {
+  const [s, pa] = syndrome(v);
+  if (!s && !pa) return 'clean (syndrome 0, parity ok)';
+  if (s && pa) return '1-bit error at bit ' + s + ' (syndrome ' + s + ', parity odd) -> V mask 1<<' + s;
+  if (!s && pa) return '1-bit error at bit 0 (the overall parity bit)';
+  return 'uncorrectable (syndrome ' + s + ', parity even: 2 bits flipped; V would miscorrect bit ' + s + ')';
+}
+
+// ------------------------------------------------------------ macros (fb1d8's FOR, unchanged)
+const mv = (h, k) => (h === 'a' ? (k > 0 ? '>' : '<') : (k > 0 ? '}' : '{')).repeat(Math.abs(k));
+function FOR(xoff, work, label) {
+  const bx = mv('b', xoff), bb = mv('b', -xoff);
+  const init = '>>' + bx + ',' + bb + '<<', cond = '<<' + bx + ',' + bb + '>>', clean = '>' + bx + ',' + bb + '<';
+  return [[label + ': init d=c^x', init], [label + ': [', '['], [label + ': uncompute t', '>>[' + cond + ']<.'],
+          [label + ': uncompute d', '}}.{{'], [label + ': work', work], [label + ': c+=1', '+'],
+          [label + ': recompute d', '}}.{{'], [label + ': recompute t', '.>[' + cond + ']<<'], [label + ': ]', ']'],
+          [label + ': clean c', clean]];
+}
+const ADD = (xoff, dst, label) => FOR(xoff, mv('a', dst) + '+' + mv('a', -dst), label);
+
+// ------------------------------------------------------------ the M2 immunity gadget (programs/fb1d-immunity-m2.py)
+const WORK = [
+  ['  M += 1', '<+>'], ['  probe s ^= I', 'I'], ['  g = 1 iff clean', '[>+<]'], ['  a to g', '>'],
+  ['  dirty [', '['], ['    unprobe, mask, repair, bump', '<IVj+>'], ["    b to s', a to g'", '}}}>>'], ['  dirty ]', ']'],
+  ['  merge (+)', '(+)'], ['  clear flag', '-'], ['  a to s', '<'], ["  b to M' ({)", '({)'], ["  M += 1 / M' = 1", '<+>'],
+];
+const sweep = (dir, label) => [[label + ': test ~', 'm+'], [label + ' [', '['], [label + ': untest, step ix', '-m' + dir],
+  ...WORK.map(([l, t]) => [label + l, t]), [label + ': test ~', 'm+'], [label + ' ]', ']'], [label + ': untest', '-m']];
+const gadgetSegments = () => [['outer [', '['], ['outer -', '-'], ...WORK.map(([l, t]) => ['rest' + l, t]),
+  ...sweep('A', 'scan'), ...sweep('B', 'rewind'), ["moult: b to s, M'=1, a to g", '}+>'], ['outer +', '+'], ['outer ]', ']']];
+
+// ------------------------------------------------------------ examples
+// {doc, size, codeAt, segments, setup(m, codeEnd) -> {a, b, ix, p, labels, viewLo, viewHi, note, loopStop, regions}}
+const EXAMPLES = {
+  immunity: {
+    doc: 'M2 immunity gadget: one gadget correcting a static partner block',
+    codeAt: 1, size: null,
+    segments: gadgetSegments,
+    build(m0) {
+      const code = assemble(gadgetSegments().map(s => s[1]).join(''));
+      const FUEL = 90, L = code.length;
+      const frame0 = L + 3, pLead = frame0 + 3 + FUEL, pCode = pLead + 1, pTrail = pCode + L, N = pTrail + 1;
+      const m = new FB1D(N);
+      m.tape[0] = BOUNDARY; m.tape.set(code, 1); m.tape[L + 1] = BOUNDARY;
+      m.tape[frame0] = encode(1);
+      m.tape[pLead] = BOUNDARY; m.tape.set(code, pCode); m.tape[pTrail] = BOUNDARY;
+      m.a = frame0 + 1; m.b = frame0; m.ix = pLead; m.p = 3;
+      const labels = {};
+      return { m, codeEnd: L + 2, labels, viewLo: 0, viewHi: N, loopStop: 3,
+        regions: { pblock: [pLead, pTrail], fuel: [frame0, pLead - 1] },
+        note: 'Layout: ~ gadget ~ [M s g] fuel... ~ partner (a copy of the gadget) ~.  Frame cells are labelled M, s, g\n' +
+              'relative to b (M) and a (s); they move right through the fuel: +1 per pass (the moult), +2 per correction.\n' +
+              'ix rests on the partner\'s leading ~ at ' + pLead + ' and sweeps to ' + pTrail + ' and back each pass.\n' +
+              'Try: click a partner cell, "flip bit of sel", then "next cell" repeatedly (or "one pass") and watch the frame.\n' +
+              'Red = nonzero syndrome: an error in the partner block, but also the garbage the trail is made of (masks are not codewords).\n' +
+              'A pass is ' + (2 * L + 3) + ' WORK visits, about 6400 steps; "play" at full speed takes a few seconds per pass.' };
+    }
+  },
+  copy: {
+    doc: '[.>}] copies a zero-terminated string by xor into zeros', size: 48, codeAt: 0,
+    segments: () => [['copy loop', '[.>}]']],
+    setup(m) {
+      const src = 8, dst = 20, labels = {};
+      'fb1d'.split('').forEach((c, i) => m.poke(src + 1 + i, encode(c.charCodeAt(0))));
+      labels[src] = 'src0'; labels[dst] = 'dst0';
+      return { a: src, b: dst, ix: 0, p: 0, labels, viewHi: 32, loopStop: 0,
+        note: 'a on the zero before the source (8), b on the zero before the destination (20). Payloads are shown; the\nsource holds the codewords of "fb1d". ] repeats while the source cell under a is nonzero.' };
+    }
+  },
+  counter: {
+    doc: 'unbounded binary counter [>[,>][,<,]<-+]', size: 48, codeAt: 0,
+    segments: () => [['outer [', '['], ['to sentinel', '>'], ['clear trailing ones', '[,>]'], ['set next bit, walk back', '[,<,]'], ['home, -+, loop', '<-+]']],
+    setup(m) {
+      const W = 16, labels = { [W]: 'one', [W + 1]: 'sent' };
+      for (let i = 0; i < 12; i++) labels[W + 2 + i] = 'bit' + i;
+      return { a: W, b: W, ix: 0, p: 13, labels, viewHi: 32, loopStop: 1,
+        note: 'tape[16] = constant 1, tape[17] = sentinel, bits from 18 (LSB first). Starts at the final + (p = 13).\n"one pass" runs one increment.' };
+    }
+  },
+  fib: {
+    doc: 'Fibonacci, one number per 4-cell slot [S t c d] (payloads mod 2048)', size: 640, codeAt: 0,
+    segments: () => {
+      const S = 4, walk = mv('a', S) + mv('b', S), back = mv('a', -S) + mv('b', -S);
+      return [['outer [', '['], ['K += 1', '+'], ['a to Z', '>'], ['walk to first zero slot', '[' + walk + ']'], ['heads to t', '>}'],
+              ...ADD(-5, -2, 'add S[-1]'), ...ADD(-9, -2, 'add S[-2]'), ['heads to S', '<{'], ['advance', walk],
+              ['walk back to Z', '[' + back + ']'], ['a to K', '<'], ['outer ]', ']']];
+    },
+    setup(m, codeEnd) {
+      const D = codeEnd + 2, labels = { [D]: 'K', [D + 1]: 'Z' };
+      m.poke(D + 5, encode(1)); m.poke(D + 9, encode(1));
+      for (let j = 1; j < 40; j++) { const s = D + 1 + 4 * j; if (s + 3 >= m.N) break;
+        labels[s] = 'S' + j; labels[s + 1] = 't'; labels[s + 2] = 'c'; labels[s + 3] = 'd'; }
+      return { a: D, b: D + 1, ix: 0, p: 0, labels, viewHi: D + 1 + 4 * 14, loopStop: 1,
+        note: 'K at ' + D + ', Z at ' + (D + 1) + ', slots of 4 [S t c d] from ' + (D + 5) + '. "one pass" computes the next number.' };
+    }
+  },
+};
+
+// ------------------------------------------------------------ state
+let m, segments = [], codeAt = 0, codeEnd = 0, labels = {}, regions = {}, loopStop = 1;
+let exampleName = 'immunity', selected = null, timer = null;
+
+function loadExample(name) {
+  stopPlay();
+  exampleName = name;
+  const ex = EXAMPLES[name];
+  segments = ex.segments();
+  let info;
+  if (ex.build) {
+    info = ex.build();
+    m = info.m; codeAt = ex.codeAt; codeEnd = info.codeEnd;
+  } else {
+    m = new FB1D(ex.size);
+    codeAt = ex.codeAt;
+    const code = assemble(segments.map(s => s[1]).join(''));
+    m.tape.set(code, codeAt); codeEnd = codeAt + code.length;
+    info = ex.setup(m, codeEnd);
+    m.a = info.a; m.b = info.b; m.ix = info.ix; m.p = info.p;
+  }
+  m.steps = 0; m.mt = null;
+  labels = info.labels || {}; regions = info.regions || {}; loopStop = info.loopStop || 0;
+  $('viewLo').value = info.viewLo || 0; $('viewHi').value = info.viewHi;
+  $('codeText').value = segments.map(s => s[1]).join('');
+  $('note').textContent = info.note || '';
+  $('runTo').value = loopStop;
+  selected = null;
+  setNoise(false);
+  renderAll();
+}
+
+function loadCodeFromText() {
+  stopPlay();
+  let code;
+  try { code = assemble($('codeText').value); } catch (e) { alert(e.message); return; }
+  const at = codeAt;
+  const need = Math.max(m.N, at + code.length + 16);
+  if (need > m.N) { const t = new Uint16Array(need); t.set(m.tape); m.tape = t; }
+  for (let i = 0; i < Math.max(code.length, codeEnd - at); i++) m.poke(at + i, i < code.length ? code[i] : 0);
+  codeEnd = at + code.length;
+  segments = [['code', $('codeText').value.replace(/\s+/g, '')]];
+  m.p = at; m.steps = 0; m.mt = null;
+  renderAll();
+}
+
+// ------------------------------------------------------------ helpers
+const $ = id => document.getElementById(id);
+function segmentAt(p) {
+  let off = codeAt;
+  for (let i = 0; i < segments.length; i++) {
+    const len = segments[i][1].replace(/\s+/g, '').length;
+    if (p >= off && p < off + len) return { i, label: segments[i][0], off: p - off, start: off, end: off + len };
+    off += len;
+  }
+  return null;
+}
+function frameRole(addr) {
+  if (exampleName !== 'immunity') return null;
+  if (addr === m.b) return 'M'; if (addr === m.a) return 's'; if (addr === m.a + 1 && m.a === m.b + 1) return 'g';
+  return null;
+}
+function inRegion(name, addr) { const r = regions[name]; return r && addr >= r[0] && addr <= r[1]; }
+function jumpText(addr, op) {
+  const partner = m.matches()[addr];
+  if (partner < 0) return '<span class="k">partner</span> none (unmatched, or across a ~ barrier: no-op)';
+  const head = (op === '[' || op === ']') ? 'a' : 'b', hv = m.tape[m[head]], nz = hv & DATA_MASK;
+  const other = { '[': ']', ']': '[', '(': ')', ')': '(' }[op];
+  return '<span class="k">partner</span> ' + other + ' at ' + partner + '\n<span class="k">now</span>     payload(tape[' + head + ']) = ' + C2P[hv] +
+         (nz ? ' -> would jump, landing at ' + ((partner + 1) % m.N) : ' -> would fall through to ' + ((addr + 1) % m.N));
+}
+function describeCell(addr) {
+  const v = m.tape[addr], op = opChar(v), lines = [];
+  const lab = labels[addr] ? '  "' + labels[addr] + '"' : (frameRole(addr) ? '  frame cell ' + frameRole(addr) : '');
+  lines.push('<span class="k">address</span> ' + addr + lab + (inRegion('pblock', addr) ? '  (partner block)' : inRegion('fuel', addr) ? '  (fuel / trail)' : ''));
+  lines.push('<span class="k">raw</span>     0x' + v.toString(16).padStart(4, '0') + '  payload ' + C2P[v] + (C2P[v] === 2047 ? '  (boundary ~)' : ''));
+  lines.push('<span class="k">hamming</span> ' + synText(v));
+  lines.push('<span class="k">as op</span>   ' + (op ? '<b class="' + OP_INFO[op][0] + '">' + op + '</b>  ' + OP_INFO[op][1] : (v === NOP_FILLER ? 'NOP filler' : 'no-op')));
+  if (addr >= codeAt && addr < codeEnd) { const s = segmentAt(addr); if (s) lines.push('<span class="k">segment</span> ' + s.label.trim() + '  (+' + s.off + ')'); }
+  if (op && '[]()'.includes(op)) lines.push(jumpText(addr, op));
+  if (addr === m.a) lines.push('<span class="k">head a is here</span>');
+  if (addr === m.b) lines.push('<span class="k">head b is here</span>');
+  if (addr === m.ix) lines.push('<span class="k">head ix is here</span>');
+  if (addr === m.p) lines.push('<span class="k">IP is here: this executes next</span>');
+  return lines.join('\n');
+}
+
+// ------------------------------------------------------------ rendering
+const cellEls = [];
+function buildTape() {
+  const tapeEl = $('tape'); tapeEl.innerHTML = ''; cellEls.length = 0;
+  const lo = Math.max(0, +$('viewLo').value || 0);
+  const hi = Math.min(m.N, Math.max(lo + 1, +$('viewHi').value || 64));
+  const per = Math.max(8, Math.min(64, +$('perRow').value || 32));
+  for (let start = lo; start < hi; start += per) {
+    const row = document.createElement('div'); row.className = 'row';
+    const ad = document.createElement('div'); ad.className = 'addr'; ad.textContent = start; row.appendChild(ad);
+    for (let i = start; i < Math.min(hi, start + per); i++) {
+      const c = document.createElement('div'); c.className = 'cell'; c.dataset.addr = i;
+      c.innerHTML = '<div class="seg-tick"></div><div class="v"></div><div class="lab"></div><div class="heads"></div>';
+      c.addEventListener('mouseenter', () => onHover(i));
+      c.addEventListener('mouseleave', () => onHover(null));
+      c.addEventListener('click', () => onClick(i));
+      row.appendChild(c); cellEls[i] = c;
+    }
+    tapeEl.appendChild(row);
+  }
+}
+const SEG_COLORS = ['#7aa7e8', '#c19be0', '#8fd19a', '#f2b56b', '#f39aa0', '#9ad0d8', '#d9c36f', '#c0c0c0'];
+function updateCells() {
+  const mt = m.matches();
+  const cur = segmentAt(m.p);
+  const ipPartner = isBr(m.tape[m.p]) ? mt[m.p] : -1;
+  for (let i = 0; i < cellEls.length; i++) {
+    const c = cellEls[i]; if (!c) continue;
+    const v = m.tape[i], op = opChar(v), inCode = i >= codeAt && i < codeEnd;
+    const [s, pa] = syndrome(v);
+    c.className = 'cell ' + (inCode ? 'code' : 'data');
+    if (inRegion('pblock', i)) c.classList.add('pblock'); else if (inRegion('fuel', i)) c.classList.add('fuel');
+    const ve = c.children[1];
+    if (inCode || inRegion('pblock', i) || C2P[v] === 2047) { ve.textContent = cellChar(v); ve.className = 'v ' + cellClass(v); }
+    else { ve.textContent = C2P[v]; ve.className = 'v' + (op ? ' ' + OP_INFO[op][0] : ''); }
+    const role = frameRole(i);
+    c.children[2].textContent = labels[i] || role || (inCode || inRegion('pblock', i) ? '' : (op ? op : ''));
+    if (role) c.classList.add('frame');
+    if (s || pa) c.classList.add('dirty');
+    const sg = inCode ? segmentAt(i) : null;
+    c.children[0].style.background = sg ? SEG_COLORS[sg.i % SEG_COLORS.length] : 'transparent';
+    if (cur && sg && sg.i === cur.i) c.classList.add('segcur');
+    if (i === m.p) c.classList.add('ip');
+    if (i === ipPartner) c.classList.add('partner');
+    if (i === selected) c.classList.add('sel');
+    c.children[3].innerHTML = (i === m.a ? '<i class="a"></i>' : '') + (i === m.b ? '<i class="b"></i>' : '') +
+                              (i === m.ix ? '<i class="x"></i>' : '') + (i === m.p ? '<i class="p"></i>' : '');
+  }
+}
+function updateStatus() {
+  const v = m.tape[m.p], op = opChar(v);
+  let next = op ? op + '  ' + OP_INFO[op][1] : 'no-op (payload ' + C2P[v] + ')';
+  if (op && '[]()'.includes(op)) {
+    const partner = m.matches()[m.p], head = (op === '[' || op === ']') ? 'a' : 'b', hv = m.tape[m[head]];
+    next += partner < 0 ? '  [unmatched: no-op]'
+          : ((hv & DATA_MASK) ? '  -> payload(tape[' + head + '])=' + C2P[hv] + ' so JUMP to ' + (partner + 1) : '  -> tape[' + head + '] is zero so fall through');
+  }
+  const s = segmentAt(m.p);
+  const fr = exampleName === 'immunity' && m.a === m.b + 1 ? '    frame at ' + m.b + ': M=' + C2P[m.tape[m.b]] + ' s=' + C2P[m.tape[m.a]] + ' g=' + C2P[m.tape[m.a + 1]] : '';
+  $('status').textContent =
+    'step ' + m.steps + '    p=' + m.p + '  a=' + m.a + '  b=' + m.b + '  ix=' + m.ix +
+    '    payload[a]=' + C2P[m.tape[m.a]] + '  payload[b]=' + C2P[m.tape[m.b]] + '  ix cell: ' + synText(m.tape[m.ix]).split(' (')[0] + fr + '\n' +
+    'next: ' + next + (s ? '\nin segment: ' + s.label.trim() : (m.p < codeAt || m.p >= codeEnd ? '\nIP is outside the code' : ''));
+  $('selAddr').textContent = selected === null ? 'none' : selected + (labels[selected] ? ' (' + labels[selected] + ')' : '');
+  $('noiseInfo').textContent = m.noise ? 'flips so far: ' + m.noise.total : '';
+}
+function updateSegments() {
+  const el = $('segments'); el.innerHTML = '';
+  const cur = segmentAt(m.p);
+  let off = codeAt;
+  segments.forEach((s, i) => {
+    const d = document.createElement('div');
+    if (cur && cur.i === i) d.className = 'cur';
+    const len = s[1].replace(/\s+/g, '').length;
+    d.innerHTML = '<span class="off">' + off + '</span><span class="lab" style="border-left:3px solid ' +
+                  SEG_COLORS[i % SEG_COLORS.length] + ';padding-left:4px">' + s[0] + '</span><span class="txt">' + s[1] + '</span>';
+    const start = off;
+    d.addEventListener('mouseenter', () => highlightRange(start, start + len, true));
+    d.addEventListener('mouseleave', () => highlightRange(start, start + len, false));
+    d.addEventListener('click', () => { selected = start; updateCells(); updateStatus(); });
+    el.appendChild(d);
+    off += len;
+  });
+  if (cur) { const c = el.children[cur.i]; if (c) c.scrollIntoView({ block: 'nearest' }); }
+}
+function highlightRange(s, e, on) { for (let i = s; i < e; i++) if (cellEls[i]) cellEls[i].classList.toggle('hover', on); }
+function renderAll() { buildTape(); updateCells(); updateStatus(); updateSegments(); }
+function refresh() { updateCells(); updateStatus(); updateSegments(); }
+
+function onHover(addr) {
+  if (addr === null) { $('inspector').innerHTML = describeCell(m.p); return; }
+  $('inspector').innerHTML = describeCell(addr);
+  document.querySelectorAll('.cell.partner-h').forEach(e => e.classList.remove('partner-h', 'partner'));
+  if (isBr(m.tape[addr])) { const p = m.matches()[addr]; if (p >= 0 && cellEls[p]) cellEls[p].classList.add('partner', 'partner-h'); }
+}
+function onClick(addr) {
+  selected = addr; updateCells(); updateStatus();
+  const c = cellEls[addr], ve = c.children[1];
+  const inp = document.createElement('input'); inp.className = 'cellEdit';
+  inp.title = 'op char, ~, _, a payload number, or ^n to flip bit n';
+  inp.value = cellChar(m.tape[addr]) !== '·' && opChar(m.tape[addr]) ? opChar(m.tape[addr]) : C2P[m.tape[addr]];
+  ve.textContent = ''; ve.appendChild(inp); inp.focus(); inp.select();
+  const done = commit => {
+    if (commit) {
+      const s = inp.value.trim();
+      if (/^\^\d+$/.test(s)) m.poke(addr, m.tape[addr] ^ (1 << (+s.slice(1) & 15)));
+      else if (/^\d+$/.test(s)) m.poke(addr, encode(+s & 2047));
+      else if (s.length === 1 && (s in OP_CELL || '~_0'.includes(s))) m.poke(addr, assemble(s)[0]);
+    }
+    refresh();
+  };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+  inp.addEventListener('blur', () => done(true));
+}
+
+// ------------------------------------------------------------ running
+function runSteps(n, back) { for (let i = 0; i < n; i++) back ? m.back() : m.step(); refresh(); }
+function runUntil(p, back, max = 2e6) {
+  let n = 0;
+  do { back ? m.back() : m.step(); n++; } while (m.p !== p && n < max);
+  refresh(); return n;
+}
+function runUntilSegment(prefix, max = 2e5) {          // next entry into a segment whose label contains prefix
+  let n = 0;
+  do { m.step(); n++; const s = segmentAt(m.p); if (s && s.off === 0 && s.label.includes(prefix)) break; } while (n < max);
+  refresh(); return n;
+}
+function stopPlay() { if (timer) { clearInterval(timer); timer = null; } $('btnPlay').textContent = '▶ play'; $('btnPlayBack').textContent = '◀ play backward'; }
+function play(back) {
+  if (timer) { stopPlay(); return; }
+  (back ? $('btnPlayBack') : $('btnPlay')).textContent = '⏸ pause';
+  const tick = () => {
+    const sp = +$('speed').value;
+    const batch = sp < 50 ? 1 : Math.round(Math.pow(10, (sp - 50) / 20));  // 1 .. 316 per tick
+    for (let i = 0; i < batch; i++) back ? m.back() : m.step();
+    refresh();
+  };
+  const restart = () => {
+    if (timer) clearInterval(timer);
+    const sp = +$('speed').value, ms = sp < 50 ? Math.round(600 - sp * 11) : 40;
+    timer = setInterval(tick, ms);
+  };
+  restart();
+  $('speed').oninput = () => { if (timer) restart(); };
+}
+function setNoise(on) {
+  if (on) {
+    const r = regions.pblock || [codeAt, codeEnd - 1];
+    m.noise = new Noise(+$('noiseRate').value || 0, r[0], r[1], +$('noiseSeed').value || 0);
+  } else m.noise = null;
+  $('btnNoise').textContent = on ? 'noise on' : 'noise off';
+  $('btnNoise').classList.toggle('on', on);
+  updateStatus();
+}
+
+// ------------------------------------------------------------ wiring
+const sel = $('exampleSel');
+for (const [k, ex] of Object.entries(EXAMPLES)) { const o = document.createElement('option'); o.value = k; o.textContent = k + ' — ' + ex.doc; sel.appendChild(o); }
+sel.value = 'immunity';
+sel.addEventListener('change', () => loadExample(sel.value));
+$('btnReset').addEventListener('click', () => loadExample(exampleName));
+$('btnStep').addEventListener('click', () => { stopPlay(); runSteps(1, false); });
+$('btnBack').addEventListener('click', () => { stopPlay(); runSteps(1, true); });
+$('btnStepN').addEventListener('click', e => { if (e.target.tagName === 'INPUT') return; stopPlay(); runSteps(+$('nSteps').value || 1, false); });
+$('btnCell').addEventListener('click', () => { stopPlay(); runUntilSegment('M += 1'); });
+$('btnLoop').addEventListener('click', () => { stopPlay(); runUntil(loopStop, false); });
+$('btnRunTo').addEventListener('click', e => { if (e.target.tagName === 'INPUT') return; stopPlay(); runUntil(+$('runTo').value || 0, false); });
+$('btnPlay').addEventListener('click', () => play(false));
+$('btnPlayBack').addEventListener('click', () => play(true));
+$('btnNoise').addEventListener('click', () => setNoise(!m.noise));
+$('btnLoadCode').addEventListener('click', loadCodeFromText);
+$('viewLo').addEventListener('change', renderAll);
+$('viewHi').addEventListener('change', renderAll);
+$('perRow').addEventListener('change', renderAll);
+$('btnFlip').addEventListener('click', () => {
+  if (selected !== null) { m.poke(selected, m.tape[selected] ^ (1 << (+$('flipBit').value & 15))); refresh(); } });
+$('btnAsel').addEventListener('click', () => { if (selected !== null) { m.a = selected; refresh(); } });
+$('btnBsel').addEventListener('click', () => { if (selected !== null) { m.b = selected; refresh(); } });
+$('btnXsel').addEventListener('click', () => { if (selected !== null) { m.ix = selected; refresh(); } });
+$('btnPsel').addEventListener('click', () => { if (selected !== null) { m.p = selected; refresh(); } });
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'ArrowRight' || e.key === 's') { stopPlay(); runSteps(1, false); }
+  if (e.key === 'ArrowLeft' || e.key === 'b') { stopPlay(); runSteps(1, true); }
+  if (e.key === 'n') { stopPlay(); runUntilSegment('M += 1'); }
+  if (e.key === ' ') { e.preventDefault(); play(false); }
+});
+loadExample('immunity');
+</script>
+</body>
+</html>
