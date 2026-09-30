@@ -2,53 +2,54 @@
 """
 fb1d immunity gadget, M2: one gadget correcting a static partner block.
 Authored or modified by Claude
-Version: 2026-09-26 v0.1 (M2 of docs/fb1d-port-plan.md)
+Version: 2026-09-30 v0.2 (fixed stomach + roaming b, using fb1d's P/Q;
+v0.1 of 2026-09-26 used a moving 3-cell frame, see the port plan)
 
 A single IP runs a bracket program that walks its interoceptor `ix`
 across a partner code block (a static copy of its own code, no partner
 IP), probes every cell with `I`, and repairs any single-bit error with
-`V` + `j`.  Garbage goes into a fuel trail via a moving "frame".
+`V` + `j`.  Garbage goes into a fuel trail behind a roaming head `b`,
+exactly as fb2d's EX row.
 
 Tape layout (all position-relative; nothing in the code is absolute):
 
-    ~ [gadget code] ~ [M s g] [fuel zeros ....] ~ [partner code] ~
-                       ^b ^a                      ^ix
+    ~ [gadget code] ~ [s g] [L] [fuel zeros ....] ~ [partner code] ~
+                       ^a    ^b                      ^ix
 
-Frame (3 cells, moves right through the fuel):
-    M  marker under head b; nonzero at every cell boundary
-    s  probe / mask cell under head a; zero between cells
-    g  flag cell; zero between cells
+Stomach (fixed): s, the probe / mask cell under head a, and g, the
+flag cell; both zero between cells.  Head b sits on L, the last garbage
+cell of the trail, which is always nonzero; every cell after it is zero
+fuel.  Initially L is a seeded cell with payload 1.
 
-Per partner cell (WORK, 34 ops; a on s, b on M):
-    <+>            M += 1                      (drift, see below)
+Per partner cell (WORK, 26 ops; a on s, b on L):
+    P              L += 1                      (trace, see below)
     I              s ^= syndrome5(tape[ix])    s != 0 iff the cell has an error
     [>+<]          g = 1 iff s == 0            (clean flag)
     >[ ... ]       dirty-only block, entered iff g == 0:
-      <IVj+>         s ^= syndrome5 (-> 0), s = 1 << syndrome4 (the mask),
+      <IVj+          s ^= syndrome5 (-> 0), s = 1 << syndrome4 (the mask),
                      tape[ix] ^= s (repair), s payload += 1 (nonzero garbage)
-      }}}>>          b to the fresh cell s' = M+3, a to the fresh cell g' = M+4
-    (+)            dirty-only (b's cell is zero): a's cell += 1
-    -              clean: g -> 0; dirty: that fresh cell -> 0
-    <              clean: a -> s; dirty: a -> s'
-    ({)            dirty-only: b -> M' = M+2 (the old g, zero)
-    <+>            clean: M += 1; dirty: M' = 1
+      }.,}           b to the fresh cell L+1, fuel ^= s (dump), s ^= fuel (clear),
+                     b to the fresh cell L+2
+      >              a back to g (still zero)
+    (+)            dirty-only (b's cell is zero): g += 1
+    -              g -> 0 in both cases
+    <              a to s
+    P              clean: L += 1 (total +2); dirty: L+2 becomes 1, the new L
 
-After a correction the frame has moved by 2 and left [M_old, mask'] as
-garbage: two nonzero fuel cells per correction (fb2d's EV + PA cost).
-The clean path leaves no fuel trace, only M += 2.
+After a correction b has moved by 2 and left [mask', 1] behind: two
+nonzero fuel cells per correction (fb2d's EV + PA cost).  The clean
+path writes only the trace L += 2.
 
-Why the drift.  Any merge of the clean and dirty paths must end with
-both cases in the same configuration relative to the frame.  With a
-garbage trail that is a fixed pattern repeated per correction, and
-brackets that can only exit on a zero cell, no bracket program can do
-that without some cell changing on the clean path as well: a brute
-force over all `[ ]`/`( )` programs up to 9 ops (scratch searches for
-this milestone) finds none.  fb2d has the same requirement and pays it
-with `P` on the EX cell on the bypass path.  Here the price is
-M += 2 per clean cell.  M is reset by the pass-end "moult" `}+>`: b and
-a step right by one, the old s becomes M' = 1, the old g becomes s'.
-That costs one fuel cell per pass and keeps M in [1, 4L+5], so it never
-wraps to zero for partner blocks up to L = 510 cells.
+Why the trace.  Any merge of the clean and dirty paths must end with
+both cases in the same configuration.  With a periodic garbage trail,
+and brackets that can only exit with the tested head on a zero cell, a
+brute force over all `[ ]`/`( )` programs up to 9 ops found no way to
+do that without the clean path writing something.  fb2d pays the same
+price with `P` on the EX cell on the bypass path, and so does this
+gadget, now literally: `P` at both ends of WORK.  The trace is bounded
+by the pass-end "moult" `}P`: b steps onto the next fresh cell, which
+becomes L = 1.  One fuel cell per pass; L stays in [1, 4L_p+5] for a
+partner block of L_p cells and never wraps.
 
 Pass: WORK on the resting boundary, then a scan loop east, a rewind
 loop west (both with WORK on every cell, and always WORK before a
@@ -58,7 +59,7 @@ is zero iff the cell is `~` (payload 2047); `-m` uncomputes it.
 
 Run:  python3 programs/fb1d-immunity-m2.py          (tests)
       python3 programs/fb1d-immunity-m2.py --quick  (skip the full sweep)
-REPL: python3 fb1d.py, then `load immunity`.
+REPL: python3 fb1d.py, then `load immunity`.  Browser: fb1d.html.
 """
 
 import os
@@ -73,19 +74,19 @@ from fb1d import Machine, IP, assemble, BOUNDARY, hamming_encode, is_dirty
 # ─── Program ─────────────────────────────────────────────────────────
 
 WORK = [
-    ('  M += 1', '<+>'),
+    ('  P: L += 1', 'P'),
     ('  probe s ^= I', 'I'),
     ('  g = 1 iff clean', '[>+<]'),
     ('  a to g', '>'),
     ('  dirty [', '['),
-    ('    unprobe, mask, repair, bump', '<IVj+>'),
-    ("    b to s', a to g'", '}}}>>'),
+    ('    unprobe, mask, repair, bump', '<IVj+'),
+    ('    dump mask, b to fresh', '}.,}'),
+    ('    a to g', '>'),
     ('  dirty ]', ']'),
     ('  merge (+)', '(+)'),
     ('  clear flag', '-'),
     ('  a to s', '<'),
-    ("  b to M' ({)", '({)'),
-    ("  M += 1 / M' = 1", '<+>'),
+    ('  P: L += 1 / new L = 1', 'P'),
 ]
 
 
@@ -101,7 +102,7 @@ def gadget_segments():
     return ([('outer [', '['), ('outer -', '-')]
             + [('rest' + l, t) for l, t in WORK]
             + sweep('A', 'scan') + sweep('B', 'rewind')
-            + [("moult: b to s, M'=1, a to g", '}+>'),
+            + [('moult: b on, L = 1', '}P'),
                ('outer +', '+'), ('outer ]', ']')])
 
 
@@ -117,9 +118,11 @@ class Layout:
     def __init__(self, code_len, fuel):
         self.code = 1                      # gadget code starts after `~`
         self.code_len = code_len
-        self.frame0 = code_len + 3         # first frame base (M cell)
-        self.fuel = fuel                   # zeros after the 3 frame cells
-        self.p_lead = self.frame0 + 3 + fuel        # partner's leading `~`
+        self.s = code_len + 2              # stomach: s, g
+        self.g = self.s + 1
+        self.L0 = self.g + 1               # first garbage cell (seeded 1), b here
+        self.fuel = fuel                   # zeros after L0
+        self.p_lead = self.L0 + 1 + fuel   # partner's leading `~`
         self.p_code = self.p_lead + 1
         self.p_trail = self.p_code + code_len       # partner's trailing `~`
         self.size = self.p_trail + 1
@@ -143,13 +146,13 @@ def build(fuel=400, partner=None):
     m.tape[0] = BOUNDARY
     m.tape[lay.code:lay.code + len(code)] = code
     m.tape[lay.code + len(code)] = BOUNDARY
-    m.poke(lay.frame0, 1)                  # M = 1
+    m.poke(lay.L0, 1)
     m.tape[lay.p_lead] = BOUNDARY
     m.tape[lay.p_code:lay.p_code + len(code)] = partner
     m.tape[lay.p_trail] = BOUNDARY
     m.code_end = lay.code + len(code) + 1
     ip = m.ips[0]
-    ip.b, ip.a, ip.ix, ip.p = lay.frame0, lay.frame0 + 1, lay.p_lead, lay.p_start
+    ip.a, ip.b, ip.ix, ip.p = lay.s, lay.L0, lay.p_lead, lay.p_start
     m.invalidate()
     return m, lay
 
@@ -161,12 +164,16 @@ def run_pass(m, lay, limit=10**7):
     return n
 
 
-def frame_state(m):
-    """(M address, M payload, s, g) with a on s and b on M, else None."""
+def stomach_state(m, lay):
+    """(b address, payload at b, s, g) if a is on s, else None."""
     ip = m.ips[0]
-    if ip.a != ip.b + 1:
+    if ip.a != lay.s:
         return None
-    return ip.b, m.peek(ip.b), m.peek(ip.a), m.peek(ip.a + 1)
+    return ip.b, m.peek(ip.b), m.peek(lay.s), m.peek(lay.g)
+
+
+def healthy(fs):
+    return fs is not None and fs[1] != 0 and fs[2] == 0 and fs[3] == 0
 
 
 def partner_ok(m, lay, ref):
@@ -186,20 +193,20 @@ def test_clean(passes=5):
     lo, hi = lay.partner_range()
     ref = m.tape[lo:hi + 1]
     s0 = m.state()
-    steps, ok, base0 = [], True, m.ips[0].b
+    steps, ok = [], True
     for k in range(passes):
         steps.append(run_pass(m, lay))
-        fs = frame_state(m)
-        ok &= partner_ok(m, lay, ref) and fs is not None
-        ok &= fs[0] == base0 + k + 1 and fs[1] == 1 and fs[2] == 0 and fs[3] == 0
+        fs = stomach_state(m, lay)
+        ok &= partner_ok(m, lay, ref) and healthy(fs)
+        ok &= fs[0] == lay.L0 + k + 1 and fs[1] == 1
     total = sum(steps)
     for _ in range(total):
         m.step_back_all()
     ok &= m.state() == s0
     L = lay.code_len
     return _check(ok, f"clean: {passes} passes x {steps[0]} steps (L={L}, "
-                      f"{steps[0] / (2 * L + 2):.1f} steps/cell-visit), frame +1 per pass, "
-                      f"M back to 1, partner untouched, reversed")
+                      f"{steps[0] / (2 * L + 3):.1f} steps/cell-visit), b +1 per pass, "
+                      f"L back to 1, stomach fixed and zero, partner untouched, reversed")
 
 
 def test_single_flips(quick=False):
@@ -218,16 +225,13 @@ def test_single_flips(quick=False):
             m.tape[addr] ^= 1 << bit
             m.invalidate()
             s0 = m.state()
-            base0 = m.ips[0].b
             st = run_pass(m, lay)
-            fs = frame_state(m)
-            good = (partner_ok(m, lay, ref) and fs is not None
-                    and fs[1] == 1 and fs[2] == 0 and fs[3] == 0)
+            fs = stomach_state(m, lay)
+            good = partner_ok(m, lay, ref) and healthy(fs) and fs[1] == 1
             if good:
-                shift = fs[0] - base0
-                garbage.add(shift)
+                garbage.add(fs[0] - lay.L0)
                 # the trail must be contiguous nonzero-payload cells
-                trail = [m.peek(x) for x in range(base0, fs[0])]
+                trail = [m.peek(x) for x in range(lay.L0, fs[0] + 1)]
                 good &= all(v != 0 for v in trail)
             if good and rev_checked < 40 and (addr * 16 + bit) % 37 == 0:
                 for _ in range(st):
@@ -256,12 +260,11 @@ def test_two_flips_same_pass():
         m.tape[a1] ^= 1 << rng.randrange(16)
         m.tape[a2] ^= 1 << rng.randrange(16)
         m.invalidate()
-        base0 = m.ips[0].b
         run_pass(m, lay)
-        fs = frame_state(m)
-        ok &= partner_ok(m, lay, ref) and fs is not None and fs[0] - base0 == 5
+        fs = stomach_state(m, lay)
+        ok &= partner_ok(m, lay, ref) and healthy(fs) and fs[0] - lay.L0 == 5
         n += 1
-    return _check(ok, f"two errors per pass: {n} cases, frame +5 (1 moult + 2x2)")
+    return _check(ok, f"two errors per pass: {n} cases, b +5 (1 moult + 2x2)")
 
 
 def test_noise(rate=300, passes=60, seed=11):
@@ -289,16 +292,16 @@ def test_noise(rate=300, passes=60, seed=11):
             else:
                 missed += 1
     flips = m.noise.total_injected
-    fs = frame_state(m)
-    healthy = fs is not None and fs[1] == 1 and fs[2] == 0 and fs[3] == 0
+    fs = stomach_state(m, lay)
+    good = healthy(fs)
     for _ in range(total):
         m.step_back_all()
     rev = m.state() == s0
-    ok = missed == 0 and healthy and rev and corrected > 0
+    ok = missed == 0 and good and rev and corrected > 0
     return _check(ok, f"noise {rate}/1M over the partner for {passes} passes "
                       f"({total} rounds, {flips} flips): {corrected} single-bit errors "
                       f"corrected, {missed} missed, {double} multi-bit seen (not "
-                      f"handled until M5); frame healthy; {total}-round reversal exact")
+                      f"handled until M5); stomach healthy; {total}-round reversal exact")
 
 
 def run_tests(quick=False):

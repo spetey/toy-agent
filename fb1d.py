@@ -2,7 +2,7 @@
 """
 fb1d: 16-bit reversible bracket language on a 1D tape
 Authored or modified by Claude
-Version: 2026-09-26 v0.2 (M1 + M2 `( )` extension, docs/fb1d-port-plan.md)
+Version: 2026-09-30 v0.3 (M1 + M2 `( )` and `P Q` extensions, docs/fb1d-port-plan.md)
 
 fb1d is fb1d8 (formerly RBFF; see fb1d8.py, docs/fb1d8_notes.md) with
 fb2d's cells and interoceptor transplanted in, so that the Wikivore can
@@ -34,6 +34,7 @@ the op at tape[p], then p += 1 (a jump lands one past the partner).
   ]  if payload(tape[a]) != 0: p = matching [   (repeat while nonzero)
   (  if payload(tape[b]) != 0: p = matching )   (same, testing b's cell)
   )  if payload(tape[b]) != 0: p = matching (
+  P  tape[b] payload += 1   Q  tape[b] payload -= 1   (fb2d's P/Q)
   anything else: no-op
 
 "payload != 0" means tape[a] & DATA_MASK != 0, as in fb2d's mirrors.
@@ -41,7 +42,9 @@ the op at tape[p], then p += 1 (a jump lands one past the partner).
 other head freely, which the immunity gadget's merge needs (see
 programs/fb1d-immunity-m2.py and docs/fb1d-port-plan.md).  The two
 bracket families are matched independently (own stacks); barriers
-empty both.
+empty both.  `P` / `Q` (v0.3) let b be a roaming garbage pointer with
+a fixed stomach under a, as fb2d's EX; the gadget's clean-path trace
+is then `P` on b's cell instead of moving the whole working frame.
 
 Guards (each makes the op a NOP, in both step and step_back):
   * a write to tape[p] of the executing IP (executing-cell guard)
@@ -88,9 +91,10 @@ import fb1d8
 
 # ─── Opcodes ────────────────────────────────────────────────────────
 
-OP_CHARS = '<>{}BA-+.,mIVj[]()'
+OP_CHARS = '<>{}BA-+.,mIVj[]()PQ'
 (OP_AL, OP_AR, OP_BL, OP_BR, OP_XL, OP_XR, OP_DEC, OP_INC, OP_DOT,
- OP_COMMA, OP_M, OP_I, OP_V, OP_J, OP_LB, OP_RB, OP_LP, OP_RP) = range(1, 19)
+ OP_COMMA, OP_M, OP_I, OP_V, OP_J, OP_LB, OP_RB, OP_LP, OP_RP,
+ OP_P, OP_Q) = range(1, 21)
 OP_DOC = [
     ('<', 'a -= 1'), ('>', 'a += 1'),
     ('{', 'b -= 1'), ('}', 'b += 1'),
@@ -106,6 +110,8 @@ OP_DOC = [
     (']', 'if payload(tape[a]) != 0: jump to matching ['),
     ('(', 'if payload(tape[b]) != 0: jump to matching )   (M2: b-tested bracket)'),
     (')', 'if payload(tape[b]) != 0: jump to matching (   (M2: b-tested bracket)'),
+    ('P', 'payload(tape[b]) += 1   (M2: fb2d P, for a roaming garbage pointer)'),
+    ('Q', 'payload(tape[b]) -= 1   (inverse of P)'),
     ('other', 'no-op (NOP filler `_` = payload 1017, boundary `~` = 0xFFFF)'),
 ]
 
@@ -271,6 +277,10 @@ class Machine:
             up = (op == OP_INC) != inverse
             v = t[a]
             self._write(ip, a, v ^ (INC_XOR if up else DEC_XOR)[_CELL_TO_PAYLOAD_RAW[v]])
+        elif op == OP_P or op == OP_Q:       # same, on b's cell
+            up = (op == OP_P) != inverse
+            v = t[ip.b]
+            self._write(ip, ip.b, v ^ (INC_XOR if up else DEC_XOR)[_CELL_TO_PAYLOAD_RAW[v]])
         elif op == OP_DOT:
             if a != ip.b:
                 self._write(ip, ip.b, t[ip.b] ^ t[a])
@@ -506,10 +516,11 @@ def ex_immunity(m):
     m.loop_stop = lay.p_start
     m.invalidate()
     lo, hi = lay.partner_range()
-    return dict(lo=lay.frame0 - 1, hi=lay.frame0 + 31,
-                note=f"frame [M s g] at {lay.frame0} (b on M, a on s), fuel to "
-                     f"{lay.p_lead - 1}, partner block {lo}..{hi} (ix on {lo}).\n"
-                     f"`loop` = run until p == {lay.p_start} (one full pass, ~{6370} "
+    return dict(lo=lay.s - 1, hi=lay.s + 31,
+                note=f"stomach s={lay.s} g={lay.g} (a on s), b on the last garbage "
+                     f"cell (starts at {lay.L0}), fuel to {lay.p_lead - 1}, partner "
+                     f"block {lo}..{hi} (ix on {lo}).\n"
+                     f"`loop` = run until p == {lay.p_start} (one full pass, ~4100 "
                      f"rounds).  Try: flip {lo + 20} 5, loop, d {lo} {hi}, noise 300 "
                      f"{lo} {hi}.")
 
@@ -597,7 +608,7 @@ def test_bijectivity():
     # arbitrary (corrupted) data under the data-touching ops
     rng = random.Random(7)
     junk = [rng.randrange(65536) for _ in range(3)]
-    for group in ('+-.,', 'mIVj', '[]<>', '(){}'):
+    for group in ('+-.,', 'mIVj', '[]<>', '(){}', 'PQ{}'):
         alpha = [OP_CELL[c] for c in group] + junk
         ok &= _exhaustive(3, alpha, f"{group}+junk")
     # random single-IP self-modifying runs on larger tapes
@@ -690,8 +701,22 @@ def test_b_brackets():
     m.ips[0].a, m.ips[0].b = 8, 9
     m.run(4)
     ok &= m.ips[0].b == 11 and m.ips[0].p == 4
+    # P / Q: payload arithmetic on b's cell, bijective on all 65536 values
+    m = Machine(16)
+    m.tape[0:4] = assemble('PPQP')
+    m.tape[9] = 0xFFFF ^ 0x0040                # boundary with a data-bit error
+    raw0, p0 = m.tape[9], m.peek(9)
+    m.ips[0].b = 9
+    m.run(2)
+    ok &= m.peek(9) == (p0 + 2) % 2048 and m.tape[9] != raw0
+    m.run(2)
+    ok &= m.peek(9) == (p0 + 2) % 2048 and m.ips[0].p == 4
+    for _ in range(4):
+        m.step_back_all()
+    ok &= m.tape[9] == raw0
     return _check(ok, "( ) brackets: enter on b==0, repeat while b!=0, "
-                      "a free inside; [ ] leaves b untested")
+                      "a free inside; [ ] leaves b untested; P/Q count on b's "
+                      "cell and reverse exactly")
 
 
 def test_ix_ops():

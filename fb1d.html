@@ -9,7 +9,8 @@
   bracket language that hosts the 1D Wikivore (see fb1d.py, docs/fb1d-port-plan.md,
   programs/fb1d-immunity-m2.py).  Self-contained; open this file directly.
   Own JavaScript interpreter, checked against fb1d.py (see "verify" in the
-  M2 notes of the port plan).  Authored or modified by Claude, 2026-09-28 v0.1.
+  M2 notes of the port plan).  Authored or modified by Claude, 2026-09-28 v0.1;
+  2026-09-30 v0.2: P/Q ops, fixed-stomach gadget.
 -->
 <style>
   :root {
@@ -111,6 +112,7 @@
     <span><b class="op-b">{ }</b> b</span>
     <span><b class="op-x">B A</b> ix</span>
     <span><b class="op-inc">- +</b> payload[a] &plusmn;1</span>
+    <span><b class="op-inc">Q P</b> payload[b] &plusmn;1</span>
     <span><b class="op-xor">. ,</b> xor a,b</span>
     <span><b class="op-ix">m I V j</b> via ix</span>
     <span><b class="op-br">[ ]</b> test a</span>
@@ -193,7 +195,7 @@
     <div class="note">Cells are 16-bit Hamming(16,11) words: 11 payload bits, 5 parity bits. The op is chosen from the raw payload by the [11,6,4] opcode code: one flipped payload bit still gives the same op, two give a no-op, and parity bits never affect fetch. Each step executes tape[p] then p += 1.
 
 <b class="op-a">&lt; &gt;</b> <b class="op-b">{ }</b> <b class="op-x">B A</b>  move a, b, ix by one
-<b class="op-inc">- +</b>  payload of tape[a] &minus;1 / +1 (parity kept valid)
+<b class="op-inc">- +</b>  payload of tape[a] &minus;1 / +1 (parity kept valid)     <b class="op-inc">Q P</b>  the same on tape[b]
 <b class="op-xor">.</b> tape[b] ^= tape[a]   <b class="op-xor">,</b> tape[a] ^= tape[b]   (raw 16 bits; no-op if a = b)
 <b class="op-ix">m</b> tape[a] ^= tape[ix]      <b class="op-ix">I</b> tape[a] ^= syndrome5(tape[ix])
 <b class="op-ix">V</b> tape[a] ^= 1 &lt;&lt; syndrome4(tape[ix])      <b class="op-ix">j</b> tape[ix] ^= tape[a]   (no-op if a = ix)
@@ -246,9 +248,10 @@ for (let v = 0; v < 65536; v++) {
 }
 
 // ------------------------------------------------------------ opcodes: fb2d payload codewords of the same chars
-const OP_CHARS = '<>{}BA-+.,mIVj[]()';
+const OP_CHARS = '<>{}BA-+.,mIVj[]()PQ';
 const OP_CW = { '<': 1880, '>': 1175, '{': 1376, '}': 1823, 'B': 250, 'A': 189, '-': 1232, '+': 975,
-                '.': 1297, ',': 1554, 'm': 821, 'I': 54, 'V': 568, 'j': 503, '[': 1758, ']': 1501, '(': 1954, ')': 1635 };
+                '.': 1297, ',': 1554, 'm': 821, 'I': 54, 'V': 568, 'j': 503, '[': 1758, ']': 1501, '(': 1954, ')': 1635,
+                'P': 1115, 'Q': 1052 };
 const NOP_FILLER = encode(1017), BOUNDARY = 0xFFFF;
 const OP_CELL = {}; for (const c of OP_CHARS) OP_CELL[c] = encode(OP_CW[c]);
 const PAYLOAD_OP = new Uint8Array(2048);        // 1-based index into OP_CHARS, 0 = no-op
@@ -311,6 +314,8 @@ class FB1D {
       case 'A': this.ix = (this.ix + s + N) % N; break;
       case '+': this.write(a, t[a] ^ (inv ? DEC : INC)[C2P[t[a]]]); break;
       case '-': this.write(a, t[a] ^ (inv ? INC : DEC)[C2P[t[a]]]); break;
+      case 'P': this.write(this.b, t[this.b] ^ (inv ? DEC : INC)[C2P[t[this.b]]]); break;
+      case 'Q': this.write(this.b, t[this.b] ^ (inv ? INC : DEC)[C2P[t[this.b]]]); break;
       case '.': if (a !== this.b) this.write(this.b, t[this.b] ^ t[a]); break;
       case ',': if (a !== this.b) this.write(a, t[a] ^ t[this.b]); break;
       case 'm': if (a !== this.ix) this.write(a, t[a] ^ t[this.ix]); break;
@@ -371,6 +376,7 @@ const OP_INFO = {
   '{': ['op-b', 'b -= 1'], '}': ['op-b', 'b += 1'],
   'B': ['op-x', 'ix -= 1'], 'A': ['op-x', 'ix += 1'],
   '-': ['op-inc', 'payload(tape[a]) -= 1'], '+': ['op-inc', 'payload(tape[a]) += 1'],
+  'P': ['op-inc', 'payload(tape[b]) += 1   (the garbage pointer\'s cell)'], 'Q': ['op-inc', 'payload(tape[b]) -= 1'],
   '.': ['op-xor', 'tape[b] ^= tape[a]   (no-op if a = b)'], ',': ['op-xor', 'tape[a] ^= tape[b]   (no-op if a = b)'],
   'm': ['op-ix', 'tape[a] ^= tape[ix]   (copy in / uncompute)'],
   'I': ['op-ix', 'tape[a] ^= syndrome5(tape[ix])   (probe: nonzero iff the ix cell has an error)'],
@@ -407,14 +413,14 @@ const ADD = (xoff, dst, label) => FOR(xoff, mv('a', dst) + '+' + mv('a', -dst), 
 
 // ------------------------------------------------------------ the M2 immunity gadget (programs/fb1d-immunity-m2.py)
 const WORK = [
-  ['  M += 1', '<+>'], ['  probe s ^= I', 'I'], ['  g = 1 iff clean', '[>+<]'], ['  a to g', '>'],
-  ['  dirty [', '['], ['    unprobe, mask, repair, bump', '<IVj+>'], ["    b to s', a to g'", '}}}>>'], ['  dirty ]', ']'],
-  ['  merge (+)', '(+)'], ['  clear flag', '-'], ['  a to s', '<'], ["  b to M' ({)", '({)'], ["  M += 1 / M' = 1", '<+>'],
+  ['  P: L += 1', 'P'], ['  probe s ^= I', 'I'], ['  g = 1 iff clean', '[>+<]'], ['  a to g', '>'],
+  ['  dirty [', '['], ['    unprobe, mask, repair, bump', '<IVj+'], ['    dump mask, b to fresh', '}.,}'], ['    a to g', '>'],
+  ['  dirty ]', ']'], ['  merge (+)', '(+)'], ['  clear flag', '-'], ['  a to s', '<'], ['  P: L += 1 / new L = 1', 'P'],
 ];
 const sweep = (dir, label) => [[label + ': test ~', 'm+'], [label + ' [', '['], [label + ': untest, step ix', '-m' + dir],
   ...WORK.map(([l, t]) => [label + l, t]), [label + ': test ~', 'm+'], [label + ' ]', ']'], [label + ': untest', '-m']];
 const gadgetSegments = () => [['outer [', '['], ['outer -', '-'], ...WORK.map(([l, t]) => ['rest' + l, t]),
-  ...sweep('A', 'scan'), ...sweep('B', 'rewind'), ["moult: b to s, M'=1, a to g", '}+>'], ['outer +', '+'], ['outer ]', ']']];
+  ...sweep('A', 'scan'), ...sweep('B', 'rewind'), ['moult: b on, L = 1', '}P'], ['outer +', '+'], ['outer ]', ']']];
 
 // ------------------------------------------------------------ examples
 // {doc, size, codeAt, segments, setup(m, codeEnd) -> {a, b, ix, p, labels, viewLo, viewHi, note, loopStop, regions}}
@@ -426,21 +432,21 @@ const EXAMPLES = {
     build(m0) {
       const code = assemble(gadgetSegments().map(s => s[1]).join(''));
       const FUEL = 90, L = code.length;
-      const frame0 = L + 3, pLead = frame0 + 3 + FUEL, pCode = pLead + 1, pTrail = pCode + L, N = pTrail + 1;
+      const s = L + 2, g = s + 1, L0 = g + 1, pLead = L0 + 1 + FUEL, pCode = pLead + 1, pTrail = pCode + L, N = pTrail + 1;
       const m = new FB1D(N);
       m.tape[0] = BOUNDARY; m.tape.set(code, 1); m.tape[L + 1] = BOUNDARY;
-      m.tape[frame0] = encode(1);
+      m.tape[L0] = encode(1);
       m.tape[pLead] = BOUNDARY; m.tape.set(code, pCode); m.tape[pTrail] = BOUNDARY;
-      m.a = frame0 + 1; m.b = frame0; m.ix = pLead; m.p = 3;
-      const labels = {};
+      m.a = s; m.b = L0; m.ix = pLead; m.p = 3;
+      const labels = { [s]: 's', [g]: 'g' };
       return { m, codeEnd: L + 2, labels, viewLo: 0, viewHi: N, loopStop: 3,
-        regions: { pblock: [pLead, pTrail], fuel: [frame0, pLead - 1] },
-        note: 'Layout: ~ gadget ~ [M s g] fuel... ~ partner (a copy of the gadget) ~.  Frame cells are labelled M, s, g\n' +
-              'relative to b (M) and a (s); they move right through the fuel: +1 per pass (the moult), +2 per correction.\n' +
-              'ix rests on the partner\'s leading ~ at ' + pLead + ' and sweeps to ' + pTrail + ' and back each pass.\n' +
-              'Try: click a partner cell, "flip bit of sel", then "next cell" repeatedly (or "one pass") and watch the frame.\n' +
-              'Red = nonzero syndrome: an error in the partner block, but also the garbage the trail is made of (masks are not codewords).\n' +
-              'A pass is ' + (2 * L + 3) + ' WORK visits, about 6400 steps; "play" at full speed takes a few seconds per pass.' };
+        regions: { pblock: [pLead, pTrail], fuel: [L0, pLead - 1] },
+        note: 'Layout: ~ gadget ~ [s g] L fuel... ~ partner (a copy of the gadget) ~.  The stomach s, g under head a is fixed.\n' +
+              'Head b sits on L, the last garbage cell (always nonzero); it moves right +1 per pass (the moult) and +2 per\n' +
+              'correction, leaving [mask, 1] behind.  ix rests on the partner\'s leading ~ at ' + pLead + ' and sweeps to ' + pTrail + ' and back.\n' +
+              'Try: click a partner cell, "flip bit of sel", then "next cell" repeatedly (or "one pass") and watch b and the trail.\n' +
+              'Red = nonzero syndrome: an error in the partner block, but also the mask cells in the trail (masks are not codewords).\n' +
+              'A pass is ' + (2 * L + 3) + ' WORK visits, about 4100 steps; "play" at full speed takes a couple of seconds per pass.' };
     }
   },
   copy: {
@@ -542,8 +548,7 @@ function segmentAt(p) {
 }
 function frameRole(addr) {
   if (exampleName !== 'immunity') return null;
-  if (addr === m.b) return 'M'; if (addr === m.a) return 's'; if (addr === m.a + 1 && m.a === m.b + 1) return 'g';
-  return null;
+  return addr === m.b ? 'L' : null;
 }
 function inRegion(name, addr) { const r = regions[name]; return r && addr >= r[0] && addr <= r[1]; }
 function jumpText(addr, op) {
@@ -556,7 +561,7 @@ function jumpText(addr, op) {
 }
 function describeCell(addr) {
   const v = m.tape[addr], op = opChar(v), lines = [];
-  const lab = labels[addr] ? '  "' + labels[addr] + '"' : (frameRole(addr) ? '  frame cell ' + frameRole(addr) : '');
+  const lab = labels[addr] ? '  "' + labels[addr] + '"' : (frameRole(addr) ? '  L: last garbage cell, under b' : '');
   lines.push('<span class="k">address</span> ' + addr + lab + (inRegion('pblock', addr) ? '  (partner block)' : inRegion('fuel', addr) ? '  (fuel / trail)' : ''));
   lines.push('<span class="k">raw</span>     0x' + v.toString(16).padStart(4, '0') + '  payload ' + C2P[v] + (C2P[v] === 2047 ? '  (boundary ~)' : ''));
   lines.push('<span class="k">hamming</span> ' + synText(v));
@@ -628,7 +633,8 @@ function updateStatus() {
           : ((hv & DATA_MASK) ? '  -> payload(tape[' + head + '])=' + C2P[hv] + ' so JUMP to ' + (partner + 1) : '  -> tape[' + head + '] is zero so fall through');
   }
   const s = segmentAt(m.p);
-  const fr = exampleName === 'immunity' && m.a === m.b + 1 ? '    frame at ' + m.b + ': M=' + C2P[m.tape[m.b]] + ' s=' + C2P[m.tape[m.a]] + ' g=' + C2P[m.tape[m.a + 1]] : '';
+  const sA = Object.keys(labels).find(k => labels[k] === 's');
+  const fr = exampleName === 'immunity' && sA ? '    stomach: s=' + C2P[m.tape[+sA]] + ' g=' + C2P[m.tape[+sA + 1]] + '   L (at b=' + m.b + ')=' + C2P[m.tape[m.b]] : '';
   $('status').textContent =
     'step ' + m.steps + '    p=' + m.p + '  a=' + m.a + '  b=' + m.b + '  ix=' + m.ix +
     '    payload[a]=' + C2P[m.tape[m.a]] + '  payload[b]=' + C2P[m.tape[m.b]] + '  ix cell: ' + synText(m.tape[m.ix]).split(' (')[0] + fr + '\n' +

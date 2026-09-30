@@ -233,28 +233,36 @@ Decisions, so later milestones don't reopen them:
 - **Guards** are exactly the list in Part 1, and `I` / `V` share `m`'s
   `a == ix` guard.
 
-## M2 status (done 2026-09-26) and decisions taken
+## M2 status (done 2026-09-26, revised 2026-09-30) and decisions taken
 
-`programs/fb1d-immunity-m2.py` builds and tests a 131-cell gadget that
+`programs/fb1d-immunity-m2.py` builds and tests a 106-cell gadget that
 corrects a static partner block (a copy of its own code, boundaries
-included).  `python3 programs/fb1d-immunity-m2.py` (~18 s) passes:
+included).  `python3 programs/fb1d-immunity-m2.py` (~14 s) passes:
 
-- every (cell, bit) single-bit error in the partner block, 2128 cases,
-  is corrected within one pass, with the frame healthy afterwards and
+- every (cell, bit) single-bit error in the partner block, 1728 cases,
+  is corrected within one pass, with the stomach zero afterwards and
   the trail contiguous nonzero; 40 of them stepped back to the initial
   state exactly;
-- two errors in one pass; 60 passes under 300 flips/1M noise (94 flips,
-  24 single-bit errors corrected, 0 missed), 383k-round exact reversal.
+- two errors in one pass; 60 passes under 300 flips/1M noise (64 flips,
+  19 single-bit errors corrected, 0 missed), 246k-round exact reversal.
 
 Measured costs:
 
 | Quantity | Value |
 |---|---|
-| Garbage per correction | 2 fuel cells (old marker `M`, bumped mask), same as fb2d's EV + PA |
-| Fuel per pass | 1 cell (the "moult" that resets `M`, see below) |
-| Steps per cell visit | ~24 clean (`WORK` is 34 ops; a skipped block costs one step) |
-| Steps per pass | 2L+3 visits, 6370 rounds at L = 131 |
-| Code size | 131 cells; both sweeps carry a full `WORK`, so ~40% is duplicated |
+| Garbage per correction | 2 fuel cells (bumped mask, new marker 1), same as fb2d's EV + PA |
+| Fuel per pass | 1 cell (the "moult" that resets the marker, see below) |
+| Steps per cell visit | ~19 clean (`WORK` is 26 ops; a skipped block costs one step) |
+| Steps per pass | 2L+3 visits, 4094 rounds at L = 106 |
+| Code size | 106 cells; both sweeps carry a full `WORK`, so ~50% is duplicated |
+
+The 2026-09-26 version (git history) had no `P`/`Q`; it carried the
+marker and stomach together as a 3-cell frame `[M s g]` that moved
+through the fuel, 131 cells and ~24 steps per visit.  The 2026-09-30
+revision adds fb2d's `P`/`Q` to fb1d and lays the gadget out as fb2d
+does: fixed stomach `[s g]` under `a`, head `b` roaming on the last
+garbage cell `L`.  Same garbage per correction and per pass; fixed
+addresses for anything M4 adds to the stomach.
 
 Decisions:
 
@@ -262,6 +270,11 @@ Decisions:
   matching stack, barriers empty both stacks).  Not for head shuffling
   but for the merge: a block that tests `a` can move `b` to any cell
   without testing it, and vice versa.  `fb1d.py --test` covers them.
+- **`P` / `Q` on `b`: added** (fb2d opcode numbers 27/28, payload
+  arithmetic on `tape[b]`, executing-cell guard only).  This is what
+  lets the stomach stay put: the clean-path trace becomes `P` on `b`'s
+  cell, as fb2d's `P` on EX, instead of `a` incrementing a marker it
+  has to stand next to.  fb1d now has 20 ops (7680 live words).
 - **The merge needs a clean-path trace, as in fb2d.**  Exhaustive
   scratch searches over all `[ ]`/`( )` programs up to 9 ops, with the
   garbage trail modelled as a periodic pattern, found no way to bring
@@ -269,19 +282,21 @@ Decisions:
   clean path writes nothing.  The reason is that every block exits with
   its tested head on a zero cell, so the last conditional leaves both
   cases on cells of the same type.  fb2d pays this with `P` on the EX
-  cell on the bypass path; fb1d pays with `M += 2` per clean cell
-  (`<+>` at both ends of `WORK`), where `M` is the marker cell under
-  `b` whose zero-ness is the merge witness.
-- **`M` is bounded by a pass-end moult**, `}+>`: b and a step right by
-  one, the old `s` becomes `M' = 1`, the old `g` becomes `s'`.  One
-  fuel cell per pass; `M` stays in `[1, 4L+5]` and never wraps.  The
-  alternative, decrementing during the rewind, fails when the
-  correction happens on the first scanned cell (`M` lands on 0).
-- **Frame, not stomach.**  The working cells `[M s g]` move right
-  through the fuel with the garbage (2 cells per correction) left
-  behind; there is no fixed stomach and no walking.  All code is
-  position-relative.  Hence the free-food cheat for M4 must refill
-  *ahead* of the frame.
+  cell on the bypass path; fb1d pays the same way: `P` at both ends of
+  `WORK`, so `L` (the last garbage cell, under `b`) gains 2 per clean
+  cell.  Its zero-ness is the merge witness: a dirty cell leaves `b` on
+  a fresh zero, `(+)` fires, and the closing `P` makes that cell the
+  new `L = 1`.
+- **`L` is bounded by a pass-end moult**, `}P`: `b` steps onto the next
+  fresh cell, which becomes `L = 1`.  One fuel cell per pass; `L` stays
+  in `[1, 4L_p+5]` and never wraps.  The alternative, `Q` during the
+  rewind, fails when the correction happens on the first scanned cell
+  (`L` lands on 0).
+- **Fixed stomach, roaming `b`.**  `s` and `g` have fixed addresses;
+  `b` roams right through the fuel as fb2d's EX, leaving 2 garbage
+  cells per correction and 1 per pass.  All code is position-relative
+  to the stomach.  The free-food cheat for M4 must refill *ahead* of
+  `b`.
 - **`WORK` runs in both sweep directions and before every boundary
   test**, so a data-bit flip on a `~` is repaired before it can
   misdirect `ix`.  Coverage is therefore fb2d-v3-style ping-pong (each
