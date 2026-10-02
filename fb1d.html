@@ -15,6 +15,8 @@
   pre-v0.2 label, so each click ran the 200000-step cap).
   Cell editor: `^n` really flips bit n (it was flipped twice), and selecting a
   cell without changing it no longer re-encodes it as a clean codeword.
+  2026-10-02 v0.4: "blank" example for writing your own programs: code, data
+  and heads fields build a fresh tape (remembered in this browser).
 -->
 <style>
   :root {
@@ -102,6 +104,17 @@
   #segments .lab { width: 200px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
   #segments .txt { color: #555; overflow: hidden; text-overflow: ellipsis; }
   .note { font-size: 12.5px; color: #444; white-space: pre-wrap; margin-top: 6px; }
+  #codeText { width: 100%; min-height: 70px; font: 13px ui-monospace, Menlo, Consolas, monospace; padding: 6px;
+              border: 1px solid #bbb; border-radius: 6px; resize: vertical; }
+  .authgrid { display: grid; grid-template-columns: max-content 1fr; gap: 4px 8px; align-items: center; margin-top: 6px; }
+  .authgrid[hidden] { display: none; }
+  .authgrid label { font-size: 12px; color: var(--muted); text-align: right; }
+  .authgrid input { font: 13px ui-monospace, Menlo, Consolas, monospace; padding: 4px 6px; border: 1px solid #bbb;
+                    border-radius: 6px; min-width: 0; }
+  .authgrid input[type=number] { width: 90px; }
+  .authmsg { font-size: 12.5px; margin-top: 6px; white-space: pre-wrap; }
+  .authmsg.err { color: #b0202a; }
+  .authmsg.ok { color: var(--muted); }
   .cellEdit { width: 26px; font: 12px ui-monospace, monospace; text-align: center; padding: 0; }
   kbd { font: 11px ui-monospace, monospace; border: 1px solid #ccc; border-bottom-width: 2px;
         border-radius: 3px; padding: 0 4px; background: #f7f7f7; }
@@ -175,12 +188,21 @@
   </section>
 
   <section class="panel">
-    <h2>Code (editable)</h2>
+    <h2 id="codeTitle">Code (editable)</h2>
     <textarea id="codeText" spellcheck="false"></textarea>
+    <div class="authgrid" id="authFields" hidden>
+      <label for="authData">data</label>
+      <input id="authData" spellcheck="false" autocomplete="off" placeholder="e.g.  20=5,6,7,8   40=300^6">
+      <label for="authHeads">heads</label>
+      <input id="authHeads" spellcheck="false" autocomplete="off" placeholder="e.g.  a=20 b=30 ix=40">
+      <label for="authSize">tape size</label>
+      <input id="authSize" type="number" min="8" max="4096" value="64">
+    </div>
     <div class="controls" style="margin-top:6px">
       <button id="btnLoadCode">load code at address 1 (keeps data, IP to 1)</button>
       <span class="sub" style="color:var(--muted);font-size:12px">Ops, plus <b>~</b> boundary, <b>_</b> NOP filler, <b>0</b> zero; whitespace ignored.</span>
     </div>
+    <div class="authmsg" id="authMsg"></div>
     <div class="note" id="note"></div>
   </section>
 </div>
@@ -429,6 +451,12 @@ const gadgetSegments = () => [['outer [', '['], ['outer -', '-'], ...WORK.map(([
 // ------------------------------------------------------------ examples
 // {doc, size, codeAt, segments, setup(m, codeEnd) -> {a, b, ix, p, labels, viewLo, viewHi, note, loopStop, regions}}
 const EXAMPLES = {
+  blank: {
+    doc: 'blank tape: write your own code, data and heads',
+    codeAt: 0, size: null,
+    segments: () => [['your code', auth.code.replace(/\s+/g, '')]],
+    build: buildBlank,
+  },
   immunity: {
     doc: 'M2 immunity gadget: one gadget correcting a static partner block',
     codeAt: 1, size: null,
@@ -493,6 +521,69 @@ const EXAMPLES = {
   },
 };
 
+// ------------------------------------------------------------ blank tape authoring
+// The "blank" example builds a fresh tape from three fields: code (at address 0),
+// data ("20=5,6,7,8" sets cells 20..23 to those payloads as clean codewords;
+// "40=300^6" sets 40 to 300 then flips bit 6; "0^1" flips bit 1 of whatever is
+// in cell 0) and heads ("a=20 b=30 ix=40 p=0"; unnamed heads start at 0).
+// What is typed there is remembered in this browser, so reset and reload keep it.
+const AUTH_KEY = 'fb1d-workbench-blank-v1';
+const AUTH_DEFAULT = { code: '', data: '', heads: 'a=20 b=30 ix=40', size: 64 };
+let auth = Object.assign({}, AUTH_DEFAULT);
+try { Object.assign(auth, JSON.parse(localStorage.getItem(AUTH_KEY) || '{}')); } catch (e) {}
+function saveAuth() { try { localStorage.setItem(AUTH_KEY, JSON.stringify(auth)); } catch (e) {} }
+
+function buildBlank() {
+  const errs = [];
+  let code = [];
+  try { code = assemble(auth.code); }
+  catch (e) { errs.push('code: ' + e.message + ' (code not loaded)'); }
+  let N = Math.max(8, Math.min(4096, Math.floor(+auth.size) || 64));
+  if (code.length + 1 > N) { N = code.length + 16; errs.push('tape size raised to ' + N + ' to fit the code'); }
+  const m = new FB1D(N);
+  m.tape.set(code, 0);
+  const valRe = /^(\d+)((?:\^\d+)*)$/;
+  const flipsOf = f => f ? f.slice(1).split('^').map(Number) : [];
+  const flip = (addr, bits) => { for (const k of bits) { if (k > 15) throw new Error('bit ' + k + ' (bits are 0-15)'); m.tape[addr] ^= 1 << k; } };
+  for (const tok of auth.data.split(/\s+/).filter(Boolean)) {
+    try {
+      const eq = tok.indexOf('=');
+      if (eq < 0) {                                     // 40^6: flip bits of the existing cell
+        const mm = valRe.exec(tok); if (!mm || !mm[2]) throw new Error('expected addr=value or addr^bit');
+        const addr = +mm[1]; if (addr >= N) throw new Error('address ' + addr + ' is off the tape (0-' + (N - 1) + ')');
+        flip(addr, flipsOf(mm[2]));
+      } else {                                          // 20=5,6,7  or  40=300^6
+        const addr = +tok.slice(0, eq); if (!/^\d+$/.test(tok.slice(0, eq))) throw new Error('bad address');
+        tok.slice(eq + 1).split(',').forEach((v, i) => {
+          const at = addr + i; if (at >= N) throw new Error('address ' + at + ' is off the tape (0-' + (N - 1) + ')');
+          const mm = valRe.exec(v);
+          if (mm) { if (+mm[1] > 2047) throw new Error('payload ' + mm[1] + ' (payloads are 0-2047)');
+                    const bits = flipsOf(mm[2]); if (bits.some(k => k > 15)) throw new Error('bits are 0-15');
+                    m.tape[at] = encode(+mm[1]); flip(at, bits); }
+          else if (v.length === 1 && (v in OP_CELL || '~_'.includes(v))) m.tape[at] = assemble(v)[0];
+          else throw new Error('value "' + v + '" is not a payload number or op');
+        });
+      }
+    } catch (e) { errs.push('data "' + tok + '": ' + e.message + ' (skipped)'); }
+  }
+  for (const tok of auth.heads.split(/[\s,]+/).filter(Boolean)) {
+    const mm = /^(a|b|ix|p)=(\d+)$/.exec(tok);
+    if (!mm) { errs.push('heads "' + tok + '": expected a=N, b=N, ix=N or p=N (skipped)'); continue; }
+    if (+mm[2] >= N) { errs.push('heads "' + tok + '": off the tape (0-' + (N - 1) + ') (skipped)'); continue; }
+    m[mm[1]] = +mm[2];
+  }
+  m.mt = null;
+  const msg = errs.length ? errs.join('\n')
+    : 'fresh ' + N + '-cell tape: code in 0-' + Math.max(0, code.length - 1) + (code.length ? '' : ' (no code)') +
+      ', heads a=' + m.a + ' b=' + m.b + ' ix=' + m.ix + ', IP at ' + m.p + '.';
+  return { m, codeEnd: code.length, labels: {}, viewLo: 0, viewHi: N, loopStop: code.length,
+    authMsg: msg, authErr: errs.length > 0,
+    note: 'Blank tape. Code goes at address 0. "build" (or reset) makes a fresh tape from the code, data and heads fields.\n' +
+          'data: 20=5,6,7,8 puts payloads 5,6,7,8 in cells 20-23 (clean); 40=300^6 puts 300 in cell 40 then flips bit 6;\n' +
+          '      0^1 flips bit 1 of cell 0 (e.g. damage your own code).  heads: a=20 b=30 ix=40 (p=0 is the default IP).\n' +
+          '"run to p =" is preset to the end of your code.  Your fields are remembered in this browser.' };
+}
+
 // ------------------------------------------------------------ state
 let m, segments = [], codeAt = 0, codeEnd = 0, labels = {}, regions = {}, loopStop = 1;
 let exampleName = 'immunity', selected = null, timer = null;
@@ -517,7 +608,15 @@ function loadExample(name) {
   m.steps = 0; m.mt = null;
   labels = info.labels || {}; regions = info.regions || {}; loopStop = info.loopStop || 0;
   $('viewLo').value = info.viewLo || 0; $('viewHi').value = info.viewHi;
-  $('codeText').value = segments.map(s => s[1]).join('');
+  const blank = name === 'blank';
+  $('codeText').value = blank ? auth.code : segments.map(s => s[1]).join('');
+  if (blank) { $('authData').value = auth.data; $('authHeads').value = auth.heads; $('authSize').value = auth.size; }
+  $('authFields').hidden = !blank;
+  $('codeTitle').textContent = blank ? 'Your program (blank tape)' : 'Code (editable)';
+  $('btnLoadCode').textContent = blank ? 'build a fresh tape from these fields' : 'load code at address ' + codeAt + ' (keeps data, IP to ' + codeAt + ')';
+  $('btnLoadCode').classList.toggle('primary', blank);
+  $('authMsg').textContent = info.authMsg || ''; $('authMsg').className = 'authmsg ' + (info.authErr ? 'err' : 'ok');
+  try { localStorage.setItem('fb1d-workbench-example', name); } catch (e) {}
   $('note').textContent = info.note || '';
   $('runTo').value = loopStop;
   selected = null;
@@ -748,7 +847,9 @@ function setNoise(on) {
 // ------------------------------------------------------------ wiring
 const sel = $('exampleSel');
 for (const [k, ex] of Object.entries(EXAMPLES)) { const o = document.createElement('option'); o.value = k; o.textContent = k + ' — ' + ex.doc; sel.appendChild(o); }
-sel.value = 'immunity';
+let startExample = 'immunity';
+try { const saved = localStorage.getItem('fb1d-workbench-example'); if (saved && EXAMPLES[saved]) startExample = saved; } catch (e) {}
+sel.value = startExample;
 sel.addEventListener('change', () => loadExample(sel.value));
 $('btnReset').addEventListener('click', () => loadExample(exampleName));
 $('btnStep').addEventListener('click', () => { stopPlay(); runSteps(1, false); });
@@ -760,7 +861,19 @@ $('btnRunTo').addEventListener('click', e => { if (e.target.tagName === 'INPUT')
 $('btnPlay').addEventListener('click', () => play(false));
 $('btnPlayBack').addEventListener('click', () => play(true));
 $('btnNoise').addEventListener('click', () => setNoise(!m.noise));
-$('btnLoadCode').addEventListener('click', loadCodeFromText);
+$('btnLoadCode').addEventListener('click', () => exampleName === 'blank' ? loadExample('blank') : loadCodeFromText());
+const authSync = () => {
+  if (exampleName !== 'blank') return;
+  auth.code = $('codeText').value; auth.data = $('authData').value; auth.heads = $('authHeads').value; auth.size = +$('authSize').value || 64;
+  saveAuth();
+};
+['codeText', 'authData', 'authHeads', 'authSize'].forEach(id => {
+  $(id).addEventListener('input', authSync);
+  $(id).addEventListener('keydown', e => {                // Enter (Ctrl/Cmd+Enter in the code box) builds
+    const go = e.key === 'Enter' && (e.ctrlKey || e.metaKey || id !== 'codeText');   // plain Enter in the one-line fields
+    if (go && exampleName === 'blank') { e.preventDefault(); authSync(); loadExample('blank'); }
+  });
+});
 $('viewLo').addEventListener('change', renderAll);
 $('viewHi').addEventListener('change', renderAll);
 $('perRow').addEventListener('change', renderAll);
@@ -777,7 +890,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'n') { stopPlay(); runUntilSegment(isWorkStart); }
   if (e.key === ' ') { e.preventDefault(); play(false); }
 });
-loadExample('immunity');
+loadExample(startExample);
 </script>
 </body>
 </html>

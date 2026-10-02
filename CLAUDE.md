@@ -90,6 +90,9 @@ fb2d is a 2D reversible esoteric language where:
   nonzero syndrome, heads a/b/ix/IP, stomach cells labelled s/g, hover
   inspector with Hamming diagnosis and jump prediction, click a cell to
   edit or flip a bit, "next cell" / "one pass", reversible noise.
+  The "blank" example is for writing your own programs: code, data
+  (`20=5,6,7,8`, `40=300^6`, `0^1`) and heads (`a=20 b=30 ix=40`)
+  fields build a fresh tape; the fields are remembered in the browser.
 - **`fb1d8.py`** — fb1d8 (formerly RBFF): the 8-bit didactic 1D
   reversible, valid-everywhere, Turing-complete BFF variant (XOR
   copying, symmetric bracket conditions, executing-byte guard).
