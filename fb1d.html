@@ -11,6 +11,8 @@
   Own JavaScript interpreter, checked against fb1d.py (see "verify" in the
   M2 notes of the port plan).  Authored or modified by Claude, 2026-09-28 v0.1;
   2026-09-30 v0.2: P/Q ops, fixed-stomach gadget.
+  2026-10-02 v0.3: "next cell" stops once per partner cell (it searched for a
+  pre-v0.2 label, so each click ran the 200000-step cap).
 -->
 <style>
   :root {
@@ -698,11 +700,14 @@ function runUntil(p, back, max = 2e6) {
   do { back ? m.back() : m.step(); n++; } while (m.p !== p && n < max);
   refresh(); return n;
 }
-function runUntilSegment(prefix, max = 2e5) {          // next entry into a segment whose label contains prefix
+function runUntilSegment(test, max = 2e5) {            // next entry into a segment whose label passes test
   let n = 0;
-  do { m.step(); n++; const s = segmentAt(m.p); if (s && s.off === 0 && s.label.includes(prefix)) break; } while (n < max);
+  do { m.step(); n++; const s = segmentAt(m.p); if (s && s.off === 0 && test(s.label)) break; } while (n < max);
   refresh(); return n;
 }
+// A WORK block (one partner cell) starts at its first `P`, labelled "...P: L += 1".
+// Its last `P` is labelled "...P: L += 1 / new L = 1", so match the end of the label.
+const isWorkStart = label => label.endsWith('P: L += 1');
 function stopPlay() { if (timer) { clearInterval(timer); timer = null; } $('btnPlay').textContent = '▶ play'; $('btnPlayBack').textContent = '◀ play backward'; }
 function play(back) {
   if (timer) { stopPlay(); return; }
@@ -740,7 +745,7 @@ $('btnReset').addEventListener('click', () => loadExample(exampleName));
 $('btnStep').addEventListener('click', () => { stopPlay(); runSteps(1, false); });
 $('btnBack').addEventListener('click', () => { stopPlay(); runSteps(1, true); });
 $('btnStepN').addEventListener('click', e => { if (e.target.tagName === 'INPUT') return; stopPlay(); runSteps(+$('nSteps').value || 1, false); });
-$('btnCell').addEventListener('click', () => { stopPlay(); runUntilSegment('M += 1'); });
+$('btnCell').addEventListener('click', () => { stopPlay(); runUntilSegment(isWorkStart); });
 $('btnLoop').addEventListener('click', () => { stopPlay(); runUntil(loopStop, false); });
 $('btnRunTo').addEventListener('click', e => { if (e.target.tagName === 'INPUT') return; stopPlay(); runUntil(+$('runTo').value || 0, false); });
 $('btnPlay').addEventListener('click', () => play(false));
@@ -760,7 +765,7 @@ document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.key === 'ArrowRight' || e.key === 's') { stopPlay(); runSteps(1, false); }
   if (e.key === 'ArrowLeft' || e.key === 'b') { stopPlay(); runSteps(1, true); }
-  if (e.key === 'n') { stopPlay(); runUntilSegment('M += 1'); }
+  if (e.key === 'n') { stopPlay(); runUntilSegment(isWorkStart); }
   if (e.key === ' ') { e.preventDefault(); play(false); }
 });
 loadExample('immunity');
