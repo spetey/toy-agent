@@ -13,6 +13,8 @@
   2026-09-30 v0.2: P/Q ops, fixed-stomach gadget.
   2026-10-02 v0.3: "next cell" stops once per partner cell (it searched for a
   pre-v0.2 label, so each click ran the 200000-step cap).
+  Cell editor: `^n` really flips bit n (it was flipped twice), and selecting a
+  cell without changing it no longer re-encodes it as a clean codeword.
 -->
 <style>
   :root {
@@ -680,8 +682,15 @@ function onClick(addr) {
   inp.title = 'op char, ~, _, a payload number, or ^n to flip bit n';
   inp.value = cellChar(m.tape[addr]) !== '·' && opChar(m.tape[addr]) ? opChar(m.tape[addr]) : C2P[m.tape[addr]];
   ve.textContent = ''; ve.appendChild(inp); inp.focus(); inp.select();
+  // done() runs once: Enter/Escape re-render the cell, which blurs the input and
+  // would call it again (flipping a ^n bit back).  An unchanged value is not
+  // committed, so selecting a cell never re-encodes it (which would clean an error).
+  const initial = inp.value;
+  let finished = false;
   const done = commit => {
-    if (commit) {
+    if (finished) return;
+    finished = true;
+    if (commit && inp.value.trim() !== String(initial)) {
       const s = inp.value.trim();
       if (/^\^\d+$/.test(s)) m.poke(addr, m.tape[addr] ^ (1 << (+s.slice(1) & 15)));
       else if (/^\d+$/.test(s)) m.poke(addr, encode(+s & 2047));
