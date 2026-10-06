@@ -19,6 +19,8 @@
   and heads fields build a fresh tape (remembered in this browser).
   2026-10-06 v0.5: on the blank tape, play / run to p / one pass / step N stop
   when the program reaches the end of its code (and play backward at step 0).
+  The "run to p" and "step" number boxes sit beside their buttons, not inside
+  them (clicking the box inside the button did nothing); Enter in a box runs it.
 -->
 <style>
   :root {
@@ -47,6 +49,8 @@
     font: inherit; padding: 4px 10px; border: 1px solid #bbb; border-radius: 6px;
     background: #fff; cursor: pointer; }
   .controls input[type=number] { width: 84px; }
+  .controls .combo { display: inline-flex; align-items: center; gap: 4px; }
+  .controls .combo input[type=number] { width: 64px; }
   .controls input[type=range] { width: 110px; }
   button:hover { background: #f3f3f3; }
   button.primary { background: #2b5fb3; color: #fff; border-color: #2b5fb3; }
@@ -154,10 +158,10 @@
       <span style="width:8px"></span>
       <button id="btnBack" title="step back (deductive)">&#9664; back</button>
       <button id="btnStep" class="primary" title="step forward">step &#9654;</button>
-      <button id="btnStepN">step <input id="nSteps" type="number" value="10" min="1"></button>
+      <span class="combo"><button id="btnStepN" title="take this many steps">step &times;</button><input id="nSteps" type="number" value="10" min="1" title="number of steps (Enter runs them)"></span>
       <button id="btnCell" title="run to the start of the next WORK block (next partner cell)">next cell</button>
       <button id="btnLoop" title="run until the IP returns to the start of the outer loop body">one pass</button>
-      <button id="btnRunTo">run to p = <input id="runTo" type="number" value="0" min="0"></button>
+      <span class="combo"><button id="btnRunTo" title="run until the IP reaches this address">run to p =</button><input id="runTo" type="number" value="0" min="0" title="target address (Enter runs)"></span>
       <span style="width:8px"></span>
       <button id="btnPlay">&#9654; play</button>
       <button id="btnPlayBack">&#9664; play backward</button>
@@ -876,10 +880,12 @@ sel.addEventListener('change', () => loadExample(sel.value));
 $('btnReset').addEventListener('click', () => loadExample(exampleName));
 $('btnStep').addEventListener('click', () => { stopPlay(); runSteps(1, false); });
 $('btnBack').addEventListener('click', () => { stopPlay(); runSteps(1, true); });
-$('btnStepN').addEventListener('click', e => { if (e.target.tagName === 'INPUT') return; stopPlay(); runSteps(+$('nSteps').value || 1, false); });
+$('btnStepN').addEventListener('click', () => { stopPlay(); runSteps(+$('nSteps').value || 1, false); });
+$('nSteps').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnStepN').click(); });
 $('btnCell').addEventListener('click', () => { stopPlay(); runUntilSegment(isWorkStart); });
 $('btnLoop').addEventListener('click', () => { stopPlay(); runUntil(loopStop, false); });
-$('btnRunTo').addEventListener('click', e => { if (e.target.tagName === 'INPUT') return; stopPlay(); runUntil(+$('runTo').value || 0, false); });
+$('btnRunTo').addEventListener('click', () => { stopPlay(); runUntil(+$('runTo').value || 0, false); });
+$('runTo').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnRunTo').click(); });
 $('btnPlay').addEventListener('click', () => play(false));
 $('btnPlayBack').addEventListener('click', () => play(true));
 $('btnNoise').addEventListener('click', () => setNoise(!m.noise));
