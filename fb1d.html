@@ -17,6 +17,8 @@
   cell without changing it no longer re-encodes it as a clean codeword.
   2026-10-02 v0.4: "blank" example for writing your own programs: code, data
   and heads fields build a fresh tape (remembered in this browser).
+  2026-10-06 v0.5: on the blank tape, play / run to p / one pass / step N stop
+  when the program reaches the end of its code (and play backward at step 0).
 -->
 <style>
   :root {
@@ -741,7 +743,10 @@ function updateStatus() {
   $('status').textContent =
     'step ' + m.steps + '    p=' + m.p + '  a=' + m.a + '  b=' + m.b + '  ix=' + m.ix +
     '    payload[a]=' + C2P[m.tape[m.a]] + '  payload[b]=' + C2P[m.tape[m.b]] + '  ix cell: ' + synText(m.tape[m.ix]).split(' (')[0] + fr + '\n' +
-    'next: ' + next + (s ? '\nin segment: ' + s.label.trim() : (m.p < codeAt || m.p >= codeEnd ? '\nIP is outside the code' : ''));
+    'next: ' + next + (s ? '\nin segment: ' + s.label.trim()
+      : halts() && m.p === codeEnd ? '\nFinished: the IP has reached the end of your code (' + m.steps + ' steps). back or play backward rewinds; reset starts again.'
+      : halts() && m.p > codeEnd ? '\nThe IP is past the end of your code, running empty cells and data as ops. The run buttons won\'t go further; reset starts again.'
+      : (m.p < codeAt || m.p >= codeEnd ? '\nIP is outside the code' : ''));
   $('selAddr').textContent = selected === null ? 'none' : selected + (labels[selected] ? ' (' + labels[selected] + ')' : '');
   $('noiseInfo').textContent = m.noise ? 'flips so far: ' + m.noise.total : '';
 }
@@ -802,10 +807,24 @@ function onClick(addr) {
 }
 
 // ------------------------------------------------------------ running
-function runSteps(n, back) { for (let i = 0; i < n; i++) back ? m.back() : m.step(); refresh(); }
+// On the blank tape a program finishes when the IP reaches the end of its code.  The
+// run buttons (play, run to p, one pass, step N) stop there going forward and at
+// step 0 going backward, instead of wrapping round the tape and running it again.
+// Single step / back still go anywhere.
+const halts = () => exampleName === 'blank' && codeEnd > 0;
+const finished = () => halts() && m.p >= codeEnd;
+const atStart = () => halts() && m.steps <= 0;
+function runSteps(n, back) {
+  for (let i = 0; i < n; i++) {
+    if (n > 1 && (back ? atStart() : finished())) break;
+    back ? m.back() : m.step();
+  }
+  refresh();
+}
 function runUntil(p, back, max = 2e6) {
   let n = 0;
-  do { back ? m.back() : m.step(); n++; } while (m.p !== p && n < max);
+  if (back ? atStart() : finished()) { refresh(); return 0; }
+  do { back ? m.back() : m.step(); n++; } while (m.p !== p && n < max && !(back ? atStart() : finished()));
   refresh(); return n;
 }
 function runUntilSegment(test, max = 2e5) {            // next entry into a segment whose label passes test
@@ -819,11 +838,14 @@ const isWorkStart = label => label.endsWith('P: L += 1');
 function stopPlay() { if (timer) { clearInterval(timer); timer = null; } $('btnPlay').textContent = '▶ play'; $('btnPlayBack').textContent = '◀ play backward'; }
 function play(back) {
   if (timer) { stopPlay(); return; }
+  const done = () => back ? atStart() : finished();
+  if (done()) { refresh(); return; }
   (back ? $('btnPlayBack') : $('btnPlay')).textContent = '⏸ pause';
   const tick = () => {
     const sp = +$('speed').value;
     const batch = sp < 50 ? 1 : Math.round(Math.pow(10, (sp - 50) / 20));  // 1 .. 316 per tick
-    for (let i = 0; i < batch; i++) back ? m.back() : m.step();
+    for (let i = 0; i < batch && !done(); i++) back ? m.back() : m.step();
+    if (done()) stopPlay();
     refresh();
   };
   const restart = () => {
