@@ -21,6 +21,8 @@
   when the program reaches the end of its code (and play backward at step 0).
   The "run to p" and "step" number boxes sit beside their buttons, not inside
   them (clicking the box inside the button did nothing); Enter in a box runs it.
+  "go to step N" steps forward or back until the step counter reads N (on the
+  blank tape it still stops at the end of the program and at step 0).
 -->
 <style>
   :root {
@@ -162,6 +164,7 @@
       <button id="btnCell" title="run to the start of the next WORK block (next partner cell)">next cell</button>
       <button id="btnLoop" title="run until the IP returns to the start of the outer loop body">one pass</button>
       <span class="combo"><button id="btnRunTo" title="run until the IP reaches this address">run to p =</button><input id="runTo" type="number" value="0" min="0" title="target address (Enter runs)"></span>
+      <span class="combo"><button id="btnGoStep" title="step forward or back until the step counter reads this number">go to step</button><input id="goStep" type="number" value="0" title="step number (Enter goes there)"></span>
       <span style="width:8px"></span>
       <button id="btnPlay">&#9654; play</button>
       <button id="btnPlayBack">&#9664; play backward</button>
@@ -831,6 +834,12 @@ function runUntil(p, back, max = 2e6) {
   do { back ? m.back() : m.step(); n++; } while (m.p !== p && n < max && !(back ? atStart() : finished()));
   refresh(); return n;
 }
+function goToStep(target, max = 2e6) {              // forward or back, by the step counter
+  let n = 0;
+  while (m.steps < target && !finished() && n++ < max) m.step();
+  while (m.steps > target && !atStart() && n++ < max) m.back();
+  refresh();
+}
 function runUntilSegment(test, max = 2e5) {            // next entry into a segment whose label passes test
   let n = 0;
   do { m.step(); n++; const s = segmentAt(m.p); if (s && s.off === 0 && test(s.label)) break; } while (n < max);
@@ -886,6 +895,8 @@ $('btnCell').addEventListener('click', () => { stopPlay(); runUntilSegment(isWor
 $('btnLoop').addEventListener('click', () => { stopPlay(); runUntil(loopStop, false); });
 $('btnRunTo').addEventListener('click', () => { stopPlay(); runUntil(+$('runTo').value || 0, false); });
 $('runTo').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnRunTo').click(); });
+$('btnGoStep').addEventListener('click', () => { stopPlay(); goToStep(Math.trunc(+$('goStep').value || 0)); });
+$('goStep').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnGoStep').click(); });
 $('btnPlay').addEventListener('click', () => play(false));
 $('btnPlayBack').addEventListener('click', () => play(true));
 $('btnNoise').addEventListener('click', () => setNoise(!m.noise));
