@@ -88,7 +88,8 @@ fb2d is a 2D reversible esoteric language where:
   the file directly). Own JS interpreter verified against `fb1d.py`.
   Loads the M2 immunity gadget by default: color-coded ops, red for
   nonzero syndrome, heads a/b/ix/IP, stomach cells labelled s/g, hover
-  inspector with Hamming diagnosis and jump prediction, click a cell to
+  inspector with the raw bits (parity bits and a flipped bit marked),
+  Hamming diagnosis and jump prediction, click a cell to
   edit or flip a bit, "next cell" / "one pass", reversible noise.
   The "blank" example is for writing your own programs: code, data
   (`20=5,6,7,8`, `40=300^6`, `0^1`) and heads (`a=20 b=30 ix=40`)

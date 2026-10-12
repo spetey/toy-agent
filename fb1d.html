@@ -23,6 +23,8 @@
   them (clicking the box inside the button did nothing); Enter in a box runs it.
   "go to step N" steps forward or back until the step counter reads N (on the
   blank tape it still stops at the end of the program and at step 0).
+  2026-10-12 v0.6: the inspector shows the 16 raw bits (parity bits marked p,
+  a single flipped bit marked ^ in red) and the 11 data bits read as the payload.
 -->
 <style>
   :root {
@@ -102,6 +104,9 @@
   #inspector { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
                min-height: 150px; white-space: pre-wrap; }
   #inspector .k { color: var(--muted); }
+  #inspector .pb { background: #f8cfa6; }                       /* parity bit */
+  #inspector .eb { background: #ffb3b3; color: #a00010; font-weight: 700; }  /* the flipped bit */
+  #inspector .em { color: #c0202a; font-weight: 700; }
   #segments { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
               max-height: 420px; overflow: auto; }
   #segments div { padding: 1px 4px; border-radius: 3px; cursor: pointer; white-space: nowrap;
@@ -671,11 +676,32 @@ function jumpText(addr, op) {
   return '<span class="k">partner</span> ' + other + ' at ' + partner + '\n<span class="k">now</span>     payload(tape[' + head + ']) = ' + C2P[hv] +
          (nz ? ' -> would jump, landing at ' + ((partner + 1) % m.N) : ' -> would fall through to ' + ((addr + 1) % m.N));
 }
+// The 16 raw bits, bit 15 on the left, in groups of four.  Parity bits (0, 1, 2, 4, 8)
+// are tinted and marked p underneath; with a 1-bit error the flipped bit is red and
+// marked ^.  Then the 11 data bits d10..d0, which read as the payload.
+const PARITY_POS = [0, 1, 2, 4, 8];
+function bitsLines(v) {
+  const [s, pa] = syndrome(v), bad = pa ? s : -1;     // odd parity: one flip, at bit s
+  let bits = '', marks = '';
+  for (let k = 15; k >= 0; k--) {
+    const par = PARITY_POS.includes(k);
+    bits += '<span class="' + (k === bad ? 'eb' : par ? 'pb' : '') + '">' + ((v >> k) & 1) + '</span>';
+    marks += k === bad ? '<span class="em">^</span>' : par ? 'p' : '·';
+    if (k && k % 4 === 0) { bits += ' '; marks += ' '; }
+  }
+  let data = '';
+  for (let i = 10; i >= 0; i--) data += (v >> DATA_POS[i]) & 1;
+  return ['<span class="k">bits</span>    ' + bits,
+          '        ' + marks,
+          '<span class="k">        bit 15 ... 0   p: parity' + (bad >= 0 ? '   ^: bit ' + bad : '') + '</span>',
+          '<span class="k">data</span>    ' + data + ' = ' + C2P[v] + '  <span class="k">(d10 ... d0)</span>'];
+}
 function describeCell(addr) {
   const v = m.tape[addr], op = opChar(v), lines = [];
   const lab = labels[addr] ? '  "' + labels[addr] + '"' : (frameRole(addr) ? '  L: last garbage cell, under b' : '');
   lines.push('<span class="k">address</span> ' + addr + lab + (inRegion('pblock', addr) ? '  (partner block)' : inRegion('fuel', addr) ? '  (fuel / trail)' : ''));
   lines.push('<span class="k">raw</span>     0x' + v.toString(16).padStart(4, '0') + '  payload ' + C2P[v] + (C2P[v] === 2047 ? '  (boundary ~)' : ''));
+  lines.push(...bitsLines(v));
   lines.push('<span class="k">hamming</span> ' + synText(v));
   lines.push('<span class="k">as op</span>   ' + (op ? '<b class="' + OP_INFO[op][0] + '">' + op + '</b>  ' + OP_INFO[op][1] : (v === NOP_FILLER ? 'NOP filler' : 'no-op')));
   if (addr >= codeAt && addr < codeEnd) { const s = segmentAt(addr); if (s) lines.push('<span class="k">segment</span> ' + s.label.trim() + '  (+' + s.off + ')'); }
