@@ -25,6 +25,10 @@
   blank tape it still stops at the end of the program and at step 0).
   2026-10-12 v0.6: the inspector shows the 16 raw bits (parity bits marked p,
   a single flipped bit marked ^ in red) and the 11 data bits read as the payload.
+  2026-10-12 v0.7: your own notes on the tape: shift-click selects a range;
+  "label" names a cell (or t0 t1 ... along a range), "mark range" names and
+  colours a range, listed under Program Segments.  Kept per example in this
+  browser.
 -->
 <style>
   :root {
@@ -116,6 +120,11 @@
   #segments .off { color: var(--muted); width: 34px; text-align: right; flex: none; }
   #segments .lab { width: 200px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
   #segments .txt { color: #555; overflow: hidden; text-overflow: ellipsis; }
+  #segments .markhead { margin-top: 8px; padding: 2px 4px; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+                        font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); cursor: default; }
+  #segments .markhead:hover { background: none; }
+  #segments .rm { margin-left: auto; flex: none; border: none; background: none; color: var(--muted); padding: 0 4px; cursor: pointer; }
+  #segments .rm:hover { color: #b0202a; }
   .note { font-size: 12.5px; color: #444; white-space: pre-wrap; margin-top: 6px; }
   #codeText { width: 100%; min-height: 70px; font: 13px ui-monospace, Menlo, Consolas, monospace; padding: 6px;
               border: 1px solid #bbb; border-radius: 6px; resize: vertical; }
@@ -197,6 +206,13 @@
       <button id="btnBsel">b &rarr; sel</button>
       <button id="btnXsel">ix &rarr; sel</button>
       <button id="btnPsel">IP &rarr; sel</button>
+    </div>
+    <div class="controls" style="margin-bottom:8px">
+      <label>note <input id="noteText" maxlength="12" spellcheck="false" autocomplete="off" style="width:90px"
+             title="a short label (about 5 characters show under a cell)"></label>
+      <button id="btnLabel" title="label the selected cell; on a range, t becomes t0 t1 t2 ...; empty clears">label</button>
+      <button id="btnMark" title="name and colour the selected range (listed under Program Segments); empty removes marks there">mark range</button>
+      <span class="sub" style="color:var(--muted);font-size:12px">click a cell, then shift-click another to select a range</span>
     </div>
     <div id="tape"></div>
   </section>
@@ -598,6 +614,41 @@ function buildBlank() {
           '"run to p =" is preset to the end of your code.  Your fields are remembered in this browser.' };
 }
 
+// ------------------------------------------------------------ your notes: labels and marked ranges
+// Kept per example in localStorage, apart from the tape, so reset and rebuilds keep them.
+// Your labels show instead of the example's own (s, g, bit0, ...) on the same cell.
+const NOTES_KEY = 'fb1d-workbench-notes-v1';
+let notesAll = {};
+try { notesAll = JSON.parse(localStorage.getItem(NOTES_KEY) || '{}') || {}; } catch (e) {}
+function notes() { return notesAll[exampleName] || (notesAll[exampleName] = { labels: {}, marks: [] }); }
+function saveNotes() { try { localStorage.setItem(NOTES_KEY, JSON.stringify(notesAll)); } catch (e) {} }
+const MARK_COLORS = ['#e8862e', '#2e9e8f', '#c2459a', '#6c8f1f', '#4f6fd6', '#b8862b', '#d0505a', '#7b5bc7'];
+function labelOf(addr) { const own = notes().labels[addr]; return own !== undefined ? own : labels[addr]; }
+function markAt(addr) { const ms = notes().marks; for (let i = ms.length - 1; i >= 0; i--) if (addr >= ms[i].lo && addr <= ms[i].hi) return ms[i]; return null; }
+let selEnd = null;                                    // shift-click: the selection runs from selected to selEnd
+function selRange() { if (selected === null) return null; const e = selEnd === null ? selected : selEnd; return [Math.min(selected, e), Math.max(selected, e)]; }
+function applyLabel() {
+  const r = selRange(), t = $('noteText').value.trim(); if (!r) return;
+  const L = notes().labels;
+  for (let i = r[0]; i <= r[1]; i++) {
+    if (!t) delete L[i];
+    else L[i] = r[0] === r[1] ? t : t + (i - r[0]);
+  }
+  saveNotes(); refresh();
+}
+function applyMark() {
+  const r = selRange(), t = $('noteText').value.trim(); if (!r) return;
+  const n = notes();
+  if (!t) n.marks = n.marks.filter(mk => mk.hi < r[0] || mk.lo > r[1]);              // empty: remove marks here
+  else {
+    n.marks = n.marks.filter(mk => !(mk.lo === r[0] && mk.hi === r[1]));
+    const used = new Set(n.marks.map(mk => mk.color));
+    const color = MARK_COLORS.find(c => !used.has(c)) || MARK_COLORS[n.marks.length % MARK_COLORS.length];
+    n.marks.push({ lo: r[0], hi: r[1], name: t, color });
+  }
+  saveNotes(); refresh();
+}
+
 // ------------------------------------------------------------ state
 let m, segments = [], codeAt = 0, codeEnd = 0, labels = {}, regions = {}, loopStop = 1;
 let exampleName = 'immunity', selected = null, timer = null;
@@ -633,7 +684,7 @@ function loadExample(name) {
   try { localStorage.setItem('fb1d-workbench-example', name); } catch (e) {}
   $('note').textContent = info.note || '';
   $('runTo').value = loopStop;
-  selected = null;
+  selected = null; selEnd = null;
   setNoise(false);
   renderAll();
 }
@@ -698,7 +749,9 @@ function bitsLines(v) {
 }
 function describeCell(addr) {
   const v = m.tape[addr], op = opChar(v), lines = [];
-  const lab = labels[addr] ? '  "' + labels[addr] + '"' : (frameRole(addr) ? '  L: last garbage cell, under b' : '');
+  const lb = labelOf(addr), mk = markAt(addr);
+  const lab = (lb ? '  "' + lb + '"' : (frameRole(addr) ? '  L: last garbage cell, under b' : '')) +
+              (mk ? '  [' + mk.name + ' ' + mk.lo + '-' + mk.hi + ']' : '');
   lines.push('<span class="k">address</span> ' + addr + lab + (inRegion('pblock', addr) ? '  (partner block)' : inRegion('fuel', addr) ? '  (fuel / trail)' : ''));
   lines.push('<span class="k">raw</span>     0x' + v.toString(16).padStart(4, '0') + '  payload ' + C2P[v] + (C2P[v] === 2047 ? '  (boundary ~)' : ''));
   lines.push(...bitsLines(v));
@@ -728,7 +781,7 @@ function buildTape() {
       c.innerHTML = '<div class="seg-tick"></div><div class="v"></div><div class="lab"></div><div class="heads"></div>';
       c.addEventListener('mouseenter', () => onHover(i));
       c.addEventListener('mouseleave', () => onHover(null));
-      c.addEventListener('click', () => onClick(i));
+      c.addEventListener('click', e => onClick(i, e));
       row.appendChild(c); cellEls[i] = c;
     }
     tapeEl.appendChild(row);
@@ -738,7 +791,7 @@ const SEG_COLORS = ['#7aa7e8', '#c19be0', '#8fd19a', '#f2b56b', '#f39aa0', '#9ad
 function updateCells() {
   const mt = m.matches();
   const cur = segmentAt(m.p);
-  const ipPartner = isBr(m.tape[m.p]) ? mt[m.p] : -1;
+  const ipPartner = isBr(m.tape[m.p]) ? mt[m.p] : -1, sr = selRange();
   for (let i = 0; i < cellEls.length; i++) {
     const c = cellEls[i]; if (!c) continue;
     const v = m.tape[i], op = opChar(v), inCode = i >= codeAt && i < codeEnd;
@@ -749,15 +802,17 @@ function updateCells() {
     if (inCode || inRegion('pblock', i) || C2P[v] === 2047) { ve.textContent = cellChar(v); ve.className = 'v ' + cellClass(v); }
     else { ve.textContent = C2P[v]; ve.className = 'v' + (op ? ' ' + OP_INFO[op][0] : ''); }
     const role = frameRole(i);
-    c.children[2].textContent = labels[i] || role || (inCode || inRegion('pblock', i) ? '' : (op ? op : ''));
+    c.children[2].textContent = labelOf(i) || role || (inCode || inRegion('pblock', i) ? '' : (op ? op : ''));
     if (role) c.classList.add('frame');
     if (s || pa) c.classList.add('dirty');
     const sg = inCode ? segmentAt(i) : null;
-    c.children[0].style.background = sg ? SEG_COLORS[sg.i % SEG_COLORS.length] : 'transparent';
+    const mk = markAt(i);
+    c.children[0].style.background = mk ? mk.color : sg ? SEG_COLORS[sg.i % SEG_COLORS.length] : 'transparent';
+    if (mk) c.classList.add('marked');
     if (cur && sg && sg.i === cur.i) c.classList.add('segcur');
     if (i === m.p) c.classList.add('ip');
     if (i === ipPartner) c.classList.add('partner');
-    if (i === selected) c.classList.add('sel');
+    if (sr && i >= sr[0] && i <= sr[1]) c.classList.add('sel');
     c.children[3].innerHTML = (i === m.a ? '<i class="a"></i>' : '') + (i === m.b ? '<i class="b"></i>' : '') +
                               (i === m.ix ? '<i class="x"></i>' : '') + (i === m.p ? '<i class="p"></i>' : '');
   }
@@ -776,11 +831,12 @@ function updateStatus() {
   $('status').textContent =
     'step ' + m.steps + '    p=' + m.p + '  a=' + m.a + '  b=' + m.b + '  ix=' + m.ix +
     '    payload[a]=' + C2P[m.tape[m.a]] + '  payload[b]=' + C2P[m.tape[m.b]] + '  ix cell: ' + synText(m.tape[m.ix]).split(' (')[0] + fr + '\n' +
-    'next: ' + next + (s ? '\nin segment: ' + s.label.trim()
+    'next: ' + next + (markAt(m.p) ? '\nin your mark: ' + markAt(m.p).name : '') + (s ? '\nin segment: ' + s.label.trim()
       : halts() && m.p === codeEnd ? '\nFinished: the IP has reached the end of your code (' + m.steps + ' steps). back or play backward rewinds; reset starts again.'
       : halts() && m.p > codeEnd ? '\nThe IP is past the end of your code, running empty cells and data as ops. The run buttons won\'t go further; reset starts again.'
       : (m.p < codeAt || m.p >= codeEnd ? '\nIP is outside the code' : ''));
-  $('selAddr').textContent = selected === null ? 'none' : selected + (labels[selected] ? ' (' + labels[selected] + ')' : '');
+  const sr = selRange(), sl = selected === null ? null : labelOf(selected);
+  $('selAddr').textContent = !sr ? 'none' : sr[0] === sr[1] ? sr[0] + (sl ? ' (' + sl + ')' : '') : sr[0] + '-' + sr[1] + ' (' + (sr[1] - sr[0] + 1) + ' cells)';
   $('noiseInfo').textContent = m.noise ? 'flips so far: ' + m.noise.total : '';
 }
 function updateSegments() {
@@ -801,6 +857,25 @@ function updateSegments() {
     off += len;
   });
   if (cur) { const c = el.children[cur.i]; if (c) c.scrollIntoView({ block: 'nearest' }); }
+  const ms = notes().marks.slice().sort((x, y) => x.lo - y.lo);
+  if (ms.length) {
+    const h = document.createElement('div'); h.className = 'markhead'; h.textContent = 'your marks'; el.appendChild(h);
+    ms.forEach(mk => {
+      const d = document.createElement('div');
+      if (m.p >= mk.lo && m.p <= mk.hi) d.className = 'cur';
+      d.innerHTML = '<span class="off"></span><span class="lab" style="border-left:3px solid ' + mk.color + ';padding-left:4px"></span>' +
+                    '<span class="txt"></span><button class="rm" title="remove this mark">&times;</button>';
+      d.children[0].textContent = mk.lo; d.children[1].textContent = mk.name;
+      d.children[2].textContent = mk.lo === mk.hi ? '1 cell' : mk.lo + '-' + mk.hi + ' (' + (mk.hi - mk.lo + 1) + ' cells)';
+      d.addEventListener('mouseenter', () => highlightRange(mk.lo, mk.hi + 1, true));
+      d.addEventListener('mouseleave', () => highlightRange(mk.lo, mk.hi + 1, false));
+      d.addEventListener('click', e => {
+        if (e.target.classList.contains('rm')) { notes().marks = notes().marks.filter(x => x !== mk); saveNotes(); refresh(); return; }
+        selected = mk.lo; selEnd = mk.hi; $('noteText').value = mk.name; refresh();
+      });
+      el.appendChild(d);
+    });
+  }
 }
 function highlightRange(s, e, on) { for (let i = s; i < e; i++) if (cellEls[i]) cellEls[i].classList.toggle('hover', on); }
 function renderAll() { buildTape(); updateCells(); updateStatus(); updateSegments(); }
@@ -812,8 +887,9 @@ function onHover(addr) {
   document.querySelectorAll('.cell.partner-h').forEach(e => e.classList.remove('partner-h', 'partner'));
   if (isBr(m.tape[addr])) { const p = m.matches()[addr]; if (p >= 0 && cellEls[p]) cellEls[p].classList.add('partner', 'partner-h'); }
 }
-function onClick(addr) {
-  selected = addr; updateCells(); updateStatus();
+function onClick(addr, e) {
+  if (e && e.shiftKey && selected !== null) { selEnd = addr; updateCells(); updateStatus(); return; }
+  selected = addr; selEnd = null; updateCells(); updateStatus();
   const c = cellEls[addr], ve = c.children[1];
   const inp = document.createElement('input'); inp.className = 'cellEdit';
   inp.title = 'op char, ~, _, a payload number, or ^n to flip bit n';
@@ -944,6 +1020,9 @@ $('viewHi').addEventListener('change', renderAll);
 $('perRow').addEventListener('change', renderAll);
 $('btnFlip').addEventListener('click', () => {
   if (selected !== null) { m.poke(selected, m.tape[selected] ^ (1 << (+$('flipBit').value & 15))); refresh(); } });
+$('btnLabel').addEventListener('click', applyLabel);
+$('btnMark').addEventListener('click', applyMark);
+$('noteText').addEventListener('keydown', e => { if (e.key === 'Enter') applyLabel(); });
 $('btnAsel').addEventListener('click', () => { if (selected !== null) { m.a = selected; refresh(); } });
 $('btnBsel').addEventListener('click', () => { if (selected !== null) { m.b = selected; refresh(); } });
 $('btnXsel').addEventListener('click', () => { if (selected !== null) { m.ix = selected; refresh(); } });
