@@ -96,7 +96,9 @@ fb2d is a 2D reversible esoteric language where:
   fields build a fresh tape; the fields are remembered in the browser.
   Your own notes: shift-click selects a range; "label" names a cell (or
   t0 t1 ... along a range) and "mark range" names and colours a range,
-  listed under Program Segments; kept per example in the browser.
+  listed under Program Segments.  On the blank tape they are the labels
+  (`20=s 30..33=t`) and marks (`0..4=ifz`) fields, which the buttons edit;
+  on the other examples they are kept per example in the browser.
 - **`fb1d8.py`** — fb1d8 (formerly RBFF): the 8-bit didactic 1D
   reversible, valid-everywhere, Turing-complete BFF variant (XOR
   copying, symmetric bracket conditions, executing-byte guard).

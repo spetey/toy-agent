@@ -27,8 +27,9 @@
   a single flipped bit marked ^ in red) and the 11 data bits read as the payload.
   2026-10-12 v0.7: your own notes on the tape: shift-click selects a range;
   "label" names a cell (or t0 t1 ... along a range), "mark range" names and
-  colours a range, listed under Program Segments.  Kept per example in this
-  browser.
+  colours a range, listed under Program Segments.  On the blank tape they live
+  in the labels and marks fields (the buttons edit those fields); on the other
+  examples they are kept per example in this browser.
 -->
 <style>
   :root {
@@ -225,6 +226,10 @@
       <input id="authData" spellcheck="false" autocomplete="off" placeholder="e.g.  20=5,6,7,8   40=300^6">
       <label for="authHeads">heads</label>
       <input id="authHeads" spellcheck="false" autocomplete="off" placeholder="e.g.  a=20 b=30 ix=40">
+      <label for="authLabels">labels</label>
+      <input id="authLabels" spellcheck="false" autocomplete="off" placeholder="e.g.  20=s 21=g   30..33=t  (t0 t1 t2 t3)">
+      <label for="authMarks">marks</label>
+      <input id="authMarks" spellcheck="false" autocomplete="off" placeholder="e.g.  0..4=ifz   30..33=run">
       <label for="authSize">tape size</label>
       <input id="authSize" type="number" min="8" max="4096" value="64">
     </div>
@@ -558,7 +563,7 @@ const EXAMPLES = {
 // in cell 0) and heads ("a=20 b=30 ix=40 p=0"; unnamed heads start at 0).
 // What is typed there is remembered in this browser, so reset and reload keep it.
 const AUTH_KEY = 'fb1d-workbench-blank-v1';
-const AUTH_DEFAULT = { code: '', data: '', heads: 'a=20 b=30 ix=40', size: 64 };
+const AUTH_DEFAULT = { code: '', data: '', heads: 'a=20 b=30 ix=40', labels: '', marks: '', size: 64 };
 let auth = Object.assign({}, AUTH_DEFAULT);
 try { Object.assign(auth, JSON.parse(localStorage.getItem(AUTH_KEY) || '{}')); } catch (e) {}
 function saveAuth() { try { localStorage.setItem(AUTH_KEY, JSON.stringify(auth)); } catch (e) {} }
@@ -611,24 +616,89 @@ function buildBlank() {
     note: 'Blank tape. Code goes at address 0. "build" (or reset) makes a fresh tape from the code, data and heads fields.\n' +
           'data: 20=5,6,7,8 puts payloads 5,6,7,8 in cells 20-23 (clean); 40=300^6 puts 300 in cell 40 then flips bit 6;\n' +
           '      0^1 flips bit 1 of cell 0 (e.g. damage your own code).  heads: a=20 b=30 ix=40 (p=0 is the default IP).\n' +
+          'labels: 20=s 21=g, or 30..33=t (t0..t3); marks: 0..4=ifz names and colours cells 0-4. These two take effect as you type.\n' +
           '"run to p =" is preset to the end of your code.  Your fields are remembered in this browser.' };
 }
 
 // ------------------------------------------------------------ your notes: labels and marked ranges
-// Kept per example in localStorage, apart from the tape, so reset and rebuilds keep them.
+// On the blank tape the notes ARE the labels and marks fields: they are part of your
+// program's description, like code, data and heads, and take effect as you type (no
+// rebuild).  The label / mark range buttons just edit those fields.  On the other
+// examples they are kept per example in localStorage, apart from the tape.
 // Your labels show instead of the example's own (s, g, bit0, ...) on the same cell.
+//   labels: 20=s  20=s,g (cells 20, 21)  30..33=t (t0 t1 t2 t3)     marks: 3..7=ifz  12=x
 const NOTES_KEY = 'fb1d-workbench-notes-v1';
 let notesAll = {};
 try { notesAll = JSON.parse(localStorage.getItem(NOTES_KEY) || '{}') || {}; } catch (e) {}
-function notes() { return notesAll[exampleName] || (notesAll[exampleName] = { labels: {}, marks: [] }); }
-function saveNotes() { try { localStorage.setItem(NOTES_KEY, JSON.stringify(notesAll)); } catch (e) {} }
 const MARK_COLORS = ['#e8862e', '#2e9e8f', '#c2459a', '#6c8f1f', '#4f6fd6', '#b8862b', '#d0505a', '#7b5bc7'];
+let notesCache = { key: null, val: null, errs: [] };
+function parseNotes(labelsText, marksText) {
+  const labs = {}, marks = [], errs = [];
+  const range = (r, tok, what) => {
+    const mm = /^(\d+)(?:\.\.(\d+))?$/.exec(r);
+    if (!mm) { errs.push(what + ' "' + tok + '": expected addr=name or lo..hi=name (skipped)'); return null; }
+    const lo = +mm[1], hi = mm[2] === undefined ? lo : +mm[2];
+    if (hi < lo) { errs.push(what + ' "' + tok + '": range runs backwards (skipped)'); return null; }
+    return [lo, hi];
+  };
+  for (const tok of labelsText.split(/\s+/).filter(Boolean)) {
+    const eq = tok.indexOf('='), name = tok.slice(eq + 1);
+    if (eq < 1 || !name) { errs.push('labels "' + tok + '": expected addr=name (skipped)'); continue; }
+    const r = range(tok.slice(0, eq), tok, 'labels'); if (!r) continue;
+    const names = name.split(',');
+    if (names.length > 1) names.forEach((nm, i) => { if (nm) labs[r[0] + i] = nm; });   // 20=s,g
+    else if (r[0] === r[1]) labs[r[0]] = name;                                           // 20=s
+    else for (let i = r[0]; i <= r[1]; i++) labs[i] = name + (i - r[0]);                 // 30..33=t
+  }
+  for (const tok of marksText.split(/\s+/).filter(Boolean)) {
+    const eq = tok.indexOf('='), name = tok.slice(eq + 1);
+    if (eq < 1 || !name) { errs.push('marks "' + tok + '": expected lo..hi=name (skipped)'); continue; }
+    const r = range(tok.slice(0, eq), tok, 'marks'); if (!r) continue;
+    marks.push({ lo: r[0], hi: r[1], name, color: MARK_COLORS[marks.length % MARK_COLORS.length] });
+  }
+  return { val: { labels: labs, marks }, errs };
+}
+function notes() {
+  if (exampleName === 'blank') {
+    const key = auth.labels + '\u0000' + auth.marks;
+    if (notesCache.key !== key) { const r = parseNotes(auth.labels, auth.marks); notesCache = { key, val: r.val, errs: r.errs }; }
+    return notesCache.val;
+  }
+  return notesAll[exampleName] || (notesAll[exampleName] = { labels: {}, marks: [] });
+}
+// write notes back: into the fields on the blank tape (runs of t0 t1 ... become lo..hi=t)
+function saveNotes() {
+  if (exampleName !== 'blank') { try { localStorage.setItem(NOTES_KEY, JSON.stringify(notesAll)); } catch (e) {} return; }
+  const n = notesCache.val, L = n.labels, addrs = Object.keys(L).map(Number).sort((x, y) => x - y), out = [];
+  for (let k = 0; k < addrs.length;) {
+    const a0 = addrs[k], mm = /^(.*?)0$/.exec(L[a0]);
+    let j = k;
+    if (mm && mm[1]) while (j + 1 < addrs.length && addrs[j + 1] === addrs[j] + 1 && L[addrs[j + 1]] === mm[1] + (j + 1 - k)) j++;
+    if (j > k) { out.push(a0 + '..' + addrs[j] + '=' + mm[1]); k = j + 1; }
+    else { out.push(a0 + '=' + L[a0]); k++; }
+  }
+  auth.labels = out.join(' ');
+  auth.marks = n.marks.map(mk => (mk.lo === mk.hi ? mk.lo : mk.lo + '..' + mk.hi) + '=' + mk.name).join(' ');
+  $('authLabels').value = auth.labels; $('authMarks').value = auth.marks;
+  saveAuth();
+  notesCache = { key: null };
+  showNotesErrors();
+}
+let lastBuildMsg = { text: '', err: false };
+function showNotesErrors() {
+  if (exampleName !== 'blank') return;
+  notes();
+  const errs = notesCache.errs || [];
+  $('authMsg').textContent = errs.length ? errs.join('\n') : lastBuildMsg.text;
+  $('authMsg').className = 'authmsg ' + (errs.length || lastBuildMsg.err ? 'err' : 'ok');
+}
 function labelOf(addr) { const own = notes().labels[addr]; return own !== undefined ? own : labels[addr]; }
 function markAt(addr) { const ms = notes().marks; for (let i = ms.length - 1; i >= 0; i--) if (addr >= ms[i].lo && addr <= ms[i].hi) return ms[i]; return null; }
 let selEnd = null;                                    // shift-click: the selection runs from selected to selEnd
 function selRange() { if (selected === null) return null; const e = selEnd === null ? selected : selEnd; return [Math.min(selected, e), Math.max(selected, e)]; }
 function applyLabel() {
   const r = selRange(), t = $('noteText').value.trim(); if (!r) return;
+  if (exampleName === 'blank' && /[\s=,]/.test(t)) { $('authMsg').textContent = 'a label cannot contain spaces, = or ,'; return; }
   const L = notes().labels;
   for (let i = r[0]; i <= r[1]; i++) {
     if (!t) delete L[i];
@@ -638,6 +708,7 @@ function applyLabel() {
 }
 function applyMark() {
   const r = selRange(), t = $('noteText').value.trim(); if (!r) return;
+  if (exampleName === 'blank' && /[\s=]/.test(t)) { $('authMsg').textContent = 'a mark name cannot contain spaces or ='; return; }
   const n = notes();
   if (!t) n.marks = n.marks.filter(mk => mk.hi < r[0] || mk.lo > r[1]);              // empty: remove marks here
   else {
@@ -675,12 +746,15 @@ function loadExample(name) {
   $('viewLo').value = info.viewLo || 0; $('viewHi').value = info.viewHi;
   const blank = name === 'blank';
   $('codeText').value = blank ? auth.code : segments.map(s => s[1]).join('');
-  if (blank) { $('authData').value = auth.data; $('authHeads').value = auth.heads; $('authSize').value = auth.size; }
+  if (blank) { $('authData').value = auth.data; $('authHeads').value = auth.heads; $('authSize').value = auth.size;
+               $('authLabels').value = auth.labels; $('authMarks').value = auth.marks; }
   $('authFields').hidden = !blank;
   $('codeTitle').textContent = blank ? 'Your program (blank tape)' : 'Code (editable)';
   $('btnLoadCode').textContent = blank ? 'build a fresh tape from these fields' : 'load code at address ' + codeAt + ' (keeps data, IP to ' + codeAt + ')';
   $('btnLoadCode').classList.toggle('primary', blank);
   $('authMsg').textContent = info.authMsg || ''; $('authMsg').className = 'authmsg ' + (info.authErr ? 'err' : 'ok');
+  lastBuildMsg = { text: info.authMsg || '', err: !!info.authErr };
+  if (blank) showNotesErrors();
   try { localStorage.setItem('fb1d-workbench-example', name); } catch (e) {}
   $('note').textContent = info.note || '';
   $('runTo').value = loopStop;
@@ -1006,8 +1080,10 @@ $('btnLoadCode').addEventListener('click', () => exampleName === 'blank' ? loadE
 const authSync = () => {
   if (exampleName !== 'blank') return;
   auth.code = $('codeText').value; auth.data = $('authData').value; auth.heads = $('authHeads').value; auth.size = +$('authSize').value || 64;
+  auth.labels = $('authLabels').value; auth.marks = $('authMarks').value;
   saveAuth();
 };
+['authLabels', 'authMarks'].forEach(id => $(id).addEventListener('input', () => { authSync(); showNotesErrors(); refresh(); }));
 ['codeText', 'authData', 'authHeads', 'authSize'].forEach(id => {
   $(id).addEventListener('input', authSync);
   $(id).addEventListener('keydown', e => {                // Enter (Ctrl/Cmd+Enter in the code box) builds
