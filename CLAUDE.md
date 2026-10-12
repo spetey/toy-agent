@@ -75,7 +75,7 @@ fb2d is a 2D reversible esoteric language where:
   barriers, multi-IP, NoisePool
   noise. Program text may also spell ops by readable names (`a< a>`
   `b< b>` `i< i>` `a- a+` `b- b+` `b^=a a^=b` `a^=i i^=a` `syn mask`
-  `[a ]a` `[b ]b`, space separated) with `#` comments; the cells are
+  `a0[ ]a0` `b0[ ]b0`, space separated) with `#` comments; the cells are
   identical either way. REPL: `python3 fb1d.py` (`load immunity` for
   the M2 gadget; `names` lists the names).
   Tests: `python3 fb1d.py --test [--long]`. Decisions and per-milestone

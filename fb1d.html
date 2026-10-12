@@ -25,7 +25,7 @@
   blank tape it still stops at the end of the program and at step 0).
   2026-10-12 v0.6: the inspector shows the 16 raw bits (parity bits marked p,
   a single flipped bit marked ^ in red) and the 11 data bits read as the payload.
-  2026-10-12 v0.7: readable op names (a< a+ b^=a syn [a ...) and # comments in
+  2026-10-12 v0.7: readable op names (a< a+ b^=a syn a0[ ...) and # comments in
   program text, as in fb1d.py v0.4; "show op names" switches the display.
 -->
 <style>
@@ -151,8 +151,8 @@
     <span><b class="op-inc" data-names="b- b+">Q P</b> payload[b] &plusmn;1</span>
     <span><b class="op-xor" data-names="b^=a a^=b">. ,</b> xor a,b</span>
     <span><b class="op-ix" data-names="a^=i syn mask i^=a">m I V j</b> via ix</span>
-    <span><b class="op-br" data-names="[a ]a">[ ]</b> test a</span>
-    <span><b class="op-brb" data-names="[b ]b">( )</b> test b</span>
+    <span><b class="op-br" data-names="a0[ ]a0">[ ]</b> test a</span>
+    <span><b class="op-brb" data-names="b0[ ]b0">( )</b> test b</span>
     <span><b class="op-bound">~</b> boundary</span>
     <span><b class="op-nop">&middot;</b> no-op</span>
     <span><i class="dot" style="background:var(--head-a)"></i> a &nbsp;<i class="dot" style="background:var(--head-b)"></i> b &nbsp;
@@ -250,7 +250,7 @@
 
 <b>Names</b> (type either form; separate names with spaces; # starts a comment):
 <b class="op-a">a&lt; a&gt;</b> <b class="op-b">b&lt; b&gt;</b> <b class="op-x">i&lt; i&gt;</b> = &lt; &gt; { } B A    <b class="op-inc">a- a+ b- b+</b> = - + Q P
-<b class="op-xor">b^=a a^=b</b> = . ,    <b class="op-ix">a^=i i^=a syn mask</b> = m j I V    <b class="op-br">[a ]a</b> <b class="op-brb">[b ]b</b> = [ ] ( )
+<b class="op-xor">b^=a a^=b</b> = . ,    <b class="op-ix">a^=i i^=a syn mask</b> = m j I V    <b class="op-br">a0[ ]a0</b> <b class="op-brb">b0[ ]b0</b> = [ ] ( )   (0: the value that lets the IP in and out)
 
 A block enters only when the tested cell is zero and repeats while it is nonzero. A <b class="op-bound">~</b> cell (payload 2047) is a barrier: brackets never pair across it. A write to the IP's own cell is a no-op. Every step is a bijection, so <i>back</i> is deductive.</div>
   </section>
@@ -320,7 +320,7 @@ const opChar = v => CELL_OP[v] ? OP_CHARS[CELL_OP[v] - 1] : null;
 // symbol, so a token is a name if it is in the table, else a run of symbols.
 const OP_NAMES = { '<': 'a<', '>': 'a>', '{': 'b<', '}': 'b>', 'B': 'i<', 'A': 'i>',
   '-': 'a-', '+': 'a+', 'Q': 'b-', 'P': 'b+', '.': 'b^=a', ',': 'a^=b', 'm': 'a^=i', 'j': 'i^=a',
-  'I': 'syn', 'V': 'mask', '[': '[a', ']': ']a', '(': '[b', ')': ']b' };
+  'I': 'syn', 'V': 'mask', '[': 'a0[', ']': ']a0', '(': 'b0[', ')': ']b0' };
 const NAME_TO_OP = {}; for (const c in OP_NAMES) NAME_TO_OP[OP_NAMES[c]] = c;
 // Program text -> cells.  Tokens are separated by whitespace; # starts a comment to the
 // end of the line; a token is an op name or a run of symbols (op chars, ~, _, 0).

@@ -58,7 +58,10 @@ opcode numbers shared with fb2d, are the same either way.
   b^=a   a^=b             XOR, left side changes (. ,)
   a^=i   i^=a             copy in / write back   (m j)
   syn    mask             a ^= syndrome5 / correction mask of ix's cell (I V)
-  [a ]a  [b ]b            brackets testing a / b ([ ] ( ))
+  a0[ ]a0  b0[ ]b0        brackets testing a / b ([ ] ( )); the 0 is the
+                          value that lets the IP in at a0[ and out at ]a0
+                          (any nonzero value sends it round again), so a
+                          later zero-jumping family would be a1[ ]a1
 
 Every name contains a character that is not a symbol, so a token is a
 name if it is in the table and otherwise a run of symbols (`[>+<]`
@@ -184,7 +187,7 @@ OP_NAMES = {'<': 'a<', '>': 'a>', '{': 'b<', '}': 'b>', 'B': 'i<', 'A': 'i>',
             '-': 'a-', '+': 'a+', 'Q': 'b-', 'P': 'b+',
             '.': 'b^=a', ',': 'a^=b', 'm': 'a^=i', 'j': 'i^=a',
             'I': 'syn', 'V': 'mask',
-            '[': '[a', ']': ']a', '(': '[b', ')': ']b'}
+            '[': 'a0[', ']': ']a0', '(': 'b0[', ')': ']b0'}
 NAME_TO_OP = {name: ch for ch, name in OP_NAMES.items()}
 assert set(OP_NAMES) == set(OP_CHARS)
 SYMBOL_CELL = dict(OP_CELL, **{'~': BOUNDARY, '_': NOP_FILLER, '0': 0})
@@ -850,11 +853,12 @@ def test_names():
     ok = True
     for ch in OP_CHARS:
         ok &= assemble(OP_NAMES[ch]) == assemble(ch)
-    ok &= assemble('[a a> a+ a< ]a') == assemble('[>+<]')
-    ok &= assemble('I[>+<]>[<IVj>]') == assemble('syn [a a> a+ a< ]a a> [a a< syn mask i^=a a> ]a')
+    ok &= assemble('a0[ a> a+ a< ]a0') == assemble('[>+<]')
+    ok &= assemble('I[>+<]>[<IVj>]') == assemble('syn a0[ a> a+ a< ]a0 a> a0[ a< syn mask i^=a a> ]a0')
+    ok &= assemble('b0[ a+ ]b0') == assemble('(+)')
     ok &= assemble('a+ # comment ~ [ \n  a+') == assemble('++')
     ok &= assemble('~_0') == [BOUNDARY, NOP_FILLER, 0]
-    for bad in ('a', 'x<', '[a+', 'a^b', 'abc'):
+    for bad in ('a', 'x<', '[a+', 'a^b', 'abc', '[a', ']a', 'a1[', '0[a'):
         try:
             assemble(bad)
             ok = False
