@@ -25,6 +25,8 @@
   blank tape it still stops at the end of the program and at step 0).
   2026-10-12 v0.6: the inspector shows the 16 raw bits (parity bits marked p,
   a single flipped bit marked ^ in red) and the 11 data bits read as the payload.
+  2026-10-12 v0.7: readable op names (a< a+ b^=a syn [a ...) and # comments in
+  program text, as in fb1d.py v0.4; "show op names" switches the display.
 -->
 <style>
   :root {
@@ -63,6 +65,7 @@
   .status { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px;
             margin-top: 8px; white-space: pre-wrap; }
   .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; color: var(--muted); }
+  .legend .namesw { font-weight: 600; color: var(--fg); cursor: pointer; }
   .legend span b { font-family: ui-monospace, Menlo, monospace; font-size: 14px; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 
@@ -79,6 +82,8 @@
   .cell.fuel { background: var(--fuel); }
   .cell .v { font-size: 15px; line-height: 22px; font-weight: 600; }
   .cell.data .v { font-size: 11px; font-weight: 500; }
+  .cell .v.nm2 { font-size: 12px; letter-spacing: -0.03em; }
+  .cell .v.nm4 { font-size: 9.5px; letter-spacing: -0.05em; }
   .cell .lab { font-size: 8px; line-height: 9px; color: var(--muted); max-width: 25px;
                overflow: hidden; white-space: nowrap; }
   .cell .heads { position: absolute; bottom: 0; left: 0; right: 0; height: 9px; display: flex;
@@ -138,15 +143,16 @@
   <h1>fb1d Workbench</h1>
   <span class="sub">16-bit Hamming 1D reversible bracket language &middot; hover a cell &middot; click a cell to edit or flip a bit</span>
   <span class="legend">
-    <span><b class="op-a">&lt; &gt;</b> a</span>
-    <span><b class="op-b">{ }</b> b</span>
-    <span><b class="op-x">B A</b> ix</span>
-    <span><b class="op-inc">- +</b> payload[a] &plusmn;1</span>
-    <span><b class="op-inc">Q P</b> payload[b] &plusmn;1</span>
-    <span><b class="op-xor">. ,</b> xor a,b</span>
-    <span><b class="op-ix">m I V j</b> via ix</span>
-    <span><b class="op-br">[ ]</b> test a</span>
-    <span><b class="op-brb">( )</b> test b</span>
+    <label class="namesw"><input type="checkbox" id="namesToggle"> show op names</label>
+    <span><b class="op-a" data-names="a&lt; a&gt;">&lt; &gt;</b> a</span>
+    <span><b class="op-b" data-names="b&lt; b&gt;">{ }</b> b</span>
+    <span><b class="op-x" data-names="i&lt; i&gt;">B A</b> ix</span>
+    <span><b class="op-inc" data-names="a- a+">- +</b> payload[a] &plusmn;1</span>
+    <span><b class="op-inc" data-names="b- b+">Q P</b> payload[b] &plusmn;1</span>
+    <span><b class="op-xor" data-names="b^=a a^=b">. ,</b> xor a,b</span>
+    <span><b class="op-ix" data-names="a^=i syn mask i^=a">m I V j</b> via ix</span>
+    <span><b class="op-br" data-names="[a ]a">[ ]</b> test a</span>
+    <span><b class="op-brb" data-names="[b ]b">( )</b> test b</span>
     <span><b class="op-bound">~</b> boundary</span>
     <span><b class="op-nop">&middot;</b> no-op</span>
     <span><i class="dot" style="background:var(--head-a)"></i> a &nbsp;<i class="dot" style="background:var(--head-b)"></i> b &nbsp;
@@ -214,7 +220,7 @@
     </div>
     <div class="controls" style="margin-top:6px">
       <button id="btnLoadCode">load code at address 1 (keeps data, IP to 1)</button>
-      <span class="sub" style="color:var(--muted);font-size:12px">Ops, plus <b>~</b> boundary, <b>_</b> NOP filler, <b>0</b> zero; whitespace ignored.</span>
+      <span class="sub" style="color:var(--muted);font-size:12px">Op symbols or names (names need spaces between them), <b>~</b> boundary, <b>_</b> NOP filler, <b>0</b> zero; <b>#</b> starts a comment.</span>
     </div>
     <div class="authmsg" id="authMsg"></div>
     <div class="note" id="note"></div>
@@ -241,6 +247,10 @@
 <b class="op-ix">V</b> tape[a] ^= 1 &lt;&lt; syndrome4(tape[ix])      <b class="op-ix">j</b> tape[ix] ^= tape[a]   (no-op if a = ix)
 <b class="op-br">[</b> if payload(tape[a]) &ne; 0: jump to matching ]   <b class="op-br">]</b> if payload(tape[a]) &ne; 0: jump to matching [
 <b class="op-brb">( )</b>  the same, testing tape[b]; own matching stack
+
+<b>Names</b> (type either form; separate names with spaces; # starts a comment):
+<b class="op-a">a&lt; a&gt;</b> <b class="op-b">b&lt; b&gt;</b> <b class="op-x">i&lt; i&gt;</b> = &lt; &gt; { } B A    <b class="op-inc">a- a+ b- b+</b> = - + Q P
+<b class="op-xor">b^=a a^=b</b> = . ,    <b class="op-ix">a^=i i^=a syn mask</b> = m j I V    <b class="op-br">[a ]a</b> <b class="op-brb">[b ]b</b> = [ ] ( )
 
 A block enters only when the tested cell is zero and repeats while it is nonzero. A <b class="op-bound">~</b> cell (payload 2047) is a barrier: brackets never pair across it. A write to the IP's own cell is a no-op. Every step is a bijection, so <i>back</i> is deductive.</div>
   </section>
@@ -306,15 +316,28 @@ for (let v = 0; v < 65536; v++) {
   CELL_CLASS[v] = ch === '[' ? 1 : ch === ']' ? 2 : ch === '(' ? 4 : ch === ')' ? 5 : C2P[v] === 2047 ? 3 : 0;
 }
 const opChar = v => CELL_OP[v] ? OP_CHARS[CELL_OP[v] - 1] : null;
+// Readable op names, as fb1d.py OP_NAMES.  Each contains a character that is not a
+// symbol, so a token is a name if it is in the table, else a run of symbols.
+const OP_NAMES = { '<': 'a<', '>': 'a>', '{': 'b<', '}': 'b>', 'B': 'i<', 'A': 'i>',
+  '-': 'a-', '+': 'a+', 'Q': 'b-', 'P': 'b+', '.': 'b^=a', ',': 'a^=b', 'm': 'a^=i', 'j': 'i^=a',
+  'I': 'syn', 'V': 'mask', '[': '[a', ']': ']a', '(': '[b', ')': ']b' };
+const NAME_TO_OP = {}; for (const c in OP_NAMES) NAME_TO_OP[OP_NAMES[c]] = c;
+// Program text -> cells.  Tokens are separated by whitespace; # starts a comment to the
+// end of the line; a token is an op name or a run of symbols (op chars, ~, _, 0).
 function assemble(text) {
   const out = [];
-  for (const ch of text.replace(/\s+/g, '')) {
-    if (ch in OP_CELL) out.push(OP_CELL[ch]);
-    else if (ch === '~') out.push(BOUNDARY);
-    else if (ch === '_') out.push(NOP_FILLER);
-    else if (ch === '0') out.push(0);
-    else throw new Error('not an fb1d op: ' + ch);
-  }
+  for (const line of text.split('\n'))
+    for (const tok of line.split('#')[0].split(/\s+/)) {
+      if (!tok) continue;
+      if (tok in NAME_TO_OP) { out.push(OP_CELL[NAME_TO_OP[tok]]); continue; }
+      for (const ch of tok) {
+        if (ch in OP_CELL) out.push(OP_CELL[ch]);
+        else if (ch === '~') out.push(BOUNDARY);
+        else if (ch === '_') out.push(NOP_FILLER);
+        else if (ch === '0') out.push(0);
+        else throw new Error('not an fb1d op or name: "' + tok + '" (separate names with spaces)');
+      }
+    }
   return out;
 }
 
@@ -429,6 +452,14 @@ const OP_INFO = {
 };
 const isBrA = v => CELL_CLASS[v] === 1 || CELL_CLASS[v] === 2, isBrB = v => CELL_CLASS[v] === 4 || CELL_CLASS[v] === 5;
 const isBr = v => isBrA(v) || isBrB(v);
+let showNames = false;
+try { showNames = localStorage.getItem('fb1d-workbench-names') === '1'; } catch (e) {}
+function cellName(v) { const op = opChar(v); return op ? OP_NAMES[op] : cellChar(v); }
+function cellLabel(v) { return showNames ? cellName(v) : cellChar(v); }
+// cells -> program text in the current display form (names space separated, symbols run together)
+function disasm(cells, names) { return cells.map(names ? cellName : cellChar).join(names ? ' ' : ''); }
+function shownText(text) { try { return disasm(assemble(text), showNames); } catch (e) { return text; } }
+function segLen(text) { try { return assemble(text).length; } catch (e) { return 0; } }
 function cellChar(v) { const op = opChar(v); if (op) return op; if (v === 0) return '0'; if (v === NOP_FILLER) return '_'; if (C2P[v] === 2047) return '~'; return '·'; }
 function cellClass(v) { const op = opChar(v); if (op) return OP_INFO[op][0]; if (C2P[v] === 2047) return 'op-bound'; return 'op-nop'; }
 function synText(v) {
@@ -468,7 +499,7 @@ const EXAMPLES = {
   blank: {
     doc: 'blank tape: write your own code, data and heads',
     codeAt: 0, size: null,
-    segments: () => [['your code', auth.code.replace(/\s+/g, '')]],
+    segments: () => [['your code', auth.code]],
     build: buildBlank,
   },
   immunity: {
@@ -476,7 +507,7 @@ const EXAMPLES = {
     codeAt: 1, size: null,
     segments: gadgetSegments,
     build(m0) {
-      const code = assemble(gadgetSegments().map(s => s[1]).join(''));
+      const code = assemble(gadgetSegments().map(s => s[1]).join('\n'));
       const FUEL = 90, L = code.length;
       const s = L + 2, g = s + 1, L0 = g + 1, pLead = L0 + 1 + FUEL, pCode = pLead + 1, pTrail = pCode + L, N = pTrail + 1;
       const m = new FB1D(N);
@@ -601,12 +632,14 @@ function buildBlank() {
 // ------------------------------------------------------------ state
 let m, segments = [], codeAt = 0, codeEnd = 0, labels = {}, regions = {}, loopStop = 1;
 let exampleName = 'immunity', selected = null, timer = null;
+let segLens = [];
+function setSegments(segs) { segments = segs; segLens = segs.map(sg => segLen(sg[1])); }
 
 function loadExample(name) {
   stopPlay();
   exampleName = name;
   const ex = EXAMPLES[name];
-  segments = ex.segments();
+  setSegments(ex.segments());
   let info;
   if (ex.build) {
     info = ex.build();
@@ -614,7 +647,7 @@ function loadExample(name) {
   } else {
     m = new FB1D(ex.size);
     codeAt = ex.codeAt;
-    const code = assemble(segments.map(s => s[1]).join(''));
+    const code = assemble(segments.map(s => s[1]).join('\n'));
     m.tape.set(code, codeAt); codeEnd = codeAt + code.length;
     info = ex.setup(m, codeEnd);
     m.a = info.a; m.b = info.b; m.ix = info.ix; m.p = info.p;
@@ -623,7 +656,7 @@ function loadExample(name) {
   labels = info.labels || {}; regions = info.regions || {}; loopStop = info.loopStop || 0;
   $('viewLo').value = info.viewLo || 0; $('viewHi').value = info.viewHi;
   const blank = name === 'blank';
-  $('codeText').value = blank ? auth.code : segments.map(s => s[1]).join('');
+  $('codeText').value = blank ? auth.code : exampleCodeText();
   if (blank) { $('authData').value = auth.data; $('authHeads').value = auth.heads; $('authSize').value = auth.size; }
   $('authFields').hidden = !blank;
   $('codeTitle').textContent = blank ? 'Your program (blank tape)' : 'Code (editable)';
@@ -638,6 +671,26 @@ function loadExample(name) {
   renderAll();
 }
 
+// An example's program for the code box: symbols run together, or names one segment
+// per line with the segment label as a # comment.
+let generatedCode = '';
+function exampleCodeText() {
+  generatedCode = showNames
+    ? segments.map(sg => (shownText(sg[1]) + '   # ' + sg[0].trim())).join('\n')
+    : segments.map(sg => shownText(sg[1])).join('');
+  return generatedCode;
+}
+function setShowNames(on) {
+  showNames = on;
+  try { localStorage.setItem('fb1d-workbench-names', on ? '1' : '0'); } catch (e) {}
+  $('namesToggle').checked = on;
+  document.querySelectorAll('[data-names]').forEach(el => {
+    if (!el.dataset.syms) el.dataset.syms = el.textContent;
+    el.textContent = on ? el.dataset.names : el.dataset.syms;
+  });
+  if (exampleName !== 'blank' && $('codeText').value === generatedCode) $('codeText').value = exampleCodeText();
+  renderAll();
+}
 function loadCodeFromText() {
   stopPlay();
   let code;
@@ -647,7 +700,7 @@ function loadCodeFromText() {
   if (need > m.N) { const t = new Uint16Array(need); t.set(m.tape); m.tape = t; }
   for (let i = 0; i < Math.max(code.length, codeEnd - at); i++) m.poke(at + i, i < code.length ? code[i] : 0);
   codeEnd = at + code.length;
-  segments = [['code', $('codeText').value.replace(/\s+/g, '')]];
+  setSegments([['code', $('codeText').value]]);
   m.p = at; m.steps = 0; m.mt = null;
   renderAll();
 }
@@ -657,7 +710,7 @@ const $ = id => document.getElementById(id);
 function segmentAt(p) {
   let off = codeAt;
   for (let i = 0; i < segments.length; i++) {
-    const len = segments[i][1].replace(/\s+/g, '').length;
+    const len = segLens[i];
     if (p >= off && p < off + len) return { i, label: segments[i][0], off: p - off, start: off, end: off + len };
     off += len;
   }
@@ -696,6 +749,7 @@ function bitsLines(v) {
           '<span class="k">        bit 15 ... 0   p: parity' + (bad >= 0 ? '   ^: bit ' + bad : '') + '</span>',
           '<span class="k">data</span>    ' + data + ' = ' + C2P[v] + '  <span class="k">(d10 ... d0)</span>'];
 }
+const escHtml = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 function describeCell(addr) {
   const v = m.tape[addr], op = opChar(v), lines = [];
   const lab = labels[addr] ? '  "' + labels[addr] + '"' : (frameRole(addr) ? '  L: last garbage cell, under b' : '');
@@ -703,7 +757,9 @@ function describeCell(addr) {
   lines.push('<span class="k">raw</span>     0x' + v.toString(16).padStart(4, '0') + '  payload ' + C2P[v] + (C2P[v] === 2047 ? '  (boundary ~)' : ''));
   lines.push(...bitsLines(v));
   lines.push('<span class="k">hamming</span> ' + synText(v));
-  lines.push('<span class="k">as op</span>   ' + (op ? '<b class="' + OP_INFO[op][0] + '">' + op + '</b>  ' + OP_INFO[op][1] : (v === NOP_FILLER ? 'NOP filler' : 'no-op')));
+  const opHtml = op => { const [x, y] = showNames ? [OP_NAMES[op], op] : [op, OP_NAMES[op]];
+    return '<b class="' + OP_INFO[op][0] + '">' + escHtml(x) + '</b> <span class="k">(' + escHtml(y) + ')</span>  ' + escHtml(OP_INFO[op][1]); };
+  lines.push('<span class="k">as op</span>   ' + (op ? opHtml(op) : (v === NOP_FILLER ? 'NOP filler' : 'no-op')));
   if (addr >= codeAt && addr < codeEnd) { const s = segmentAt(addr); if (s) lines.push('<span class="k">segment</span> ' + s.label.trim() + '  (+' + s.off + ')'); }
   if (op && '[]()'.includes(op)) lines.push(jumpText(addr, op));
   if (addr === m.a) lines.push('<span class="k">head a is here</span>');
@@ -746,10 +802,12 @@ function updateCells() {
     c.className = 'cell ' + (inCode ? 'code' : 'data');
     if (inRegion('pblock', i)) c.classList.add('pblock'); else if (inRegion('fuel', i)) c.classList.add('fuel');
     const ve = c.children[1];
-    if (inCode || inRegion('pblock', i) || C2P[v] === 2047) { ve.textContent = cellChar(v); ve.className = 'v ' + cellClass(v); }
+    if (inCode || inRegion('pblock', i) || C2P[v] === 2047) {
+      const t = cellLabel(v); ve.textContent = t; ve.className = 'v ' + cellClass(v) + (t.length > 2 ? ' nm4' : t.length > 1 ? ' nm2' : '');
+    }
     else { ve.textContent = C2P[v]; ve.className = 'v' + (op ? ' ' + OP_INFO[op][0] : ''); }
     const role = frameRole(i);
-    c.children[2].textContent = labels[i] || role || (inCode || inRegion('pblock', i) ? '' : (op ? op : ''));
+    c.children[2].textContent = labels[i] || role || (inCode || inRegion('pblock', i) ? '' : (op ? cellLabel(v) : ''));
     if (role) c.classList.add('frame');
     if (s || pa) c.classList.add('dirty');
     const sg = inCode ? segmentAt(i) : null;
@@ -764,7 +822,7 @@ function updateCells() {
 }
 function updateStatus() {
   const v = m.tape[m.p], op = opChar(v);
-  let next = op ? op + '  ' + OP_INFO[op][1] : 'no-op (payload ' + C2P[v] + ')';
+  let next = op ? (showNames ? OP_NAMES[op] + ' (' + op + ')' : op + ' (' + OP_NAMES[op] + ')') + '  ' + OP_INFO[op][1] : 'no-op (payload ' + C2P[v] + ')';
   if (op && '[]()'.includes(op)) {
     const partner = m.matches()[m.p], head = (op === '[' || op === ']') ? 'a' : 'b', hv = m.tape[m[head]];
     next += partner < 0 ? '  [unmatched: no-op]'
@@ -790,9 +848,10 @@ function updateSegments() {
   segments.forEach((s, i) => {
     const d = document.createElement('div');
     if (cur && cur.i === i) d.className = 'cur';
-    const len = s[1].replace(/\s+/g, '').length;
+    const len = segLens[i];
     d.innerHTML = '<span class="off">' + off + '</span><span class="lab" style="border-left:3px solid ' +
-                  SEG_COLORS[i % SEG_COLORS.length] + ';padding-left:4px">' + s[0] + '</span><span class="txt">' + s[1] + '</span>';
+                  SEG_COLORS[i % SEG_COLORS.length] + ';padding-left:4px">' + s[0] + '</span><span class="txt"></span>';
+    d.lastChild.textContent = shownText(s[1]);
     const start = off;
     d.addEventListener('mouseenter', () => highlightRange(start, start + len, true));
     d.addEventListener('mouseleave', () => highlightRange(start, start + len, false));
@@ -955,6 +1014,9 @@ document.addEventListener('keydown', e => {
   if (e.key === 'n') { stopPlay(); runUntilSegment(isWorkStart); }
   if (e.key === ' ') { e.preventDefault(); play(false); }
 });
+$('namesToggle').addEventListener('change', e => setShowNames(e.target.checked));
+$('namesToggle').checked = showNames;
+if (showNames) document.querySelectorAll('[data-names]').forEach(el => { el.dataset.syms = el.textContent; el.textContent = el.dataset.names; });
 loadExample(startExample);
 </script>
 </body>

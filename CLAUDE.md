@@ -73,7 +73,11 @@ fb2d is a 2D reversible esoteric language where:
   `< > { } B A - + . , m I V j [ ] ( ) P Q` (`( )` test tape[b] and
   `P Q` count on it, added in M2), boundary cells as bracket-matching
   barriers, multi-IP, NoisePool
-  noise. REPL: `python3 fb1d.py` (`load immunity` for the M2 gadget).
+  noise. Program text may also spell ops by readable names (`a< a>`
+  `b< b>` `i< i>` `a- a+` `b- b+` `b^=a a^=b` `a^=i i^=a` `syn mask`
+  `[a ]a` `[b ]b`, space separated) with `#` comments; the cells are
+  identical either way. REPL: `python3 fb1d.py` (`load immunity` for
+  the M2 gadget; `names` lists the names).
   Tests: `python3 fb1d.py --test [--long]`. Decisions and per-milestone
   model recommendations are in the port plan.
 - **`programs/fb1d-immunity-m2.py`** — M2: one fb1d gadget (106 cells)
@@ -94,6 +98,8 @@ fb2d is a 2D reversible esoteric language where:
   The "blank" example is for writing your own programs: code, data
   (`20=5,6,7,8`, `40=300^6`, `0^1`) and heads (`a=20 b=30 ix=40`)
   fields build a fresh tape; the fields are remembered in the browser.
+  "show op names" displays ops by their readable names on the tape, in
+  the code box, Program Segments, status line and inspector.
 - **`fb1d8.py`** — fb1d8 (formerly RBFF): the 8-bit didactic 1D
   reversible, valid-everywhere, Turing-complete BFF variant (XOR
   copying, symmetric bracket conditions, executing-byte guard).
