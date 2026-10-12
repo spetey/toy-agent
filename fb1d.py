@@ -3,6 +3,7 @@
 fb1d: 16-bit reversible bracket language on a 1D tape
 Authored or modified by Claude
 Version: 2026-09-30 v0.3 (M1 + M2 `( )` and `P Q` extensions, docs/fb1d-port-plan.md)
+         2026-10-12 v0.4: readable op names and `#` comments in program text
 
 fb1d is fb1d8 (formerly RBFF; see fb1d8.py, docs/fb1d8_notes.md) with
 fb2d's cells and interoceptor transplanted in, so that the Wikivore can
@@ -45,6 +46,26 @@ bracket families are matched independently (own stacks); barriers
 empty both.  `P` / `Q` (v0.3) let b be a roaming garbage pointer with
 a fixed stomach under a, as fb2d's EX; the gadget's clean-path trace
 is then `P` on b's cell instead of moving the whole working frame.
+
+Readable names (v0.4).  Program text may spell each op by its symbol
+above or by a readable name, separated from its neighbours by
+whitespace; `#` starts a comment to the end of the line.  The names
+only change how programs are written and shown: the cells, and so the
+opcode numbers shared with fb2d, are the same either way.
+
+  a< a>  b< b>  i< i>     move a / b / ix        (< >  { }  B A)
+  a- a+  b- b+            payload -1 / +1        (- +  Q P)
+  b^=a   a^=b             XOR, left side changes (. ,)
+  a^=i   i^=a             copy in / write back   (m j)
+  syn    mask             a ^= syndrome5 / correction mask of ix's cell (I V)
+  a0[ ]a0  b0[ ]b0        brackets testing a / b ([ ] ( )); the 0 is the
+                          value that lets the IP in at a0[ and out at ]a0
+                          (any nonzero value sends it round again), so a
+                          later zero-jumping family would be a1[ ]a1
+
+Every name contains a character that is not a symbol, so a token is a
+name if it is in the table and otherwise a run of symbols (`[>+<]`
+still works); anything else is an error.
 
 Guards (each makes the op a NOP, in both step and step_back):
   * a write to tape[p] of the executing IP (executing-cell guard)
@@ -160,24 +181,48 @@ def is_dirty(v):
     return bool(s or pa)
 
 
+# Readable names for the ops (see the module docstring).  Each contains a
+# character that is not a symbol, so names and runs of symbols never clash.
+OP_NAMES = {'<': 'a<', '>': 'a>', '{': 'b<', '}': 'b>', 'B': 'i<', 'A': 'i>',
+            '-': 'a-', '+': 'a+', 'Q': 'b-', 'P': 'b+',
+            '.': 'b^=a', ',': 'a^=b', 'm': 'a^=i', 'j': 'i^=a',
+            'I': 'syn', 'V': 'mask',
+            '[': 'a0[', ']': ']a0', '(': 'b0[', ')': ']b0'}
+NAME_TO_OP = {name: ch for ch, name in OP_NAMES.items()}
+assert set(OP_NAMES) == set(OP_CHARS)
+SYMBOL_CELL = dict(OP_CELL, **{'~': BOUNDARY, '_': NOP_FILLER, '0': 0})
+assert not any(set(n) <= set(SYMBOL_CELL) for n in NAME_TO_OP)
+
+
 def assemble(text):
-    """Program text -> list of cells.  Op chars, `~` boundary, `_` NOP
-    filler, `0` zero; whitespace ignored; anything else is an error."""
+    """Program text -> list of cells.  Tokens are separated by whitespace;
+    `#` starts a comment to the end of the line.  A token is either a
+    readable op name (OP_NAMES) or a run of symbols: op chars, `~`
+    boundary, `_` NOP filler, `0` zero.  Anything else is an error."""
     out = []
-    for ch in text:
-        if ch.isspace():
-            continue
-        if ch in OP_CELL:
-            out.append(OP_CELL[ch])
-        elif ch == '~':
-            out.append(BOUNDARY)
-        elif ch == '_':
-            out.append(NOP_FILLER)
-        elif ch == '0':
-            out.append(0)
-        else:
-            raise ValueError(f"not an fb1d op: {ch!r}")
+    for line in text.splitlines():
+        for tok in line.split('#', 1)[0].split():
+            if tok in NAME_TO_OP:
+                out.append(OP_CELL[NAME_TO_OP[tok]])
+                continue
+            for ch in tok:
+                if ch not in SYMBOL_CELL:
+                    raise ValueError(f"not an fb1d op or name: {tok!r} "
+                                     "(separate names with spaces)")
+                out.append(SYMBOL_CELL[ch])
     return out
+
+
+def cell_name(v):
+    """Readable name of the op in cell v, else its symbol (`~`, `_`, `0`, `·`)."""
+    op = CELL_OP[v]
+    return OP_NAMES[OP_CHARS[op - 1]] if op else cell_char(v)
+
+
+def disassemble(cells, names=True):
+    """Cells -> program text, one token per cell, space separated.  Cells
+    that are not ops or `~ _ 0` come out as `·`, which assemble rejects."""
+    return ' '.join(cell_name(v) if names else cell_char(v) for v in cells)
 
 
 def match_table(tape, barriers=True):
@@ -365,7 +410,7 @@ class Machine:
     # --------------------------------------------------------- loading
     def load_program(self, segments, size=None, code_at=0):
         self.tape = [0] * (size or self.N)
-        code = assemble(''.join(text for _, text in segments))
+        code = assemble('\n'.join(text for _, text in segments))
         self.tape[code_at:code_at + len(code)] = code
         self.segments = segments
         self.code_end = code_at + len(code)
@@ -384,7 +429,7 @@ class Machine:
     def segment_at(self, p):
         off = 0
         for label, text in self.segments:
-            n = len(''.join(text.split()))
+            n = len(assemble(text))
             if off <= p < off + n:
                 return label, p - off
             off += n
@@ -802,6 +847,37 @@ def test_examples():
     return ok
 
 
+def test_names():
+    """Readable names assemble to the same cells as the symbols; every
+    example program and the M2 gadget round-trip through disassemble."""
+    ok = True
+    for ch in OP_CHARS:
+        ok &= assemble(OP_NAMES[ch]) == assemble(ch)
+    ok &= assemble('a0[ a> a+ a< ]a0') == assemble('[>+<]')
+    ok &= assemble('I[>+<]>[<IVj>]') == assemble('syn a0[ a> a+ a< ]a0 a> a0[ a< syn mask i^=a a> ]a0')
+    ok &= assemble('b0[ a+ ]b0') == assemble('(+)')
+    ok &= assemble('a+ # comment ~ [ \n  a+') == assemble('++')
+    ok &= assemble('~_0') == [BOUNDARY, NOP_FILLER, 0]
+    for bad in ('a', 'x<', '[a+', 'a^b', 'abc', '[a', ']a', 'a1[', '0[a'):
+        try:
+            assemble(bad)
+            ok = False
+        except ValueError:
+            pass
+    texts = {}
+    for name, (_, fn) in EXAMPLES.items():
+        m = Machine()
+        fn(m)
+        texts[name] = '\n'.join(t for _, t in m.segments)
+    for name, text in texts.items():
+        cells = assemble(text)
+        ok &= assemble(disassemble(cells)) == cells
+        ok &= assemble(disassemble(cells, names=False)) == cells
+    return _check(ok, f"names: all {len(OP_CHARS)} ops, comments, bad tokens "
+                      f"rejected, {len(texts)} programs round-trip "
+                      f"({', '.join(texts)})")
+
+
 def run_tests(long=False):
     ok = True
     print("== fetch ==")
@@ -820,6 +896,8 @@ def run_tests(long=False):
     ok &= test_ix_ops()
     print("== fb1d8 examples on 16-bit cells ==")
     ok &= test_examples()
+    print("== readable names ==")
+    ok &= test_names()
     print("ALL OK" if ok else "FAILURES")
     return ok
 
@@ -835,10 +913,12 @@ commands:
   until P             run until IP0 p == P
   set ADDR PAYLOAD    store clean codeword   raw ADDR HEX    store raw 16-bit
   flip ADDR BIT       XOR one bit            asm ADDR TEXT   assemble ops at ADDR
+                      (TEXT: symbols and/or names, e.g.  asm 0 [a a> a+ a< ]a)
   head I h ADDR       move head h (a b ix p) of IP I
   addip A B IX P      add an IP              rmip I          remove IP I
   noise RATE [LO HI [SEED]]   configure noise (flips per 1M rounds; 0 = off)
-  ops                 list opcodes           test            run test suite
+  ops                 list opcodes           names           op symbols and names
+  test                run test suite
   q                   quit
 """
 
@@ -878,6 +958,9 @@ def repl():
                 break
             elif cmd == 'help':
                 print(HELP)
+            elif cmd == 'names':
+                for ch in OP_CHARS:
+                    print(f"  {ch}  {OP_NAMES[ch]:5s}")
             elif cmd == 'ops':
                 for op, doc in OP_DOC:
                     print(f"  {op:6s} {doc}")
@@ -893,9 +976,10 @@ def repl():
             elif cmd == 'src':
                 off = 0
                 for label, text in m.segments:
-                    n = len(''.join(text.split()))
+                    cells = assemble(text)
+                    n = len(cells)
                     mark = '->' if off <= m.ips[0].p < off + n else '  '
-                    print(f"{mark} {off:4d} {label:28s} {text}")
+                    print(f"{mark} {off:4d} {label:28s} {disassemble(cells)}")
                     off += n
             elif cmd in ('s', 'b'):
                 for _ in range(int(args[0]) if args else 1):
@@ -921,7 +1005,7 @@ def repl():
                 m.invalidate()
                 show()
             elif cmd == 'asm':
-                addr, cells = int(args[0]), assemble(''.join(args[1:]))
+                addr, cells = int(args[0]), assemble(' '.join(args[1:]))
                 for i, c in enumerate(cells):
                     m.tape[(addr + i) % m.N] = c
                 m.invalidate()
