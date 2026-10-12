@@ -360,3 +360,29 @@ fb2d's experimental setup nearly verbatim.
   size of the second.
 - **Head shuffling.**  Two data heads instead of four means more moves
   per operation.  Adding `( )` on `b` is the cheap fix if it hurts.
+
+## Open questions
+
+- **Should a wall survive one flipped data bit?**  (Raised 2026-10-12,
+  workbook exercise G2.)  A cell is a bracket-matching barrier only if
+  its raw payload is exactly 2047, so a parity flip keeps the wall but
+  any one of its 11 data-bit flips removes it.  The alternative is to
+  treat 2047 and its 11 one-flip neighbours (1023, 1535, 1791, 1919,
+  1983, 2015, 2031, 2039, 2043, 2045, 2046) all as walls.
+  - *Possible:* reversibility does not depend on the barrier rule
+    (matching reads only the tape and brackets never write), and every
+    opcode payload is at least 3 flips from 2047 (`+ [ ] j }` and others
+    are at exactly 3), so the wall zone would not overlap any op's
+    one-flip zone: one flip could neither break a wall nor make one.
+  - *Cost:* two flips could then turn a `[` (or `+ ] j }`) into a wall,
+    splitting its block and unmatching brackets on both sides; under
+    the exact rule a false wall needs three.  Eleven more data values
+    become walls (e.g. 2046, zero decremented twice); harmless outside
+    code, but surprising.  The gadget's own wall test (`m+`, zero only
+    for 2047) would no longer match the physics' notion of a wall;
+    today the gadget repairs a flipped wall before testing it anyway.
+  - *Why it is close:* a broken wall matters only if the brackets on its
+    two sides are already unbalanced, which itself needs about two
+    flips, so both rules fail at roughly two to three flips.  Settle it
+    empirically: compare MTTF under noise with `Machine(barriers=...)`
+    extended to a third setting, once the 1D agent runs (M3/M5).
