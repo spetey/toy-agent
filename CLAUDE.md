@@ -68,18 +68,40 @@ fb2d is a 2D reversible esoteric language where:
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
 - **`fb1d.py`** — fb1d: the 16-bit Hamming extension of fb1d8 that
-  hosts the 1D Wikivore (M1 and M2 of `docs/fb1d-port-plan.md` done).
+  hosts the 1D Wikivore (M1, M2 and M3 of `docs/fb1d-port-plan.md` done).
   fb2d's cells and raw-payload fetch, heads a/b/ix/p per IP, ops
   `< > { } B A - + . , m I V j [ ] ( ) P Q` (`( )` test tape[b] and
   `P Q` count on it, added in M2), boundary cells as bracket-matching
-  barriers, multi-IP, NoisePool
-  noise. Program text may also spell ops by readable names (`a< a>`
-  `b< b>` `i< i>` `a- a+` `b- b+` `b^=a a^=b` `a^=i i^=a` `syn mask`
-  `a0[ ]a0` `b0[ ]b0`, space separated) with `#` comments; the cells are
-  identical either way. REPL: `python3 fb1d.py` (`load immunity` for
-  the M2 gadget; `names` lists the names).
+  barriers, multi-IP, NoisePool noise over one address range or several
+  equal-length blocks (`set_noise(..., blocks=[(lo, hi), ...])`, M3).
+  The bracket match table is cached incrementally (sorted list of
+  bracket and barrier addresses); edit the tape via `set_cell` / `flip`
+  / `poke` or call `invalidate()`. Program text may also spell ops by
+  readable names (`a< a>` `b< b>` `i< i>` `a- a+` `b- b+` `b^=a a^=b`
+  `a^=i i^=a` `syn mask` `a0[ ]a0` `b0[ ]b0`, space separated) with `#`
+  comments; the cells are identical either way. REPL: `python3 fb1d.py`
+  (`load immunity` for the M2 gadget, `load dual` for the M3 pair;
+  `names` lists the names).
   Tests: `python3 fb1d.py --test [--long]`. Decisions and per-milestone
   model recommendations are in the port plan.
+- **`programs/fb1d-immunity-m3.py`** — M3: two M2 gadgets on two IPs
+  correcting each other (★ current 1D flagship). Each IP's `ix` scans
+  the other's `~ code ~` block; the gadget code is M2's, unchanged.
+  Layout `~ A ~ sA gA LA fuelA ~ B ~ sB gB LB fuelB`. Tests (clean
+  lockstep passes, every single-bit error in both blocks, errors in
+  both blocks at once, errors on the partner's executing cell mid-pass,
+  300/1M noise over both blocks, exact reversal):
+  `python3 programs/fb1d-immunity-m3.py [--quick]`.
+- **`programs/fb1d-mttf.py`** — MTTF harness for the M3 pair, ported
+  from `compare-agents-mttf.py`: invariant-based failure detection
+  (ip/a/b/ix escaped, cycle timeout, stomach dirty, L wrong, ix not
+  home, zero starved), first persistent code damage, and the
+  "coincidence" diagnostic (a second flip on an already-flipped cell
+  within two passes before the failure). `--fb2d-narrow` runs the fb2d
+  narrow agent in the same pool for a side-by-side table;
+  `--no-barriers` turns the wall rule off. Results in
+  `programs/fb1d-mttf-results.csv`.
+  Run: `python3 programs/fb1d-mttf.py --help`
 - **`programs/fb1d-immunity-m2.py`** — M2: one fb1d gadget (106 cells)
   correcting a static partner block. fb2d layout: fixed stomach `[s g]`
   under a, b roaming on the last garbage cell like EX. `I` probe,
@@ -89,12 +111,17 @@ fb2d is a 2D reversible esoteric language where:
   (every single-bit error in the block, noise, exact reversal):
   `python3 programs/fb1d-immunity-m2.py [--quick]`.
 - **`fb1d.html`** — Browser workbench for fb1d (self-contained, open
-  the file directly). Own JS interpreter verified against `fb1d.py`.
-  Loads the M2 immunity gadget by default: color-coded ops, red for
+  the file directly). Own JS interpreter verified against `fb1d.py`,
+  with several IPs as in `fb1d.py` (round-robin step, reverse-order
+  back). Examples "immunity" (the M2 gadget, loaded by default) and
+  "dual" (the M3 pair on two IPs; the IP box picks which IP the status
+  line, inspector, "one pass" and "next cell" follow, its heads filled
+  and the other IP's hollow). Color-coded ops, red for
   nonzero syndrome, heads a/b/ix/IP, stomach cells labelled s/g, hover
   inspector with the raw bits (parity bits and a flipped bit marked),
   Hamming diagnosis and jump prediction, click a cell to
-  edit or flip a bit, "next cell" / "one pass", reversible noise.
+  edit or flip a bit, "next cell" / "one pass", reversible noise (over
+  both code blocks on the dual example).
   The "blank" example is for writing your own programs: code, data
   (`20=5,6,7,8`, `40=300^6`, `0^1`) and heads (`a=20 b=30 ix=40`)
   fields build a fresh tape; the fields are remembered in the browser.
@@ -531,6 +558,15 @@ python3 fb1d.py --test --long       # + 2M-round noisy round trip (~15 s)
 python3 programs/fb1d-immunity-m2.py          # ~14 s
 python3 programs/fb1d-immunity-m2.py --quick  # ~5 s
 open fb1d.html                                # browser workbench, loads the gadget
+
+# fb1d M3 dual gadgets (two IPs, mutual correction): all single-bit
+# errors in both blocks, simultaneous errors, live-partner cells, noise:
+python3 programs/fb1d-immunity-m3.py          # ~40 s
+python3 programs/fb1d-immunity-m3.py --quick  # ~9 s
+
+# fb1d M3 MTTF curve (fast) and side by side with the fb2d narrow agent (slow):
+python3 programs/fb1d-mttf.py --rates 100,200,300 --seeds 10               # ~1 min
+python3 programs/fb1d-mttf.py --rates 100,200,300 --seeds 10 --fb2d-narrow # ~45 min
 
 # fb1d8 (8-bit 1D language, formerly RBFF): bijectivity + round-trips:
 python3 fb1d8.py --test

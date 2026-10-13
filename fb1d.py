@@ -4,6 +4,7 @@ fb1d: 16-bit reversible bracket language on a 1D tape
 Authored or modified by Claude
 Version: 2026-09-30 v0.3 (M1 + M2 `( )` and `P Q` extensions, docs/fb1d-port-plan.md)
          2026-10-12 v0.4: readable op names and `#` comments in program text
+         2026-10-12 v0.5: multi-block noise, incremental match cache (M3)
 
 fb1d is fb1d8 (formerly RBFF; see fb1d8.py, docs/fb1d8_notes.md) with
 fb2d's cells and interoceptor transplanted in, so that the Wikivore can
@@ -84,8 +85,16 @@ barrier rule.  Machine(barriers=False) turns it off for comparisons.
 Multi-IP: step_all() steps IP0, IP1, ... then applies noise for that
 round; step_back_all() undoes noise then the IPs in reverse order.
 
-Noise: fb2d's NoisePool (pools.py) over a flat address range, rate in
-flips per 1M step_alls, deterministic by seed and fully reversible.
+Noise: fb2d's NoisePool (pools.py) over a flat address range, or over
+several equal-length blocks (M3: the two code blocks), rate in flips per
+1M step_alls over the whole region, deterministic by seed and fully
+reversible.
+
+Bracket matching is cached; the cache is kept incrementally (a sorted
+list of the bracket and barrier addresses, v0.5) so that a write which
+changes a cell's bracket class costs O(brackets) at the next bracket,
+not O(N).  Edit the tape through set_cell / flip / poke, or call
+invalidate() after editing it directly.
 
 Usage:
   python3 fb1d.py              REPL (type help)
@@ -95,6 +104,7 @@ Usage:
 
 import os
 import sys
+import bisect
 import random
 import itertools
 
@@ -225,13 +235,17 @@ def disassemble(cells, names=True):
     return ' '.join(cell_name(v) if names else cell_char(v) for v in cells)
 
 
-def match_table(tape, barriers=True):
+def match_table(tape, barriers=True, special=None):
     """Stack matching over linear order, one stack per bracket family
     (`[ ]` on a, `( )` on b).  Returns dict pos -> partner.  A barrier
-    empties both stacks."""
+    empties both stacks.  `special`, if given, is the sorted list of the
+    addresses whose CELL_CLASS is nonzero (brackets and barriers); the
+    Machine keeps it up to date so a rebuild costs O(brackets), not O(N)."""
     st_a, st_b, mt = [], [], {}
-    for i, v in enumerate(tape):
-        c = CELL_CLASS[v]
+    if special is None:
+        special = range(len(tape))
+    for i in special:
+        c = CELL_CLASS[tape[i]]
         if not c:
             continue
         if c == 1:
@@ -268,9 +282,11 @@ class Machine:
         self.ips = [IP()]
         self.barriers = barriers
         self.rounds = 0          # step_all count (also the noise index)
-        self._mt = None
+        self._mt = None          # bracket match table, rebuilt lazily
+        self._special = None     # sorted addresses of brackets and barriers
         self.noise = None        # NoisePool, or None
         self.noise_on = False
+        self.noise_bases = [0]   # noise block start addresses (see set_noise)
         self.code_end = 0
         self.segments = []
         self.example = None
@@ -282,11 +298,37 @@ class Machine:
 
     def matches(self):
         if self._mt is None:
-            self._mt = match_table(self.tape, self.barriers)
+            if self._special is None:
+                self._special = [i for i, v in enumerate(self.tape)
+                                 if CELL_CLASS[v]]
+            self._mt = match_table(self.tape, self.barriers, self._special)
         return self._mt
 
     def invalidate(self):
+        """Call after editing self.tape directly (O(N) on the next match)."""
         self._mt = None
+        self._special = None
+
+    def _reclass(self, addr, old, new):
+        """Keep the match cache consistent with tape[addr] going old -> new."""
+        c0, c1 = CELL_CLASS[old], CELL_CLASS[new]
+        if c0 == c1:
+            return
+        self._mt = None
+        sp = self._special
+        if sp is not None:
+            if c0 and not c1:
+                del sp[bisect.bisect_left(sp, addr)]
+            elif c1 and not c0:
+                bisect.insort(sp, addr)
+
+    def set_cell(self, addr, val):
+        """Store a raw 16-bit value, keeping the match cache incremental."""
+        self._reclass(addr, self.tape[addr], val)
+        self.tape[addr] = val
+
+    def flip(self, addr, bit):
+        self.set_cell(addr, self.tape[addr] ^ (1 << bit))
 
     def state(self):
         return (tuple(self.tape), tuple(ip.tup() for ip in self.ips),
@@ -297,8 +339,7 @@ class Machine:
         if addr == ip.p:                     # executing-cell guard
             return
         t = self.tape
-        if CELL_CLASS[t[addr]] or CELL_CLASS[val]:
-            self._mt = None
+        self._reclass(addr, t[addr], val)
         t[addr] = val
 
     def _exec(self, ip, inverse=False):
@@ -365,21 +406,28 @@ class Machine:
         ip.p = (ip.p - 1) % len(self.tape)
         self._exec(ip, inverse=True)
 
+    def _noise_flat(self, block, col):
+        return self.noise_bases[block] + col
+
+    def _noise_done(self, action):
+        if action:
+            addr = self._noise_flat(action[0], action[1])
+            new = self.tape[addr]
+            self._reclass(addr, new ^ (1 << action[2]), new)
+
     def step_all(self):
         for i in range(len(self.ips)):
             self.step_ip(i)
         if self.noise_on:
-            if self.noise.apply_forward(self.rounds, self.tape,
-                                        lambda r, c: c, [0]):
-                self._mt = None
+            self._noise_done(self.noise.apply_forward(
+                self.rounds, self.tape, self._noise_flat, self.noise_rows))
         self.rounds += 1
 
     def step_back_all(self):
         self.rounds -= 1
         if self.noise_on:
-            if self.noise.undo_at(self.rounds, self.tape,
-                                  lambda r, c: c, [0]):
-                self._mt = None
+            self._noise_done(self.noise.undo_at(
+                self.rounds, self.tape, self._noise_flat, self.noise_rows))
         for i in range(len(self.ips) - 1, -1, -1):
             self.step_back_ip(i)
 
@@ -397,14 +445,25 @@ class Machine:
         return n
 
     # ----------------------------------------------------------- noise
-    def set_noise(self, flips_per_1M, lo=0, hi=None, seed=42, kind='any'):
-        """Configure noise over tape[lo..hi] (inclusive).  Resets the
-        pool, so only call this when rounds == 0 or you won't step back
-        past this point."""
-        hi = self.N - 1 if hi is None else hi
-        self.noise = NoisePool(seed=seed, n_code_rows=1, grid_cols=self.N,
-                               noise_type=kind, flips_per_1M=flips_per_1M,
-                               col_min=lo, col_max=hi)
+    def set_noise(self, flips_per_1M, lo=0, hi=None, seed=42, kind='any',
+                  blocks=None):
+        """Configure noise over tape[lo..hi] (inclusive), or over several
+        equal-length blocks [(lo, hi), ...] (M3: both code blocks, with
+        the stomach and fuel between them spared).  The rate is flips per
+        1M rounds over the whole region, as in fb2d.  Resets the pool, so
+        only call this when rounds == 0 or you won't step back past
+        this point."""
+        if blocks is None:
+            blocks = [(lo, self.N - 1 if hi is None else hi)]
+        n = blocks[0][1] - blocks[0][0] + 1
+        if any(b[1] - b[0] + 1 != n for b in blocks):
+            raise ValueError("noise blocks must have equal lengths")
+        self.noise_bases = [b[0] for b in blocks]
+        self.noise_rows = list(range(len(blocks)))
+        self.noise = NoisePool(seed=seed, n_code_rows=len(blocks),
+                               grid_cols=self.N, noise_type=kind,
+                               flips_per_1M=flips_per_1M,
+                               col_min=0, col_max=n - 1)
         self.noise_on = flips_per_1M > 0
 
     # --------------------------------------------------------- loading
@@ -416,12 +475,11 @@ class Machine:
         self.code_end = code_at + len(code)
         self.ips = [IP()]
         self.rounds = 0
-        self._mt = None
+        self.invalidate()
 
     def poke(self, addr, value):
         """Store an 11-bit payload as a clean codeword."""
-        self.tape[addr] = hamming_encode(value)
-        self._mt = None
+        self.set_cell(addr, hamming_encode(value))
 
     def peek(self, addr):
         return _CELL_TO_PAYLOAD_RAW[self.tape[addr]]
@@ -570,6 +628,30 @@ def ex_immunity(m):
                      f"{lo} {hi}.")
 
 
+@example('dual', "M3: two immunity gadgets on two IPs correcting each other (programs/fb1d-immunity-m3.py)")
+def ex_dual(m):
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'programs', 'fb1d-immunity-m3.py')
+    spec = importlib.util.spec_from_file_location('fb1d_immunity_m3', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    built, lay = mod.build(fuel=120)
+    m.tape, m.ips, m.segments = built.tape, built.ips, built.segments
+    m.code_end, m.rounds, m.noise, m.noise_on = built.code_end, 0, None, False
+    m.loop_stop = lay.gadgets[0].p_start
+    m.invalidate()
+    ga, gb = lay.gadgets
+    return dict(lo=ga.s - 1, hi=ga.s + 15,
+                note=f"gadget A: code {ga.code}..{ga.trail - 1}, stomach s={ga.s} "
+                     f"g={ga.g}, b from {ga.L0}; gadget B: code {gb.code}..{gb.trail - 1}, "
+                     f"stomach s={gb.s} g={gb.g}, b from {gb.L0}.  IP0 runs A and its ix "
+                     f"scans B's block {gb.lead}..{gb.trail}; IP1 the reverse.\n"
+                     f"`loop` = run until IP0's p == {ga.p_start} (one pass, 4094 rounds).  "
+                     f"Try: flip {ga.code + 20} 5, loop, d 0 {ga.trail}; "
+                     f"noise 300 (blocks: set via Machine.set_noise(..., blocks=))")
+
+
 @example('fact', "factorials via nested FOR (payloads mod 2048)")
 def ex_fact(m):
     m.load_program(fb1d8.fact_segments(), size=1400)
@@ -616,7 +698,7 @@ def _exhaustive(N, alphabet, label):
     ip = m.ips[0]
     for tape in itertools.product(alphabet, repeat=N):
         for a, b, x, p in itertools.product(range(N), repeat=4):
-            m.tape = list(tape); m._mt = None
+            m.tape = list(tape); m.invalidate()
             ip.a, ip.b, ip.ix, ip.p = a, b, x, p
             s0 = (tape, a, b, x, p)
             m.step_ip(0)
@@ -657,7 +739,7 @@ def test_bijectivity():
         alpha = [OP_CELL[c] for c in group] + junk
         ok &= _exhaustive(3, alpha, f"{group}+junk")
     # random single-IP self-modifying runs on larger tapes
-    bad = 0
+    bad = stale = 0
     for trial in range(300):
         N = rng.randint(4, 40)
         m = Machine(N, barriers=trial % 2 == 0)
@@ -665,35 +747,46 @@ def test_bijectivity():
         ip = m.ips[0]
         ip.a, ip.b, ip.ix, ip.p = (rng.randrange(N) for _ in range(4))
         s0 = m.state()
+        m.matches()                          # cache built before the writes
         for _ in range(500):
             m.step_all()
+        stale += m.matches() != match_table(m.tape, m.barriers)
         for _ in range(500):
             m.step_back_all()
         bad += m.state() != s0
-    ok &= _check(bad == 0, f"300 random single-IP runs x 500 steps: "
-                           f"reversal failures {bad}")
+    ok &= _check(bad == 0 and stale == 0,
+                 f"300 random single-IP runs x 500 steps: reversal failures "
+                 f"{bad}, incremental match cache stale {stale} times")
     return ok
 
 
-def noisy_multi_ip_roundtrip(rounds, n_ips=2, N=400, rate=5000, seed=3):
+def noisy_multi_ip_roundtrip(rounds, n_ips=2, N=400, rate=5000, seed=3,
+                             blocks=None):
     rng = random.Random(seed)
     m = Machine(N)
     m.tape = [_rand_cell(rng) for _ in range(N)]
     m.ips = [IP(*(rng.randrange(N) for _ in range(4))) for _ in range(n_ips)]
-    m.set_noise(rate, 0, N - 1, seed=seed)
+    m.set_noise(rate, 0, N - 1, seed=seed, blocks=blocks)
     s0 = m.state()
-    for _ in range(rounds):
+    stale = 0
+    for r in range(rounds):
         m.step_all()
+        if r % 997 == 0:
+            stale += m.matches() != match_table(m.tape, m.barriers)
     injected = m.noise.total_injected
     changed = sum(x != y for x, y in zip(s0[0], m.tape))
+    if blocks:
+        outside = sum(x != y for i, (x, y) in enumerate(zip(s0[0], m.tape))
+                      if not any(lo <= i <= hi for lo, hi in blocks))
     for _ in range(rounds):
         m.step_back_all()
     diffs = sum(x != y for x, y in zip(s0[0], m.tape))
-    good = m.state() == s0
+    good = m.state() == s0 and stale == 0
     return _check(good and injected > 0,
-                  f"{n_ips} IPs, {rounds} rounds, {injected} noise flips, "
+                  f"{n_ips} IPs, {rounds} rounds, {injected} noise flips"
+                  f"{f' over {len(blocks)} blocks' if blocks else ''}, "
                   f"{changed} cells changed, round trip diffs {diffs}"
-                  f"{'' if good else ' (heads differ)'}")
+                  f"{'' if good else ' (heads differ or match cache stale)'}")
 
 
 def test_barriers():
@@ -887,6 +980,8 @@ def run_tests(long=False):
     print("== multi-IP + noise ==")
     ok &= noisy_multi_ip_roundtrip(20000, n_ips=2)
     ok &= noisy_multi_ip_roundtrip(20000, n_ips=3, seed=4)
+    ok &= noisy_multi_ip_roundtrip(20000, n_ips=2, seed=6,
+                                   blocks=[(10, 109), (200, 299)])
     if long:
         ok &= noisy_multi_ip_roundtrip(2_000_000, n_ips=2, N=1000,
                                        rate=300, seed=5)
@@ -997,18 +1092,15 @@ def repl():
                 m.poke(int(args[0]), int(args[1]))
                 show()
             elif cmd == 'raw':
-                m.tape[int(args[0])] = int(args[1], 16) & 0xFFFF
-                m.invalidate()
+                m.set_cell(int(args[0]), int(args[1], 16) & 0xFFFF)
                 show()
             elif cmd == 'flip':
-                m.tape[int(args[0])] ^= 1 << int(args[1])
-                m.invalidate()
+                m.flip(int(args[0]), int(args[1]))
                 show()
             elif cmd == 'asm':
                 addr, cells = int(args[0]), assemble(' '.join(args[1:]))
                 for i, c in enumerate(cells):
-                    m.tape[(addr + i) % m.N] = c
-                m.invalidate()
+                    m.set_cell((addr + i) % m.N, c)
                 show()
             elif cmd == 'head':
                 setattr(m.ips[int(args[0])], args[1], int(args[2]) % m.N)

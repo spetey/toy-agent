@@ -32,6 +32,13 @@
   examples they are kept per example in this browser.
   2026-10-12 v0.8: readable op names (a< a+ b^=a syn a0[ ...) and # comments in
   program text, as in fb1d.py v0.4; "show op names" switches the display.
+  2026-10-12 v0.9: several IPs, as fb1d.py: a round steps every IP in order and
+  back undoes them in reverse order; the "dual" example is M3's pair of gadgets
+  (programs/fb1d-immunity-m3.py).  The IP box picks which IP the status line,
+  inspector, jump prediction and "one pass" / "next cell" follow; its heads are
+  the filled dots and the solid IP outline, the other IP's are hollow / dashed.
+  Noise covers both code blocks.  Checked against fb1d.py on the dual tape: the
+  same flips, 4200 rounds, identical tape and heads, exact reversal.
 -->
 <style>
   :root {
@@ -98,7 +105,11 @@
   .cell .heads i.b { background: var(--head-b); }
   .cell .heads i.x { background: var(--head-x); }
   .cell .heads i.p { background: var(--head-p); }
+  .cell .heads i.o { background: #fff; border: 2px solid; }         /* another IP's head */
+  .cell .heads i.a.o { border-color: var(--head-a); } .cell .heads i.b.o { border-color: var(--head-b); }
+  .cell .heads i.x.o { border-color: var(--head-x); } .cell .heads i.p.o { border-color: var(--head-p); }
   .cell.ip { outline: 2px solid var(--head-p); outline-offset: -1px; }
+  .cell.ip2 { outline: 2px dashed var(--head-p); outline-offset: -1px; }
   .cell.sel { box-shadow: 0 0 0 2px var(--sel) inset; }
   .cell.partner { background: var(--partner); }
   .cell.dirty { background: var(--dirty); border-color: #d04040; }
@@ -166,7 +177,8 @@
     <span><b class="op-bound">~</b> boundary</span>
     <span><b class="op-nop">&middot;</b> no-op</span>
     <span><i class="dot" style="background:var(--head-a)"></i> a &nbsp;<i class="dot" style="background:var(--head-b)"></i> b &nbsp;
-          <i class="dot" style="background:var(--head-x)"></i> ix &nbsp;<i class="dot" style="background:var(--head-p)"></i> IP</span>
+          <i class="dot" style="background:var(--head-x)"></i> ix &nbsp;<i class="dot" style="background:var(--head-p)"></i> IP
+          &nbsp;<i class="dot" style="background:#fff;border:2px solid var(--head-b)"></i> hollow: another IP's</span>
     <span><i class="dot" style="background:var(--dirty);border:1px solid #d04040"></i> nonzero syndrome</span>
   </span>
 </header>
@@ -178,6 +190,7 @@
     <div class="controls">
       <label>example <select id="exampleSel"></select></label>
       <button id="btnReset" title="reload the example from scratch">reset</button>
+      <label id="ipSelWrap" hidden title="the IP the status line, inspector, jump prediction, one pass and next cell follow">IP <select id="ipSel"></select></label>
       <span style="width:8px"></span>
       <button id="btnBack" title="step back (deductive)">&#9664; back</button>
       <button id="btnStep" class="primary" title="step forward">step &#9654;</button>
@@ -362,11 +375,24 @@ function assemble(text) {
   return out;
 }
 
-// ------------------------------------------------------------ machine (one IP here; fb1d.py has several)
+// ------------------------------------------------------------ machine (several IPs, as fb1d.py)
+// ips[k] = {a, b, ix, p}.  A step is a round: every IP executes in order, then the
+// round's noise.  back undoes the noise and then the IPs in reverse order, so each
+// undo sees the tape as it was right after that IP's forward step.  m.a, m.b, m.ix,
+// m.p read and write the heads of the selected IP (m.cur), which is what the
+// workbench displays and steers.
 class FB1D {
-  constructor(n) { this.tape = new Uint16Array(n); this.a = 0; this.b = 0; this.ix = 0; this.p = 0;
-                   this.steps = 0; this.mt = null; this.noise = null; }
+  constructor(n, nips = 1) {
+    this.tape = new Uint16Array(n); this.ips = [];
+    for (let k = 0; k < nips; k++) this.ips.push({ a: 0, b: 0, ix: 0, p: 0 });
+    this.cur = 0; this.steps = 0; this.mt = null; this.noise = null;
+  }
   get N() { return this.tape.length; }
+  get ip() { return this.ips[this.cur]; }
+  get a() { return this.ip.a; }   set a(v) { this.ip.a = v; }
+  get b() { return this.ip.b; }   set b(v) { this.ip.b = v; }
+  get ix() { return this.ip.ix; } set ix(v) { this.ip.ix = v; }
+  get p() { return this.ip.p; }   set p(v) { this.ip.p = v; }
   matches() {
     if (this.mt) return this.mt;
     const mt = new Int32Array(this.N).fill(-1), sa = [], sb = [];
@@ -379,54 +405,56 @@ class FB1D {
     }
     return this.mt = mt;
   }
-  write(addr, val) {
-    if (addr === this.p) return;                       // executing-cell guard
+  write(ip, addr, val) {
+    if (addr === ip.p) return;                         // executing-cell guard (the writing IP's own cell)
     if (CELL_CLASS[this.tape[addr]] || CELL_CLASS[val]) this.mt = null;
     this.tape[addr] = val;
   }
   poke(addr, val) { if (CELL_CLASS[this.tape[addr]] || CELL_CLASS[val]) this.mt = null; this.tape[addr] = val & 0xFFFF; }
-  exec(inv) {
-    const t = this.tape, a = this.a, N = this.N, op = CELL_OP[t[this.p]];
+  exec(ip, inv) {
+    const t = this.tape, a = ip.a, N = this.N, op = CELL_OP[t[ip.p]];
     if (!op) return;
     const ch = OP_CHARS[op - 1], s = inv ? -1 : 1;
     switch (ch) {
-      case '<': this.a = (a - s + N) % N; break;
-      case '>': this.a = (a + s + N) % N; break;
-      case '{': this.b = (this.b - s + N) % N; break;
-      case '}': this.b = (this.b + s + N) % N; break;
-      case 'B': this.ix = (this.ix - s + N) % N; break;
-      case 'A': this.ix = (this.ix + s + N) % N; break;
-      case '+': this.write(a, t[a] ^ (inv ? DEC : INC)[C2P[t[a]]]); break;
-      case '-': this.write(a, t[a] ^ (inv ? INC : DEC)[C2P[t[a]]]); break;
-      case 'P': this.write(this.b, t[this.b] ^ (inv ? DEC : INC)[C2P[t[this.b]]]); break;
-      case 'Q': this.write(this.b, t[this.b] ^ (inv ? INC : DEC)[C2P[t[this.b]]]); break;
-      case '.': if (a !== this.b) this.write(this.b, t[this.b] ^ t[a]); break;
-      case ',': if (a !== this.b) this.write(a, t[a] ^ t[this.b]); break;
-      case 'm': if (a !== this.ix) this.write(a, t[a] ^ t[this.ix]); break;
-      case 'I': if (a !== this.ix) this.write(a, t[a] ^ SYNMASK[t[this.ix]]); break;
-      case 'V': if (a !== this.ix) this.write(a, t[a] ^ CORR[t[this.ix]]); break;
-      case 'j': if (a !== this.ix) this.write(this.ix, t[this.ix] ^ t[a]); break;
-      case '[': case ']': if (t[a] & DATA_MASK) { const m = this.matches()[this.p]; if (m >= 0) this.p = m; } break;
-      case '(': case ')': if (t[this.b] & DATA_MASK) { const m = this.matches()[this.p]; if (m >= 0) this.p = m; } break;
+      case '<': ip.a = (a - s + N) % N; break;
+      case '>': ip.a = (a + s + N) % N; break;
+      case '{': ip.b = (ip.b - s + N) % N; break;
+      case '}': ip.b = (ip.b + s + N) % N; break;
+      case 'B': ip.ix = (ip.ix - s + N) % N; break;
+      case 'A': ip.ix = (ip.ix + s + N) % N; break;
+      case '+': this.write(ip, a, t[a] ^ (inv ? DEC : INC)[C2P[t[a]]]); break;
+      case '-': this.write(ip, a, t[a] ^ (inv ? INC : DEC)[C2P[t[a]]]); break;
+      case 'P': this.write(ip, ip.b, t[ip.b] ^ (inv ? DEC : INC)[C2P[t[ip.b]]]); break;
+      case 'Q': this.write(ip, ip.b, t[ip.b] ^ (inv ? INC : DEC)[C2P[t[ip.b]]]); break;
+      case '.': if (a !== ip.b) this.write(ip, ip.b, t[ip.b] ^ t[a]); break;
+      case ',': if (a !== ip.b) this.write(ip, a, t[a] ^ t[ip.b]); break;
+      case 'm': if (a !== ip.ix) this.write(ip, a, t[a] ^ t[ip.ix]); break;
+      case 'I': if (a !== ip.ix) this.write(ip, a, t[a] ^ SYNMASK[t[ip.ix]]); break;
+      case 'V': if (a !== ip.ix) this.write(ip, a, t[a] ^ CORR[t[ip.ix]]); break;
+      case 'j': if (a !== ip.ix) this.write(ip, ip.ix, t[ip.ix] ^ t[a]); break;
+      case '[': case ']': if (t[a] & DATA_MASK) { const m = this.matches()[ip.p]; if (m >= 0) ip.p = m; } break;
+      case '(': case ')': if (t[ip.b] & DATA_MASK) { const m = this.matches()[ip.p]; if (m >= 0) ip.p = m; } break;
     }
   }
-  step() {
-    this.exec(false); this.p = (this.p + 1) % this.N;
+  step() {                                             // one round
+    for (const ip of this.ips) { this.exec(ip, false); ip.p = (ip.p + 1) % this.N; }
     if (this.noise) this.noise.forward(this);
     this.steps++;
   }
   back() {
     this.steps--;
     if (this.noise) this.noise.backward(this);
-    this.p = (this.p - 1 + this.N) % this.N; this.exec(true);
+    for (let k = this.ips.length - 1; k >= 0; k--) { const ip = this.ips[k]; ip.p = (ip.p - 1 + this.N) % this.N; this.exec(ip, true); }
   }
 }
 // Reversible noise, as fb1d.py's NoisePool: whether round r flips, and which bit of which
 // cell, is a pure function of (seed, r).  Forward applies the flip for the round just
 // completed; backward applies the same xor again before undoing the step.  No state is
 // kept beyond the round counter, so back-and-forth (even past step 0) is exact.
+// blocks = [[lo, hi], ...]: the flip picks a block, then a cell in it (as fb1d.py's
+// set_noise(blocks=); one block gives the same flips as before v0.9).
 class Noise {
-  constructor(rate, lo, hi, seed) { this.rate = rate; this.lo = lo; this.hi = hi; this.seed = seed >>> 0;
+  constructor(rate, blocks, seed) { this.rate = rate; this.blocks = blocks; this.seed = seed >>> 0;
                                     this.total = 0; this.rounds = 0; }
   hash(r, k) {                       // 32-bit mix of (seed, round, k) -> [0, 1)
     let x = (this.seed ^ Math.imul(r | 0, 0x9E3779B9) ^ Math.imul(k + 1, 0x85EBCA6B)) >>> 0;
@@ -435,7 +463,8 @@ class Noise {
   }
   flipAt(r) {
     if (this.hash(r, 0) * 1e6 >= this.rate) return null;
-    return [this.lo + Math.floor(this.hash(r, 1) * (this.hi - this.lo + 1)), Math.floor(this.hash(r, 2) * 16)];
+    const bl = this.blocks[Math.floor(this.hash(r, 3) * this.blocks.length)];
+    return [bl[0] + Math.floor(this.hash(r, 1) * (bl[1] - bl[0] + 1)), Math.floor(this.hash(r, 2) * 16)];
   }
   forward(m) {
     this.rounds++;
@@ -514,8 +543,37 @@ const sweep = (dir, label) => [[label + ': test ~', 'm+'], [label + ' [', '['], 
 const gadgetSegments = () => [['outer [', '['], ['outer -', '-'], ...WORK.map(([l, t]) => ['rest' + l, t]),
   ...sweep('A', 'scan'), ...sweep('B', 'rewind'), ['moult: b on, L = 1', '}P'], ['outer +', '+'], ['outer ]', ']']];
 
+// ------------------------------------------------------------ the M3 pair (programs/fb1d-immunity-m3.py)
+// Two copies of the gadget on two IPs; each IP's ix scans the other's ~ code ~ block.
+//   ~ [A code] ~ [sA gA] [LA] [A fuel] ~ [B code] ~ [sB gB] [LB] [B fuel]
+const DUAL_FUEL = 90;
+function buildDual() {
+  const code = assemble(gadgetSegments().map(s => s[1]).join('\n')), L = code.length;
+  const gad = base => ({ lead: base, code: base + 1, trail: base + 1 + L, s: base + L + 2, g: base + L + 3,
+                         L0: base + L + 4, fuelHi: base + L + 4 + DUAL_FUEL, end: base + L + 5 + DUAL_FUEL, pStart: base + 3 });
+  const A = gad(0), B = gad(A.end), N = B.end;
+  const m = new FB1D(N, 2), labels = {};
+  for (const g of [A, B]) {
+    m.tape[g.lead] = BOUNDARY; m.tape.set(code, g.code); m.tape[g.trail] = BOUNDARY; m.tape[g.L0] = encode(1);
+    labels[g.s] = 's'; labels[g.g] = 'g';
+  }
+  m.ips[0] = { a: A.s, b: A.L0, ix: B.lead, p: A.pStart };
+  m.ips[1] = { a: B.s, b: B.L0, ix: A.lead, p: B.pStart };
+  return { m, codeEnd: N, codeRanges: [[A.code, A.trail - 1], [B.code, B.trail - 1]], labels,
+    viewLo: 0, viewHi: N, loopStops: [A.pStart, B.pStart], ipNames: ['A', 'B'],
+    stomachs: [[A.s, A.g], [B.s, B.g]],
+    regions: { noise: [[A.lead, A.trail], [B.lead, B.trail]], fuel: [[A.L0, A.fuelHi], [B.L0, B.fuelHi]] },
+    note: 'M3: two copies of the gadget, two IPs.  IP0 runs A (code ' + A.code + '-' + (A.trail - 1) + ') and its ix scans B\'s block ' +
+          B.lead + '-' + B.trail + '; IP1 runs B (code ' + B.code + '-' + (B.trail - 1) + ') and scans A\'s block 0-' + A.trail + '.\n' +
+          'Each IP has its own stomach [s g] and garbage trail from L (' + A.L0 + ' and ' + B.L0 + ').  The IP box picks the IP that the status line,\n' +
+          'inspector and "one pass" / "next cell" follow; its heads are filled dots, the other IP\'s hollow.  A step is one round: both IPs move.\n' +
+          'Try: click a cell of either code block, "flip bit of sel", then "one pass": the other IP repairs it (its b moves +2, leaving [mask, 1]).\n' +
+          'Noise covers both code blocks.  A pass is about 4100 rounds for each IP; they run in lockstep until one of them corrects something.' };
+}
+
 // ------------------------------------------------------------ examples
 // {doc, size, codeAt, segments, setup(m, codeEnd) -> {a, b, ix, p, labels, viewLo, viewHi, note, loopStop, regions}}
+// or build() -> {m, codeEnd, codeRanges?, labels, loopStops?, ipNames?, stomachs?, regions?, ...}
 const EXAMPLES = {
   blank: {
     doc: 'blank tape: write your own code, data and heads',
@@ -537,7 +595,7 @@ const EXAMPLES = {
       m.tape[pLead] = BOUNDARY; m.tape.set(code, pCode); m.tape[pTrail] = BOUNDARY;
       m.a = s; m.b = L0; m.ix = pLead; m.p = 3;
       const labels = { [s]: 's', [g]: 'g' };
-      return { m, codeEnd: L + 2, labels, viewLo: 0, viewHi: N, loopStop: 3,
+      return { m, codeEnd: L + 2, labels, viewLo: 0, viewHi: N, loopStop: 3, stomachs: [[s, g]],
         regions: { pblock: [pLead, pTrail], fuel: [L0, pLead - 1] },
         note: 'Layout: ~ gadget ~ [s g] L fuel... ~ partner (a copy of the gadget) ~.  The stomach s, g under head a is fixed.\n' +
               'Head b sits on L, the last garbage cell (always nonzero); it moves right +1 per pass (the moult) and +2 per\n' +
@@ -546,6 +604,12 @@ const EXAMPLES = {
               'Red = nonzero syndrome: an error in the partner block, but also the mask cells in the trail (masks are not codewords).\n' +
               'A pass is ' + (2 * L + 3) + ' WORK visits, about 4100 steps; "play" at full speed takes a couple of seconds per pass.' };
     }
+  },
+  dual: {
+    doc: 'M3: two gadgets on two IPs correcting each other',
+    codeAt: 1, size: null,
+    segments: gadgetSegments,
+    build: buildDual,
   },
   copy: {
     doc: '[.>}] copies a zero-terminated string by xor into zeros', size: 48, codeAt: 0,
@@ -752,10 +816,16 @@ function applyMark() {
 }
 
 // ------------------------------------------------------------ state
-let m, segments = [], codeAt = 0, codeEnd = 0, labels = {}, regions = {}, loopStop = 1;
+// codeRanges: the [lo, hi] ranges that hold the program; the segments describe the
+// program once, and every range runs the same program (the dual example has two
+// copies).  loopStops / stomachs / ipNames are per IP.
+let m, segments = [], codeAt = 0, codeEnd = 0, codeRanges = [], labels = {}, regions = {};
+let loopStops = [1], stomachs = [], ipNames = [];
 let exampleName = 'immunity', selected = null, timer = null;
 let segLens = [];
 function setSegments(segs) { segments = segs; segLens = segs.map(sg => segLen(sg[1])); }
+const loopStop = () => loopStops[Math.min(m.cur, loopStops.length - 1)] || 0;
+const inCode = i => codeRanges.some(r => i >= r[0] && i <= r[1]);
 
 function loadExample(name) {
   stopPlay();
@@ -774,8 +844,14 @@ function loadExample(name) {
     info = ex.setup(m, codeEnd);
     m.a = info.a; m.b = info.b; m.ix = info.ix; m.p = info.p;
   }
-  m.steps = 0; m.mt = null;
-  labels = info.labels || {}; regions = info.regions || {}; loopStop = info.loopStop || 0;
+  m.steps = 0; m.mt = null; m.cur = 0;
+  codeRanges = info.codeRanges || [[codeAt, codeEnd - 1]];
+  labels = info.labels || {}; regions = info.regions || {};
+  for (const k in regions) if (!Array.isArray(regions[k][0])) regions[k] = [regions[k]];   // one range -> list of ranges
+  loopStops = info.loopStops || [info.loopStop || 0]; stomachs = info.stomachs || []; ipNames = info.ipNames || [];
+  const ipSel = $('ipSel'); ipSel.innerHTML = '';
+  m.ips.forEach((ip, k) => { const o = document.createElement('option'); o.value = k; o.textContent = 'IP' + k + (ipNames[k] ? ' (' + ipNames[k] + ')' : ''); ipSel.appendChild(o); });
+  $('ipSelWrap').hidden = m.ips.length < 2;
   $('viewLo').value = info.viewLo || 0; $('viewHi').value = info.viewHi;
   const blank = name === 'blank';
   $('codeText').value = blank ? auth.code : exampleCodeText();
@@ -790,7 +866,7 @@ function loadExample(name) {
   if (blank) showNotesErrors();
   try { localStorage.setItem('fb1d-workbench-example', name); } catch (e) {}
   $('note').textContent = info.note || '';
-  $('runTo').value = loopStop;
+  $('runTo').value = loopStop();
   selected = null; selEnd = null;
   setNoise(false);
   renderAll();
@@ -820,20 +896,28 @@ function loadCodeFromText() {
   stopPlay();
   let code;
   try { code = assemble($('codeText').value); } catch (e) { alert(e.message); return; }
-  const at = codeAt;
-  const need = Math.max(m.N, at + code.length + 16);
-  if (need > m.N) { const t = new Uint16Array(need); t.set(m.tape); m.tape = t; }
-  for (let i = 0; i < Math.max(code.length, codeEnd - at); i++) m.poke(at + i, i < code.length ? code[i] : 0);
-  codeEnd = at + code.length;
+  if (codeRanges.length > 1) {                          // several copies (dual): rewrite each in place
+    for (const r of codeRanges) for (let i = 0; i <= Math.max(code.length - 1, r[1] - r[0]); i++) m.poke(r[0] + i, i < code.length ? code[i] : 0);
+    codeRanges = codeRanges.map(r => [r[0], r[0] + code.length - 1]);
+    m.ips.forEach((ip, k) => { ip.p = codeRanges[k] ? codeRanges[k][0] : ip.p; });
+  } else {
+    const at = codeAt;
+    const need = Math.max(m.N, at + code.length + 16);
+    if (need > m.N) { const t = new Uint16Array(need); t.set(m.tape); m.tape = t; }
+    for (let i = 0; i < Math.max(code.length, codeEnd - at); i++) m.poke(at + i, i < code.length ? code[i] : 0);
+    codeEnd = at + code.length; codeRanges = [[at, codeEnd - 1]];
+    m.p = at;
+  }
   setSegments([['code', $('codeText').value]]);
-  m.p = at; m.steps = 0; m.mt = null;
+  m.steps = 0; m.mt = null;
   renderAll();
 }
 
 // ------------------------------------------------------------ helpers
 const $ = id => document.getElementById(id);
 function segmentAt(p) {
-  let off = codeAt;
+  const r = codeRanges.find(r => p >= r[0] && p <= r[1]);
+  let off = r ? r[0] : codeAt;
   for (let i = 0; i < segments.length; i++) {
     const len = segLens[i];
     if (p >= off && p < off + len) return { i, label: segments[i][0], off: p - off, start: off, end: off + len };
@@ -841,11 +925,12 @@ function segmentAt(p) {
   }
   return null;
 }
-function frameRole(addr) {
-  if (exampleName !== 'immunity') return null;
-  return addr === m.b ? 'L' : null;
+function frameRole(addr) {                              // L: the last garbage cell, under an IP's b
+  if (!stomachs.length) return null;
+  const k = m.ips.findIndex(ip => ip.b === addr);
+  return k < 0 ? null : m.ips.length > 1 ? 'L' + k : 'L';
 }
-function inRegion(name, addr) { const r = regions[name]; return r && addr >= r[0] && addr <= r[1]; }
+function inRegion(name, addr) { const rs = regions[name]; return !!rs && rs.some(r => addr >= r[0] && addr <= r[1]); }
 function jumpText(addr, op) {
   const partner = m.matches()[addr];
   if (partner < 0) return '<span class="k">partner</span> none (unmatched, or across a ~ barrier: no-op)';
@@ -878,21 +963,26 @@ const escHtml = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').repl
 function describeCell(addr) {
   const v = m.tape[addr], op = opChar(v), lines = [];
   const lb = labelOf(addr), mk = markAt(addr);
-  const lab = (lb ? '  "' + lb + '"' : (frameRole(addr) ? '  L: last garbage cell, under b' : '')) +
+  const lab = (lb ? '  "' + lb + '"' : (frameRole(addr) ? '  ' + frameRole(addr) + ': last garbage cell, under b' : '')) +
               (mk ? '  [' + mk.name + ' ' + mk.lo + '-' + mk.hi + ']' : '');
-  lines.push('<span class="k">address</span> ' + addr + lab + (inRegion('pblock', addr) ? '  (partner block)' : inRegion('fuel', addr) ? '  (fuel / trail)' : ''));
+  const where = inRegion('pblock', addr) ? '  (partner block)' : inRegion('fuel', addr) ? '  (fuel / trail)'
+              : codeRanges.length > 1 && inCode(addr) ? '  (' + (ipNames[codeRanges.findIndex(r => addr >= r[0] && addr <= r[1])] || '') + ' code)' : '';
+  lines.push('<span class="k">address</span> ' + addr + lab + where);
   lines.push('<span class="k">raw</span>     0x' + v.toString(16).padStart(4, '0') + '  payload ' + C2P[v] + (C2P[v] === 2047 ? '  (boundary ~)' : ''));
   lines.push(...bitsLines(v));
   lines.push('<span class="k">hamming</span> ' + synText(v));
   const opHtml = op => { const [x, y] = showNames ? [OP_NAMES[op], op] : [op, OP_NAMES[op]];
     return '<b class="' + OP_INFO[op][0] + '">' + escHtml(x) + '</b> <span class="k">(' + escHtml(y) + ')</span>  ' + escHtml(OP_INFO[op][1]); };
   lines.push('<span class="k">as op</span>   ' + (op ? opHtml(op) : (v === NOP_FILLER ? 'NOP filler' : 'no-op')));
-  if (addr >= codeAt && addr < codeEnd) { const s = segmentAt(addr); if (s) lines.push('<span class="k">segment</span> ' + s.label.trim() + '  (+' + s.off + ')'); }
+  if (inCode(addr)) { const s = segmentAt(addr); if (s) lines.push('<span class="k">segment</span> ' + s.label.trim() + '  (+' + s.off + ')'); }
   if (op && '[]()'.includes(op)) lines.push(jumpText(addr, op));
-  if (addr === m.a) lines.push('<span class="k">head a is here</span>');
-  if (addr === m.b) lines.push('<span class="k">head b is here</span>');
-  if (addr === m.ix) lines.push('<span class="k">head ix is here</span>');
-  if (addr === m.p) lines.push('<span class="k">IP is here: this executes next</span>');
+  m.ips.forEach((ip, k) => {
+    const who = m.ips.length > 1 ? ' of IP' + k : '';
+    if (addr === ip.a) lines.push('<span class="k">head a' + who + ' is here</span>');
+    if (addr === ip.b) lines.push('<span class="k">head b' + who + ' is here</span>');
+    if (addr === ip.ix) lines.push('<span class="k">head ix' + who + ' is here</span>');
+    if (addr === ip.p) lines.push('<span class="k">IP' + (m.ips.length > 1 ? k : '') + ' is here: this executes next</span>');
+  });
   return lines.join('\n');
 }
 
@@ -924,29 +1014,34 @@ function updateCells() {
   const ipPartner = isBr(m.tape[m.p]) ? mt[m.p] : -1, sr = selRange();
   for (let i = 0; i < cellEls.length; i++) {
     const c = cellEls[i]; if (!c) continue;
-    const v = m.tape[i], op = opChar(v), inCode = i >= codeAt && i < codeEnd;
+    const v = m.tape[i], op = opChar(v), code = inCode(i);
     const [s, pa] = syndrome(v);
-    c.className = 'cell ' + (inCode ? 'code' : 'data');
+    c.className = 'cell ' + (code ? 'code' : 'data');
     if (inRegion('pblock', i)) c.classList.add('pblock'); else if (inRegion('fuel', i)) c.classList.add('fuel');
     const ve = c.children[1];
-    if (inCode || inRegion('pblock', i) || C2P[v] === 2047) {
+    if (code || inRegion('pblock', i) || C2P[v] === 2047) {
       const t = cellLabel(v); ve.textContent = t; ve.className = 'v ' + cellClass(v) + (t.length > 2 ? ' nm4' : t.length > 1 ? ' nm2' : '');
     }
     else { ve.textContent = C2P[v]; ve.className = 'v' + (op ? ' ' + OP_INFO[op][0] : ''); }
     const role = frameRole(i);
-    c.children[2].textContent = labelOf(i) || role || (inCode || inRegion('pblock', i) ? '' : (op ? cellLabel(v) : ''));
+    c.children[2].textContent = labelOf(i) || role || (code || inRegion('pblock', i) ? '' : (op ? cellLabel(v) : ''));
     if (role) c.classList.add('frame');
     if (s || pa) c.classList.add('dirty');
-    const sg = inCode ? segmentAt(i) : null;
+    const sg = code ? segmentAt(i) : null;
     const mk = markAt(i);
     c.children[0].style.background = mk ? mk.color : sg ? SEG_COLORS[sg.i % SEG_COLORS.length] : 'transparent';
     if (mk) c.classList.add('marked');
     if (cur && sg && sg.i === cur.i) c.classList.add('segcur');
-    if (i === m.p) c.classList.add('ip');
     if (i === ipPartner) c.classList.add('partner');
     if (sr && i >= sr[0] && i <= sr[1]) c.classList.add('sel');
-    c.children[3].innerHTML = (i === m.a ? '<i class="a"></i>' : '') + (i === m.b ? '<i class="b"></i>' : '') +
-                              (i === m.ix ? '<i class="x"></i>' : '') + (i === m.p ? '<i class="p"></i>' : '');
+    let heads = '';
+    m.ips.forEach((ip, k) => {
+      const o = k === m.cur ? '' : ' o';
+      if (i === ip.p) c.classList.add(k === m.cur ? 'ip' : 'ip2');
+      heads += (i === ip.a ? '<i class="a' + o + '"></i>' : '') + (i === ip.b ? '<i class="b' + o + '"></i>' : '') +
+               (i === ip.ix ? '<i class="x' + o + '"></i>' : '') + (i === ip.p ? '<i class="p' + o + '"></i>' : '');
+    });
+    c.children[3].innerHTML = heads;
   }
 }
 function updateStatus() {
@@ -957,16 +1052,25 @@ function updateStatus() {
     next += partner < 0 ? '  [unmatched: no-op]'
           : ((hv & DATA_MASK) ? '  -> payload(tape[' + head + '])=' + C2P[hv] + ' so JUMP to ' + (partner + 1) : '  -> tape[' + head + '] is zero so fall through');
   }
-  const s = segmentAt(m.p);
-  const sA = Object.keys(labels).find(k => labels[k] === 's');
-  const fr = exampleName === 'immunity' && sA ? '    stomach: s=' + C2P[m.tape[+sA]] + ' g=' + C2P[m.tape[+sA + 1]] + '   L (at b=' + m.b + ')=' + C2P[m.tape[m.b]] : '';
+  const s = segmentAt(m.p), multi = m.ips.length > 1;
+  const st = stomachs[m.cur];
+  const fr = st ? '    stomach: s=' + C2P[m.tape[st[0]]] + ' g=' + C2P[m.tape[st[1]]] + '   L (at b=' + m.b + ')=' + C2P[m.tape[m.b]] : '';
+  const who = multi ? 'IP' + m.cur + (ipNames[m.cur] ? ' (' + ipNames[m.cur] + ')' : '') + ':  ' : '';
+  let others = '';
+  if (multi) m.ips.forEach((ip, k) => {
+    if (k === m.cur) return;
+    const sg = segmentAt(ip.p), so = stomachs[k];
+    others += '\nIP' + k + (ipNames[k] ? ' (' + ipNames[k] + ')' : '') + ':  p=' + ip.p + '  a=' + ip.a + '  b=' + ip.b + '  ix=' + ip.ix +
+              (so ? '    stomach: s=' + C2P[m.tape[so[0]]] + ' g=' + C2P[m.tape[so[1]]] + '   L=' + C2P[m.tape[ip.b]] : '') +
+              (sg ? '    in: ' + sg.label.trim() : '    outside the code');
+  });
   $('status').textContent =
-    'step ' + m.steps + '    p=' + m.p + '  a=' + m.a + '  b=' + m.b + '  ix=' + m.ix +
+    'step ' + m.steps + '    ' + who + 'p=' + m.p + '  a=' + m.a + '  b=' + m.b + '  ix=' + m.ix +
     '    payload[a]=' + C2P[m.tape[m.a]] + '  payload[b]=' + C2P[m.tape[m.b]] + '  ix cell: ' + synText(m.tape[m.ix]).split(' (')[0] + fr + '\n' +
     'next: ' + next + (markAt(m.p) ? '\nin your mark: ' + markAt(m.p).name : '') + (s ? '\nin segment: ' + s.label.trim()
       : halts() && m.p === codeEnd ? '\nFinished: the IP has reached the end of your code (' + m.steps + ' steps). back or play backward rewinds; reset starts again.'
       : halts() && m.p > codeEnd ? '\nThe IP is past the end of your code, running empty cells and data as ops. The run buttons won\'t go further; reset starts again.'
-      : (m.p < codeAt || m.p >= codeEnd ? '\nIP is outside the code' : ''));
+      : (!inCode(m.p) ? '\nIP is outside the code' : '')) + others;
   const sr = selRange(), sl = selected === null ? null : labelOf(selected);
   $('selAddr').textContent = !sr ? 'none' : sr[0] === sr[1] ? sr[0] + (sl ? ' (' + sl + ')' : '') : sr[0] + '-' + sr[1] + ' (' + (sr[1] - sr[0] + 1) + ' cells)';
   $('noiseInfo').textContent = m.noise ? 'flips so far: ' + m.noise.total : '';
@@ -974,7 +1078,7 @@ function updateStatus() {
 function updateSegments() {
   const el = $('segments'); el.innerHTML = '';
   const cur = segmentAt(m.p);
-  let off = codeAt;
+  let off = codeRanges.length ? codeRanges[0][0] : codeAt;   // offsets are listed for the first copy
   segments.forEach((s, i) => {
     const d = document.createElement('div');
     if (cur && cur.i === i) d.className = 'cur';
@@ -1106,8 +1210,8 @@ function play(back) {
 }
 function setNoise(on) {
   if (on) {
-    const r = regions.pblock || [codeAt, codeEnd - 1];
-    m.noise = new Noise(+$('noiseRate').value || 0, r[0], r[1], +$('noiseSeed').value || 0);
+    const blocks = regions.noise || regions.pblock || codeRanges;
+    m.noise = new Noise(+$('noiseRate').value || 0, blocks, +$('noiseSeed').value || 0);
   } else m.noise = null;
   $('btnNoise').textContent = on ? 'noise on' : 'noise off';
   $('btnNoise').classList.toggle('on', on);
@@ -1122,12 +1226,13 @@ try { const saved = localStorage.getItem('fb1d-workbench-example'); if (saved &&
 sel.value = startExample;
 sel.addEventListener('change', () => loadExample(sel.value));
 $('btnReset').addEventListener('click', () => loadExample(exampleName));
+$('ipSel').addEventListener('change', () => { m.cur = +$('ipSel').value; $('runTo').value = loopStop(); refresh(); onHover(null); });
 $('btnStep').addEventListener('click', () => { stopPlay(); runSteps(1, false); });
 $('btnBack').addEventListener('click', () => { stopPlay(); runSteps(1, true); });
 $('btnStepN').addEventListener('click', () => { stopPlay(); runSteps(+$('nSteps').value || 1, false); });
 $('nSteps').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnStepN').click(); });
 $('btnCell').addEventListener('click', () => { stopPlay(); runUntilSegment(isWorkStart); });
-$('btnLoop').addEventListener('click', () => { stopPlay(); runUntil(loopStop, false); });
+$('btnLoop').addEventListener('click', () => { stopPlay(); runUntil(loopStop(), false); });
 $('btnRunTo').addEventListener('click', () => { stopPlay(); runUntil(+$('runTo').value || 0, false); });
 $('runTo').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnRunTo').click(); });
 $('btnGoStep').addEventListener('click', () => { stopPlay(); goToStep(Math.trunc(+$('goStep').value || 0)); });

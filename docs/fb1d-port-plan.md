@@ -1,6 +1,7 @@
 # Plan: porting the Wikivore to fb1d
 
-*2026-09-07, renamed 2026-09-25; M1 done 2026-09-25, M2 done 2026-09-26.  Naming: the 8-bit bracket language
+*2026-09-07, renamed 2026-09-25; M1 done 2026-09-25, M2 done 2026-09-26,
+M3 done 2026-10-12.  Naming: the 8-bit bracket language
 formerly called RBFF is now **fb1d8** (`fb1d8.py`, `fb1d8.html`); the
 16-bit extension described here, formerly "RBFF-16", is **fb1d**
 (`fb1d.py`).  The April 2026 1D simulator that used to be `fb1d.py` is
@@ -193,8 +194,17 @@ comfortably under 1000 cells.
   labelled M/s/g, hover inspector (raw, payload, Hamming diagnosis, op,
   segment, bracket partner and jump prediction for either family),
   click to edit or `^n` to flip a bit, "next cell" and "one pass",
-  reversible noise over the partner block.  Still to add for M3/M4: an
-  IP selector for multi-IP, the free-food button, a corrections counter.
+  reversible noise over the partner block.  v0.9 (2026-10-12, M3): the
+  interpreter runs several IPs as `fb1d.py` does (a round steps every
+  IP in order, back undoes them in reverse), the "dual" example is the
+  M3 pair, an IP box picks the IP that the status line, inspector,
+  jump prediction, "one pass" and "next cell" follow (its heads are the
+  filled dots, the other IP's hollow), and noise covers both code
+  blocks.  Checked against `fb1d.py` on the dual tape: same four flips
+  (one per block, one on IP1's executing cell, one on a wall), 4200
+  rounds, identical tape and heads, exact reversal; the M2 example
+  still matches too.  Still to add for M4: the free-food button, a
+  corrections counter.
 - **MTTF harness**: port `compare-agents-mttf.py` logic: run to failure
   under a given rate, classify opcode corruption vs zero starvation,
   report mean and spread.  Same units as fb2d so numbers compare
@@ -310,6 +320,119 @@ Decisions:
   once (`[>+<]` sets `g`), and its uncompute is the merge above; no
   `FOR` loops; no `WastePool`.
 
+## M3 status (done 2026-10-12) and decisions taken
+
+`programs/fb1d-immunity-m3.py` puts two copies of the M2 gadget on two
+IPs, each `ix` scanning the other's `~ code ~` block.  The gadget code
+did not change: it was already position-relative and already scanned a
+block between two walls.  Layout:
+
+    ~ [A code] ~ [sA gA] [LA] [A fuel ...] ~ [B code] ~ [sB gB] [LB] [B fuel ...]
+
+`python3 programs/fb1d-immunity-m3.py` (~40 s) passes: 5 clean passes in
+lockstep (4094 rounds each, as M2); every (block, cell, bit) single-bit
+error, 3456 cases, repaired by the partner within one pass at 2 fuel
+cells for the corrector and the moult only for the victim; 1-3 errors
+in both blocks at once; errors injected mid-pass on the cell the partner
+IP is executing and on its walls; 60 passes of 300/1M noise over both
+blocks with no missed single-bit error and a 246k-round exact reversal.
+
+Simulator changes for M3 (`fb1d.py` v0.5): `set_noise(..., blocks=)`
+puts noise over several equal-length blocks (the two code blocks, with
+the stomachs and fuel spared, as fb2d's harness spares the stomach and
+waste rows); the bracket match table is cached incrementally (a sorted
+list of bracket and barrier addresses), because the gadget's wall test
+`m+` writes a barrier-class value into `s` four times per pass and the
+full O(N) rebuild dominated once the tape carried thousands of fuel
+cells.
+
+**MTTF harness** `programs/fb1d-mttf.py` ports `compare-agents-mttf.py`:
+structural failure (an IP or head out of its region, no pass start for
+four clean passes, a dirty stomach, wrong `L` or `ix` at a pass start,
+fuel exhausted), plus two diagnostics fb2d's harness does not have: the
+first *persistent code damage* (a cell whose fetched op differs from the
+original at two checks two passes apart, i.e. a miscorrected 2-bit
+error) and the *coincidence* before a failure (a second flip on an
+already-flipped cell within two passes).  Noise is drawn with geometric
+gaps, so harness seeds do not reproduce REPL seeds.  Fuel is sized to
+the round budget, since there is no metabolism yet.
+
+Results, 10 seeds, 10M-round budget, noise over both code blocks (216
+cells):
+
+| flips per 1M rounds | mean rounds to failure | median | survived 10M | causes |
+|---|---|---|---|---|
+| 100 | 8.25M (censored) | 10M | 6/10 | 2 stomach_dirty, 2 ip_escaped |
+| 200 | 5.23M | 4.23M | 2/10 | 4 stomach_dirty, 2 ip_escaped, 1 ix_escaped, 1 ix_not_home |
+| 300 | 2.52M | 2.28M | 0/10 | 4 ip_escaped, 2 a_escaped, 2 stomach_dirty, 2 ix_escaped |
+
+With a 50M-round budget at 100/1M (same seeds) the uncensored mean is
+16.9M rounds, median 14.5M, 1 survivor, 2 of the 9 failures preceded by
+persistent damage.
+
+**Side by side with the fb2d narrow agent** (`--fb2d-narrow`, same
+rates, seeds and 10M budget; fb2d's harness with free food, bite 15;
+`programs/fb1d-mttf-results.csv`):
+
+| flips per 1M rounds | fb1d M3 pair, mean (median) | fb2d narrow, mean (median) | ratio |
+|---|---|---|---|
+| 100 | 8.25M (10M), 6 survived | 8.92M (10M), 7 survived | 0.93 |
+| 200 | 5.23M (4.23M), 2 survived | 6.31M (6.64M), 2 survived | 0.83 |
+| 300 | 2.52M (2.28M), 0 survived | 2.66M (1.77M), 1 survived | 0.95 |
+
+The rate is flips per 1M rounds over the whole noise region, as in
+fb2d; the regions differ: 216 cells here (two `~ code ~` blocks)
+against 1320 (code, handler, return, bypass, copy-over and metabolism
+rows of both gadgets, columns 1..W-2).  So at equal system-wide rates
+the two agents live about as long, while the 1D pair takes six times
+the per-cell rate (0.46 vs 0.076 flips per 1M rounds per cell at 100).
+Three caveats: fb2d's narrow agent corrects 2-bit errors (copy-over,
+its M5 equivalent) and the fb1d pair does not; fb2d's agent also eats,
+and some of its deaths may be metabolic (its causes were 18
+ip_escaped, 2 stomach_dirty_cl); and a fb2d step moves one IP one cell
+on a torus while a fb1d round is two bracket steps that may each
+consult the whole tape.  The like-for-like number is the per-cell
+rate, where the 1D pair's advantage comes from the gap between visits:
+4094 rounds per pass over 108 cells with two visits each, against
+fb2d's 86-step clean cycle per cell over a much larger scan area.
+
+Findings:
+
+- **Deaths come from 2-bit errors in a window, mostly transient, not
+  from lasting miscorrection.**  Of the 22 failures in the 10M-budget
+  runs, 19 were preceded within two passes by a second flip on a cell
+  that already carried one: 13 pairs on two data bits, 6 on a data bit
+  and a parity bit.  Two data flips make the cell fetch as NOP until
+  the partner's `ix` reaches it (up to one pass, 4094 rounds), and a
+  NOP'd bracket, `-`, `A`/`B` or `m` derails the pass before the repair
+  arrives.  A data+parity pair still fetches the right op, but the
+  gadget's `V` flips a third bit; after that the cell may fetch as NOP
+  (or as a wrong op) for the pass until the next visit, where the odd
+  overall parity makes `V` flip bit 0 and the cell settles on a wrong
+  but valid codeword.  Only 3 of the 22 failures showed persistent
+  damage first, and persistent damage was survived for millions of
+  rounds twice (a NOP'd first `P` of the rest-WORK at A+3 ran 4.8M
+  rounds).  Consequences for the plan: M5's copy-over prevents the
+  data+parity deaths (about a third of them, more at low rates: 5 of 8
+  at 100/1M in the 50M run) by correcting the 2-bit error instead of
+  miscorrecting it, but not the data+data deaths, which only a shorter
+  gap between visits (more gadgets, shorter blocks) can reduce.
+  Back-of-envelope at 300/1M: per-cell rate 1.39e-6 per round, window
+  about 3000 rounds, so one flip in 240 gets a partner; ~3000 flips per
+  10M rounds; the first data-data pair is expected near 2M rounds.
+  Observed mean 2.5M.
+- **The wall rule made no difference.**  `--no-barriers` at 300/1M gives
+  the identical ten failure rounds: brackets never had the chance to
+  pair across a wall before the state was already broken.  The open
+  question below (wider walls) is moot for M3's failure mode; revisit
+  only if a later design survives long enough for wall flips to matter.
+- **Rate scaling** is roughly linear in the rate (16.9M, 5.2M, 2.5M at
+  100, 200, 300), as expected when the fatal event is a pair of flips
+  within a window whose length does not depend on the rate.
+
+The pair runs in the REPL (`load dual`), in the harness, and in the
+browser workbench (`fb1d.html`, example "dual", see Part 4).
+
 ## Recommended model and effort per stage
 
 Written 2026-09-25 as budget guidance: spend on the strongest model
@@ -338,7 +461,7 @@ and debug it against the tests.
 |---|---|---|
 | M1 ✓ | `fb1d.py` core, tests, noise hook, boundary-barrier decision | bijectivity tests pass; 2M-step multi-IP round trip with noise gives zero diffs |
 | M2 ✓ | Single gadget correcting a static partner block (no partner IP) | corrects injected 1-bit errors anywhere in the block; garbage per correction measured |
-| M3 | Dual gadgets, mutual correction, MTTF harness | MTTF curves at 100/200/300 flips per 1M, compared to fb2d narrow agent |
+| M3 ✓ | Dual gadgets, mutual correction, MTTF harness | MTTF curves at 100/200/300 flips per 1M, compared to fb2d narrow agent |
 | M4 | Metabolism + hunger + free-food cheat + GUI | agent runs indefinitely with free food at 200 flips per 1M; starves without it, as fb2d does |
 | M5 | 2-bit copy-over, boundary tweak if adopted, notes | MTTF gain measured; `docs/` updated |
 
@@ -386,3 +509,7 @@ fb2d's experimental setup nearly verbatim.
     flips, so both rules fail at roughly two to three flips.  Settle it
     empirically: compare MTTF under noise with `Machine(barriers=...)`
     extended to a third setting, once the 1D agent runs (M3/M5).
+  - *M3 data point (2026-10-12):* `fb1d-mttf.py --no-barriers` at
+    300/1M reproduces the barrier-on failure rounds exactly for all ten
+    seeds.  The wall rule is not on the critical path while transient
+    2-bit NOPs are what kills the agent (see M3 status).
