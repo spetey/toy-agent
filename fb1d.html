@@ -39,6 +39,13 @@
   the filled dots and the solid IP outline, the other IP's are hollow / dashed.
   Noise covers both code blocks.  Checked against fb1d.py on the dual tape: the
   same flips, 4200 rounds, identical tape and heads, exact reversal.
+  2026-10-13 v0.10 (M4): the `? !` and `% &` brackets (a1[ ]a1, b1[ ]b1: enter on
+  nonzero, repeat while zero) and the "agent" example, programs/fb1d-agent-m4.py:
+  the dual pair with a third stomach cell r, food runs after the zeros, a hunger
+  test and an eat at every pass end.  "food" is the free-food conveyor cheat
+  (applied at each IP's pass start; not reversible, so back stops at the last
+  refill).  The status line counts passes, eats, corrections and refills per IP.
+  Checked against fb1d.py on the agent tape (see the M4 status in the port plan).
 -->
 <style>
   :root {
@@ -69,6 +76,7 @@
   .controls input[type=number] { width: 84px; }
   .controls .combo { display: inline-flex; align-items: center; gap: 4px; }
   .controls .combo input[type=number] { width: 64px; }
+  .controls .combo input#nSteps, .controls .combo input#goStep { width: 92px; }
   .controls input[type=range] { width: 110px; }
   button:hover { background: #f3f3f3; }
   button.primary { background: #2b5fb3; color: #fff; border-color: #2b5fb3; }
@@ -92,6 +100,7 @@
   .cell.code { background: var(--code-bg); }
   .cell.pblock { background: var(--pblock); }
   .cell.fuel { background: var(--fuel); }
+  .cell.food { background: #fdebd0; }
   .cell .v { font-size: 15px; line-height: 22px; font-weight: 600; }
   .cell.data .v { font-size: 11px; font-weight: 500; }
   .cell .v.nm2 { font-size: 12px; letter-spacing: -0.03em; }
@@ -174,6 +183,7 @@
     <span><b class="op-ix" data-names="a^=i syn mask i^=a">m I V j</b> via ix</span>
     <span><b class="op-br" data-names="a0[ ]a0">[ ]</b> test a</span>
     <span><b class="op-brb" data-names="b0[ ]b0">( )</b> test b</span>
+    <span><b class="op-br" data-names="a1[ ]a1">? !</b> <b class="op-brb" data-names="b1[ ]b1">% &amp;</b> enter on nonzero</span>
     <span><b class="op-bound">~</b> boundary</span>
     <span><b class="op-nop">&middot;</b> no-op</span>
     <span><i class="dot" style="background:var(--head-a)"></i> a &nbsp;<i class="dot" style="background:var(--head-b)"></i> b &nbsp;
@@ -209,6 +219,9 @@
       <label>flips / 1M rounds <input id="noiseRate" type="number" value="300" min="0"></label>
       <label>seed <input id="noiseSeed" type="number" value="1" min="0"></label>
       <span id="noiseInfo" class="sub"></span>
+      <span style="width:8px"></span>
+      <button id="btnFood" hidden title="free food: when fewer than two bites of food lie ahead of b at a pass start, shift the fuel region so b is back at its first cell and refill the tail with food (fb2d's cheat; not reversible: back stops at the last refill)">food off</button>
+      <span id="foodInfo" class="sub"></span>
     </div>
     <div class="status" id="status"></div>
   </section>
@@ -332,10 +345,10 @@ for (let v = 0; v < 65536; v++) {
 }
 
 // ------------------------------------------------------------ opcodes: fb2d payload codewords of the same chars
-const OP_CHARS = '<>{}BA-+.,mIVj[]()PQ';
+const OP_CHARS = '<>{}BA-+.,mIVj[]()PQ?!%&';
 const OP_CW = { '<': 1880, '>': 1175, '{': 1376, '}': 1823, 'B': 250, 'A': 189, '-': 1232, '+': 975,
                 '.': 1297, ',': 1554, 'm': 821, 'I': 54, 'V': 568, 'j': 503, '[': 1758, ']': 1501, '(': 1954, ')': 1635,
-                'P': 1115, 'Q': 1052 };
+                'P': 1115, 'Q': 1052, '?': 836, '!': 390, '%': 771, '&': 645 };
 const NOP_FILLER = encode(1017), BOUNDARY = 0xFFFF;
 const OP_CELL = {}; for (const c of OP_CHARS) OP_CELL[c] = encode(OP_CW[c]);
 const PAYLOAD_OP = new Uint8Array(2048);        // 1-based index into OP_CHARS, 0 = no-op
@@ -343,18 +356,21 @@ for (let k = 0; k < OP_CHARS.length; k++) {
   const cw = OP_CW[OP_CHARS[k]]; PAYLOAD_OP[cw] = k + 1;
   for (let i = 0; i < 11; i++) PAYLOAD_OP[cw ^ (1 << i)] = k + 1;
 }
-const CELL_OP = new Uint8Array(65536), CELL_CLASS = new Uint8Array(65536);   // class: 1 [ 2 ] 3 ~ 4 ( 5 )
+// class: 1 [ 2 ] 4 ( 5 ) 6 ? 7 ! 8 % 9 & 3 ~ (barrier); each closer is its opener's class + 1
+const CELL_OP = new Uint8Array(65536), CELL_CLASS = new Uint8Array(65536);
+const BR_CLASS = { '[': 1, ']': 2, '(': 4, ')': 5, '?': 6, '!': 7, '%': 8, '&': 9 };
 for (let v = 0; v < 65536; v++) {
   const op = PAYLOAD_OP[C2P[v]]; CELL_OP[v] = op;
   const ch = op ? OP_CHARS[op - 1] : '';
-  CELL_CLASS[v] = ch === '[' ? 1 : ch === ']' ? 2 : ch === '(' ? 4 : ch === ')' ? 5 : C2P[v] === 2047 ? 3 : 0;
+  CELL_CLASS[v] = BR_CLASS[ch] || (C2P[v] === 2047 ? 3 : 0);
 }
 const opChar = v => CELL_OP[v] ? OP_CHARS[CELL_OP[v] - 1] : null;
 // Readable op names, as fb1d.py OP_NAMES.  Each contains a character that is not a
 // symbol, so a token is a name if it is in the table, else a run of symbols.
 const OP_NAMES = { '<': 'a<', '>': 'a>', '{': 'b<', '}': 'b>', 'B': 'i<', 'A': 'i>',
   '-': 'a-', '+': 'a+', 'Q': 'b-', 'P': 'b+', '.': 'b^=a', ',': 'a^=b', 'm': 'a^=i', 'j': 'i^=a',
-  'I': 'syn', 'V': 'mask', '[': 'a0[', ']': ']a0', '(': 'b0[', ')': ']b0' };
+  'I': 'syn', 'V': 'mask', '[': 'a0[', ']': ']a0', '(': 'b0[', ')': ']b0',
+  '?': 'a1[', '!': ']a1', '%': 'b1[', '&': ']b1' };
 const NAME_TO_OP = {}; for (const c in OP_NAMES) NAME_TO_OP[OP_NAMES[c]] = c;
 // Program text -> cells.  Tokens are separated by whitespace; # starts a comment to the
 // end of the line; a token is an op name or a run of symbols (op chars, ~, _, 0).
@@ -395,13 +411,13 @@ class FB1D {
   get p() { return this.ip.p; }   set p(v) { this.ip.p = v; }
   matches() {
     if (this.mt) return this.mt;
-    const mt = new Int32Array(this.N).fill(-1), sa = [], sb = [];
+    const mt = new Int32Array(this.N).fill(-1), st = { 1: [], 4: [], 6: [], 8: [] };
     for (let i = 0; i < this.N; i++) {
       const c = CELL_CLASS[this.tape[i]];
-      if (c === 1) sa.push(i);
-      else if (c === 4) sb.push(i);
-      else if (c === 2 || c === 5) { const st = c === 2 ? sa : sb; if (st.length) { const j = st.pop(); mt[i] = j; mt[j] = i; } }
-      else if (c === 3) { sa.length = 0; sb.length = 0; }
+      if (!c) continue;
+      if (c === 3) { for (const k in st) st[k].length = 0; }
+      else if (c in st) st[c].push(i);
+      else { const s = st[c - 1]; if (s.length) { const j = s.pop(); mt[i] = j; mt[j] = i; } }
     }
     return this.mt = mt;
   }
@@ -434,6 +450,8 @@ class FB1D {
       case 'j': if (a !== ip.ix) this.write(ip, ip.ix, t[ip.ix] ^ t[a]); break;
       case '[': case ']': if (t[a] & DATA_MASK) { const m = this.matches()[ip.p]; if (m >= 0) ip.p = m; } break;
       case '(': case ')': if (t[ip.b] & DATA_MASK) { const m = this.matches()[ip.p]; if (m >= 0) ip.p = m; } break;
+      case '?': case '!': if (!(t[a] & DATA_MASK)) { const m = this.matches()[ip.p]; if (m >= 0) ip.p = m; } break;
+      case '%': case '&': if (!(t[ip.b] & DATA_MASK)) { const m = this.matches()[ip.p]; if (m >= 0) ip.p = m; } break;
     }
   }
   step() {                                             // one round
@@ -499,9 +517,16 @@ const OP_INFO = {
   ']': ['op-br', 'if payload(tape[a]) != 0: jump to matching [   (repeat while nonzero)'],
   '(': ['op-brb', 'if payload(tape[b]) != 0: jump to matching )   (enter only when zero)'],
   ')': ['op-brb', 'if payload(tape[b]) != 0: jump to matching (   (repeat while nonzero)'],
+  '?': ['op-br', 'if payload(tape[a]) == 0: jump to matching !   (a1[: enter only when nonzero)'],
+  '!': ['op-br', 'if payload(tape[a]) == 0: jump to matching ?   (]a1: repeat while zero)'],
+  '%': ['op-brb', 'if payload(tape[b]) == 0: jump to matching &   (b1[: enter only when nonzero)'],
+  '&': ['op-brb', 'if payload(tape[b]) == 0: jump to matching %   (]b1: repeat while zero)'],
 };
-const isBrA = v => CELL_CLASS[v] === 1 || CELL_CLASS[v] === 2, isBrB = v => CELL_CLASS[v] === 4 || CELL_CLASS[v] === 5;
-const isBr = v => isBrA(v) || isBrB(v);
+// bracket op -> [head it tests, jumps on zero?, partner char]
+const BR_INFO = { '[': ['a', false, ']'], ']': ['a', false, '['], '(': ['b', false, ')'], ')': ['b', false, '('],
+                  '?': ['a', true, '!'], '!': ['a', true, '?'], '%': ['b', true, '&'], '&': ['b', true, '%'] };
+const isBr = v => CELL_CLASS[v] > 0 && CELL_CLASS[v] !== 3;
+const brJumps = (op, hv) => BR_INFO[op][1] ? !(hv & DATA_MASK) : !!(hv & DATA_MASK);
 let showNames = false;
 try { showNames = localStorage.getItem('fb1d-workbench-names') === '1'; } catch (e) {}
 function cellName(v) { const op = opChar(v); return op ? OP_NAMES[op] : cellChar(v); }
@@ -571,6 +596,49 @@ function buildDual() {
           'Noise covers both code blocks.  A pass is about 4100 rounds for each IP; they run in lockstep until one of them corrects something.' };
 }
 
+// ------------------------------------------------------------ the M4 agent (programs/fb1d-agent-m4.py)
+// The dual pair with a third stomach cell r and food runs of K cells after the zeros.
+// Every pass end tests the cell d ahead of b and, if it is nonzero, eats one run.
+//   ~ [A code] ~ [sA gA rA] [LA] [zeros, food runs ...] ~ [B code] ~ [sB gB rB] [LB] [zeros, food runs ...]
+const BITE = 15, LOOKAHEAD = 15, FOOD = [189, 250, 380, 639];
+const FOOD_CELLS = new Map(FOOD.map(p => [encode(p), p]));
+const passEndSegments = (K = BITE, d = LOOKAHEAD) => [
+  ['hunger: a to g', '>'], ['hunger: b to L+' + d, '}'.repeat(d)], ['hunger: g = 1 iff nonzero', '%+&'], ['hunger: b to L', '{'.repeat(d)],
+  ['eat ?', '?'], ['  a to r', '>'], ['  walk b to F', '%}&'], ['  r = v', ','], ['  compress run', '%}.&'], ['  restore M', '.'],
+  ['  back to F', '%{&'], ['  F = 0', '.'], ['  ' + K + ' moves to M', '}'.repeat(K)], ['  back to L', '%{&'], ['  a to g', '<'], ['eat !', '!'],
+  ['unflag: a to r', '>'], ['unflag: g -= 1 iff r != 0', '?<->!'], ['moult: b on, dump r, L += 1', '}.,P'], ['a to s', '<<']];
+const agentSegments = () => [['outer [', '['], ['outer -', '-'], ...WORK.map(([l, t]) => ['rest' + l, t]),
+  ...sweep('A', 'scan'), ...sweep('B', 'rewind'), ...passEndSegments(), ['outer +', '+'], ['outer ]', ']']];
+function placeFood(m, lo, hi, K, idx, count) {
+  for (let x = lo; x <= hi; x++) { m.tape[x] = encode(FOOD[idx]); if (++count === K) { idx = (idx + 1) % FOOD.length; count = 0; } }
+}
+function buildAgent(opts = {}) {
+  const K = BITE, d = LOOKAHEAD, zeros = opts.zeros ?? 2 * K, fuel = opts.fuel ?? zeros + 8 * K;
+  const code = assemble(agentSegments().map(s => s[1]).join('\n')), L = code.length;
+  const gad = base => ({ lead: base, code: base + 1, trail: base + 1 + L, s: base + L + 2, g: base + L + 3, r: base + L + 4,
+                         L0: base + L + 5, fuelLo: base + L + 6, fuelHi: base + L + 5 + fuel, end: base + L + 6 + fuel, pStart: base + 3 });
+  const A = gad(0), B = gad(A.end), N = B.end;
+  const m = new FB1D(N, 2), labels = {};
+  for (const g of [A, B]) {
+    m.tape[g.lead] = BOUNDARY; m.tape.set(code, g.code); m.tape[g.trail] = BOUNDARY; m.tape[g.L0] = encode(1);
+    placeFood(m, g.fuelLo + zeros, g.fuelHi, K, 0, 0);
+    labels[g.s] = 's'; labels[g.g] = 'g'; labels[g.r] = 'r';
+  }
+  m.ips[0] = { a: A.s, b: A.L0, ix: B.lead, p: A.pStart };
+  m.ips[1] = { a: B.s, b: B.L0, ix: A.lead, p: B.pStart };
+  return { m, codeEnd: N, codeRanges: [[A.code, A.trail - 1], [B.code, B.trail - 1]], labels,
+    viewLo: 0, viewHi: N, loopStops: [A.pStart, B.pStart], ipNames: ['A', 'B'],
+    stomachs: [[A.s, A.g, A.r], [B.s, B.g, B.r]],
+    regions: { noise: [[A.lead, A.trail], [B.lead, B.trail]], fuel: [[A.L0, A.fuelHi], [B.L0, B.fuelHi]] },
+    food: { K, gadgets: [A, B] },
+    note: 'M4: the dual pair plus metabolism.  Each stomach is [s g r] (r holds the run value during an eat); after L come ' + zeros +
+          ' zeros and then food: runs of ' + K + ' identical cells (payloads 189 250 380 639, orange).  A pass costs one zero (the moult) and\n' +
+          'each correction two; at the pass end b looks ' + d + ' cells ahead and, if that cell is not zero, eats one run: its ' + K + ' cells become\n' +
+          'zeros and the run value ends up in the moult cell (L = value+1 instead of 1).  "food" turns on the free-food conveyor: at a pass\n' +
+          'start with fewer than two runs of food ahead of b, the region shifts so b is back at its first cell and the tail is refilled.\n' +
+          'Try: "one pass" ' + K + ' times and watch the first eat (b walks to the food and back); with noise on, corrections eat the zeros faster.' };
+}
+
 // ------------------------------------------------------------ examples
 // {doc, size, codeAt, segments, setup(m, codeEnd) -> {a, b, ix, p, labels, viewLo, viewHi, note, loopStop, regions}}
 // or build() -> {m, codeEnd, codeRanges?, labels, loopStops?, ipNames?, stomachs?, regions?, ...}
@@ -610,6 +678,12 @@ const EXAMPLES = {
     codeAt: 1, size: null,
     segments: gadgetSegments,
     build: buildDual,
+  },
+  agent: {
+    doc: 'M4: the pair plus metabolism, hunger and food',
+    codeAt: 1, size: null,
+    segments: agentSegments,
+    build: buildAgent,
   },
   copy: {
     doc: '[.>}] copies a zero-terminated string by xor into zeros', size: 48, codeAt: 0,
@@ -821,6 +895,7 @@ function applyMark() {
 // copies).  loopStops / stomachs / ipNames are per IP.
 let m, segments = [], codeAt = 0, codeEnd = 0, codeRanges = [], labels = {}, regions = {};
 let loopStops = [1], stomachs = [], ipNames = [];
+let foodInfo = null, foodOn = false, foodFloor = null, stats = null;   // M4: the conveyor cheat and per-IP counters
 let exampleName = 'immunity', selected = null, timer = null;
 let segLens = [];
 function setSegments(segs) { segments = segs; segLens = segs.map(sg => segLen(sg[1])); }
@@ -849,6 +924,9 @@ function loadExample(name) {
   labels = info.labels || {}; regions = info.regions || {};
   for (const k in regions) if (!Array.isArray(regions[k][0])) regions[k] = [regions[k]];   // one range -> list of ranges
   loopStops = info.loopStops || [info.loopStop || 0]; stomachs = info.stomachs || []; ipNames = info.ipNames || [];
+  foodInfo = info.food || null; foodOn = false; foodFloor = null;
+  stats = stomachs.length ? m.ips.map(ip => ({ passes: 0, eats: 0, corrections: 0, refills: 0, lastB: ip.b })) : null;
+  $('btnFood').hidden = !foodInfo; $('btnFood').textContent = 'food off'; $('btnFood').classList.remove('on');
   const ipSel = $('ipSel'); ipSel.innerHTML = '';
   m.ips.forEach((ip, k) => { const o = document.createElement('option'); o.value = k; o.textContent = 'IP' + k + (ipNames[k] ? ' (' + ipNames[k] + ')' : ''); ipSel.appendChild(o); });
   $('ipSelWrap').hidden = m.ips.length < 2;
@@ -934,10 +1012,10 @@ function inRegion(name, addr) { const rs = regions[name]; return !!rs && rs.some
 function jumpText(addr, op) {
   const partner = m.matches()[addr];
   if (partner < 0) return '<span class="k">partner</span> none (unmatched, or across a ~ barrier: no-op)';
-  const head = (op === '[' || op === ']') ? 'a' : 'b', hv = m.tape[m[head]], nz = hv & DATA_MASK;
-  const other = { '[': ']', ']': '[', '(': ')', ')': '(' }[op];
+  const [head, onZero, other] = BR_INFO[op], hv = m.tape[m[head]];
   return '<span class="k">partner</span> ' + other + ' at ' + partner + '\n<span class="k">now</span>     payload(tape[' + head + ']) = ' + C2P[hv] +
-         (nz ? ' -> would jump, landing at ' + ((partner + 1) % m.N) : ' -> would fall through to ' + ((addr + 1) % m.N));
+         (brJumps(op, hv) ? ' -> would jump, landing at ' + ((partner + 1) % m.N) : ' -> would fall through to ' + ((addr + 1) % m.N)) +
+         (onZero ? '  (this family jumps on zero)' : '');
 }
 // The 16 raw bits, bit 15 on the left, in groups of four.  Parity bits (0, 1, 2, 4, 8)
 // are tinted and marked p underneath; with a 1-bit error the flipped bit is red and
@@ -965,7 +1043,7 @@ function describeCell(addr) {
   const lb = labelOf(addr), mk = markAt(addr);
   const lab = (lb ? '  "' + lb + '"' : (frameRole(addr) ? '  ' + frameRole(addr) + ': last garbage cell, under b' : '')) +
               (mk ? '  [' + mk.name + ' ' + mk.lo + '-' + mk.hi + ']' : '');
-  const where = inRegion('pblock', addr) ? '  (partner block)' : inRegion('fuel', addr) ? '  (fuel / trail)'
+  const where = inRegion('pblock', addr) ? '  (partner block)' : inRegion('fuel', addr) ? (FOOD_CELLS.has(v) ? '  (food)' : '  (fuel / trail)')
               : codeRanges.length > 1 && inCode(addr) ? '  (' + (ipNames[codeRanges.findIndex(r => addr >= r[0] && addr <= r[1])] || '') + ' code)' : '';
   lines.push('<span class="k">address</span> ' + addr + lab + where);
   lines.push('<span class="k">raw</span>     0x' + v.toString(16).padStart(4, '0') + '  payload ' + C2P[v] + (C2P[v] === 2047 ? '  (boundary ~)' : ''));
@@ -975,7 +1053,7 @@ function describeCell(addr) {
     return '<b class="' + OP_INFO[op][0] + '">' + escHtml(x) + '</b> <span class="k">(' + escHtml(y) + ')</span>  ' + escHtml(OP_INFO[op][1]); };
   lines.push('<span class="k">as op</span>   ' + (op ? opHtml(op) : (v === NOP_FILLER ? 'NOP filler' : 'no-op')));
   if (inCode(addr)) { const s = segmentAt(addr); if (s) lines.push('<span class="k">segment</span> ' + s.label.trim() + '  (+' + s.off + ')'); }
-  if (op && '[]()'.includes(op)) lines.push(jumpText(addr, op));
+  if (op && op in BR_INFO) lines.push(jumpText(addr, op));
   m.ips.forEach((ip, k) => {
     const who = m.ips.length > 1 ? ' of IP' + k : '';
     if (addr === ip.a) lines.push('<span class="k">head a' + who + ' is here</span>');
@@ -1017,7 +1095,7 @@ function updateCells() {
     const v = m.tape[i], op = opChar(v), code = inCode(i);
     const [s, pa] = syndrome(v);
     c.className = 'cell ' + (code ? 'code' : 'data');
-    if (inRegion('pblock', i)) c.classList.add('pblock'); else if (inRegion('fuel', i)) c.classList.add('fuel');
+    if (inRegion('pblock', i)) c.classList.add('pblock'); else if (inRegion('fuel', i)) c.classList.add(FOOD_CELLS.has(v) ? 'food' : 'fuel');
     const ve = c.children[1];
     if (code || inRegion('pblock', i) || C2P[v] === 2047) {
       const t = cellLabel(v); ve.textContent = t; ve.className = 'v ' + cellClass(v) + (t.length > 2 ? ' nm4' : t.length > 1 ? ' nm2' : '');
@@ -1047,21 +1125,23 @@ function updateCells() {
 function updateStatus() {
   const v = m.tape[m.p], op = opChar(v);
   let next = op ? (showNames ? OP_NAMES[op] + ' (' + op + ')' : op + ' (' + OP_NAMES[op] + ')') + '  ' + OP_INFO[op][1] : 'no-op (payload ' + C2P[v] + ')';
-  if (op && '[]()'.includes(op)) {
-    const partner = m.matches()[m.p], head = (op === '[' || op === ']') ? 'a' : 'b', hv = m.tape[m[head]];
+  if (op && op in BR_INFO) {
+    const partner = m.matches()[m.p], head = BR_INFO[op][0], hv = m.tape[m[head]];
     next += partner < 0 ? '  [unmatched: no-op]'
-          : ((hv & DATA_MASK) ? '  -> payload(tape[' + head + '])=' + C2P[hv] + ' so JUMP to ' + (partner + 1) : '  -> tape[' + head + '] is zero so fall through');
+          : (brJumps(op, hv) ? '  -> payload(tape[' + head + '])=' + C2P[hv] + ' so JUMP to ' + (partner + 1) : '  -> payload(tape[' + head + '])=' + C2P[hv] + ' so fall through');
   }
   const s = segmentAt(m.p), multi = m.ips.length > 1;
   const st = stomachs[m.cur];
-  const fr = st ? '    stomach: s=' + C2P[m.tape[st[0]]] + ' g=' + C2P[m.tape[st[1]]] + '   L (at b=' + m.b + ')=' + C2P[m.tape[m.b]] : '';
+  const stom = so => '    stomach: s=' + C2P[m.tape[so[0]]] + ' g=' + C2P[m.tape[so[1]]] + (so.length > 2 ? ' r=' + C2P[m.tape[so[2]]] : '');
+  const counts = k => stats ? '    passes ' + stats[k].passes + '  eats ' + stats[k].eats + '  corrections ' + stats[k].corrections + (foodInfo ? '  refills ' + stats[k].refills : '') : '';
+  const fr = st ? stom(st) + '   L (at b=' + m.b + ')=' + C2P[m.tape[m.b]] + counts(m.cur) : '';
   const who = multi ? 'IP' + m.cur + (ipNames[m.cur] ? ' (' + ipNames[m.cur] + ')' : '') + ':  ' : '';
   let others = '';
   if (multi) m.ips.forEach((ip, k) => {
     if (k === m.cur) return;
     const sg = segmentAt(ip.p), so = stomachs[k];
     others += '\nIP' + k + (ipNames[k] ? ' (' + ipNames[k] + ')' : '') + ':  p=' + ip.p + '  a=' + ip.a + '  b=' + ip.b + '  ix=' + ip.ix +
-              (so ? '    stomach: s=' + C2P[m.tape[so[0]]] + ' g=' + C2P[m.tape[so[1]]] + '   L=' + C2P[m.tape[ip.b]] : '') +
+              (so ? stom(so) + '   L=' + C2P[m.tape[ip.b]] + counts(k) : '') +
               (sg ? '    in: ' + sg.label.trim() : '    outside the code');
   });
   $('status').textContent =
@@ -1070,10 +1150,12 @@ function updateStatus() {
     'next: ' + next + (markAt(m.p) ? '\nin your mark: ' + markAt(m.p).name : '') + (s ? '\nin segment: ' + s.label.trim()
       : halts() && m.p === codeEnd ? '\nFinished: the IP has reached the end of your code (' + m.steps + ' steps). back or play backward rewinds; reset starts again.'
       : halts() && m.p > codeEnd ? '\nThe IP is past the end of your code, running empty cells and data as ops. The run buttons won\'t go further; reset starts again.'
-      : (!inCode(m.p) ? '\nIP is outside the code' : '')) + others;
+      : (!inCode(m.p) ? '\nIP is outside the code' : '')) + others +
+    (foodFloor !== null && m.steps <= foodFloor ? '\nStep ' + foodFloor + ' is the last free-food refill: the tape before it is gone (the cheat is not reversible); reset to start over.' : '');
   const sr = selRange(), sl = selected === null ? null : labelOf(selected);
   $('selAddr').textContent = !sr ? 'none' : sr[0] === sr[1] ? sr[0] + (sl ? ' (' + sl + ')' : '') : sr[0] + '-' + sr[1] + ' (' + (sr[1] - sr[0] + 1) + ' cells)';
   $('noiseInfo').textContent = m.noise ? 'flips so far: ' + m.noise.total : '';
+  $('foodInfo').textContent = foodInfo ? (foodOn ? 'refills so far: ' + (stats ? stats.reduce((n, st) => n + st.refills, 0) : 0) : 'without it the agent starves when the food runs out') : '';
 }
 function updateSegments() {
   const el = $('segments'); el.innerHTML = '';
@@ -1160,28 +1242,60 @@ function onClick(addr, e) {
 const halts = () => exampleName === 'blank' && codeEnd > 0;
 const finished = () => halts() && m.p >= codeEnd;
 const atStart = () => halts() && m.steps <= 0;
+const atFloor = () => foodFloor !== null && m.steps <= foodFloor;   // no stepping back past a free-food refill
+// The free-food conveyor for IP k, as fb1d-agent-m4.py's free_food: with fewer than
+// 2K food cells ahead of b, shift tape[b..hi] down to L0, put b on L0 and fill the
+// freed tail with food continuing the rotation (completing a partial run first).
+function freeFood(k) {
+  const g = foodInfo.gadgets[k], ip = m.ips[k], K = foodInfo.K, b = ip.b, hi = g.fuelHi;
+  let ahead = 0; for (let x = b + 1; x <= hi; x++) if (FOOD_CELLS.has(m.tape[x])) ahead++;
+  if (ahead >= 2 * K) return 0;
+  const n = b - g.L0; if (n <= 0) return 0;
+  m.tape.copyWithin(g.L0, b, hi + 1); ip.b = g.L0;
+  let idx = 0, count = 0; const last = hi - n;
+  for (let x = last; x > g.L0; x--) if (FOOD_CELLS.has(m.tape[x])) {
+    idx = FOOD.indexOf(FOOD_CELLS.get(m.tape[x]));
+    while (x - count > g.L0 && m.tape[x - count] === m.tape[x]) count++;
+    if (count >= K) { idx = (idx + 1) % FOOD.length; count = 0; }
+    break;
+  }
+  placeFood(m, last + 1, hi, K, idx, count);
+  m.mt = null; return n;
+}
+function stepFwd() {                                   // one round, then the pass-start bookkeeping
+  m.step();
+  if (!stats) return;
+  m.ips.forEach((ip, k) => {
+    if (ip.p !== loopStops[k]) return;
+    const st = stats[k];
+    st.corrections += Math.max(0, Math.floor((ip.b - st.lastB - 1) / 2));   // b: +1 per pass, +2 per correction
+    st.passes++; if (C2P[m.tape[ip.b]] !== 1) st.eats++;
+    if (foodOn && freeFood(k)) { st.refills++; foodFloor = m.steps; }
+    st.lastB = ip.b;
+  });
+}
 function runSteps(n, back) {
   for (let i = 0; i < n; i++) {
-    if (n > 1 && (back ? atStart() : finished())) break;
-    back ? m.back() : m.step();
+    if (back ? (atFloor() || (n > 1 && atStart())) : (n > 1 && finished())) break;
+    back ? m.back() : stepFwd();
   }
   refresh();
 }
 function runUntil(p, back, max = 2e6) {
   let n = 0;
-  if (back ? atStart() : finished()) { refresh(); return 0; }
-  do { back ? m.back() : m.step(); n++; } while (m.p !== p && n < max && !(back ? atStart() : finished()));
+  if (back ? (atStart() || atFloor()) : finished()) { refresh(); return 0; }
+  do { back ? m.back() : stepFwd(); n++; } while (m.p !== p && n < max && !(back ? (atStart() || atFloor()) : finished()));
   refresh(); return n;
 }
 function goToStep(target, max = 2e6) {              // forward or back, by the step counter
   let n = 0;
-  while (m.steps < target && !finished() && n++ < max) m.step();
-  while (m.steps > target && !atStart() && n++ < max) m.back();
+  while (m.steps < target && !finished() && n++ < max) stepFwd();
+  while (m.steps > target && !atStart() && !atFloor() && n++ < max) m.back();
   refresh();
 }
 function runUntilSegment(test, max = 2e5) {            // next entry into a segment whose label passes test
   let n = 0;
-  do { m.step(); n++; const s = segmentAt(m.p); if (s && s.off === 0 && test(s.label)) break; } while (n < max);
+  do { stepFwd(); n++; const s = segmentAt(m.p); if (s && s.off === 0 && test(s.label)) break; } while (n < max);
   refresh(); return n;
 }
 // A WORK block (one partner cell) starts at its first `P`, labelled "...P: L += 1".
@@ -1190,13 +1304,13 @@ const isWorkStart = label => label.endsWith('P: L += 1');
 function stopPlay() { if (timer) { clearInterval(timer); timer = null; } $('btnPlay').textContent = '▶ play'; $('btnPlayBack').textContent = '◀ play backward'; }
 function play(back) {
   if (timer) { stopPlay(); return; }
-  const done = () => back ? atStart() : finished();
+  const done = () => back ? (atStart() || atFloor()) : finished();
   if (done()) { refresh(); return; }
   (back ? $('btnPlayBack') : $('btnPlay')).textContent = '⏸ pause';
   const tick = () => {
     const sp = +$('speed').value;
     const batch = sp < 50 ? 1 : Math.round(Math.pow(10, (sp - 50) / 20));  // 1 .. 316 per tick
-    for (let i = 0; i < batch && !done(); i++) back ? m.back() : m.step();
+    for (let i = 0; i < batch && !done(); i++) back ? m.back() : stepFwd();
     if (done()) stopPlay();
     refresh();
   };
@@ -1240,6 +1354,7 @@ $('goStep').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnGoSt
 $('btnPlay').addEventListener('click', () => play(false));
 $('btnPlayBack').addEventListener('click', () => play(true));
 $('btnNoise').addEventListener('click', () => setNoise(!m.noise));
+$('btnFood').addEventListener('click', () => { foodOn = !foodOn; $('btnFood').textContent = foodOn ? 'food on' : 'food off'; $('btnFood').classList.toggle('on', foodOn); updateStatus(); });
 $('btnLoadCode').addEventListener('click', () => exampleName === 'blank' ? loadExample('blank') : loadCodeFromText());
 const authSync = () => {
   if (exampleName !== 'blank') return;

@@ -1,0 +1,11 @@
+agent,rate,seed,rounds,cause,detail,flips,passes,corrections,eats,refills,damage_round,damage_detail,coincidence
+fb1d-m4,200.0,0,373009,stomach_dirty,IP0 s=0 g=0 r=503,70,104,84,14,0,,,
+fb1d-m4,200.0,1,358720,stomach_dirty,IP0 s=0 g=0 r=503,75,100,89,15,0,,,
+fb1d-m4,200.0,2,394351,stomach_dirty,IP1 s=0 g=0 r=503,75,110,74,15,0,,,
+fb1d-m4,200.0,3,387234,stomach_dirty,IP0 s=0 g=0 r=503,75,108,87,15,0,,,
+fb1d-m4,200.0,4,351587,stomach_dirty,IP1 s=0 g=0 r=503,75,98,73,15,0,,,"A+186 bits 1,11 (pd) 3033 apart, 203674 before"
+fb1d-m4,200.0,5,430049,stomach_dirty,IP0 s=0 g=0 r=503,76,120,89,16,0,,,
+fb1d-m4,200.0,6,394403,stomach_dirty,IP0 s=0 g=0 r=503,72,110,85,15,0,,,
+fb1d-m4,200.0,7,380127,stomach_dirty,IP0 s=0 g=0 r=503,85,106,97,16,0,,,"A+106 bits 14,12 (dd) 5637 apart, 151669 before"
+fb1d-m4,200.0,8,422905,stomach_dirty,IP0 s=0 g=0 r=503,78,118,91,16,0,,,"B+2 bits 10,12 (dd) 12366 apart, 97450 before"
+fb1d-m4,200.0,9,372978,stomach_dirty,IP1 s=0 g=0 r=503,85,104,83,16,0,,,

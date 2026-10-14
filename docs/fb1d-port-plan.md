@@ -1,7 +1,7 @@
 # Plan: porting the Wikivore to fb1d
 
 *2026-09-07, renamed 2026-09-25; M1 done 2026-09-25, M2 done 2026-09-26,
-M3 done 2026-10-12.  Naming: the 8-bit bracket language
+M3 done 2026-10-12, M4 done 2026-10-13.  Naming: the 8-bit bracket language
 formerly called RBFF is now **fb1d8** (`fb1d8.py`, `fb1d8.html`); the
 16-bit extension described here, formerly "RBFF-16", is **fb1d**
 (`fb1d.py`).  The April 2026 1D simulator that used to be `fb1d.py` is
@@ -203,8 +203,14 @@ comfortably under 1000 cells.
   blocks.  Checked against `fb1d.py` on the dual tape: same four flips
   (one per block, one on IP1's executing cell, one on a wall), 4200
   rounds, identical tape and heads, exact reversal; the M2 example
-  still matches too.  Still to add for M4: the free-food button, a
-  corrections counter.
+  still matches too.  v0.10 (2026-10-13, M4): the `? ! % &` brackets,
+  the "agent" example (food cells orange, stomach `s g r`), a "food"
+  button for the conveyor cheat (back stops at the last refill), and
+  per-IP counts of passes, eats, corrections and refills in the status
+  line.  Checked against `fb1d.py` on the agent tape: three injected
+  flips, free food on, 140 passes (1.0M rounds), identical tape-and-heads
+  hash at every pass start, one refill each, and an eat pass reversed
+  exactly.
 - **MTTF harness**: port `compare-agents-mttf.py` logic: run to failure
   under a given rate, classify opcode corruption vs zero starvation,
   report mean and spread.  Same units as fb2d so numbers compare
@@ -433,6 +439,114 @@ Findings:
 The pair runs in the REPL (`load dual`), in the harness, and in the
 browser workbench (`fb1d.html`, example "dual", see Part 4).
 
+## M4 status (done 2026-10-13) and decisions taken
+
+`programs/fb1d-agent-m4.py` is the M3 pair plus metabolism and hunger;
+the op-by-op design and the reasons for each choice are in
+`docs/fb1d-m4-metabolism-design.md`.  `python3 programs/fb1d-agent-m4.py`
+(~2.5 min; `--quick` ~40 s) passes: 33 clean lockstep passes (7135
+rounds each, 7331 with an eat; an eat every 15 passes; never fewer
+than 14 zeros ahead of `b`; exact reversal of 236k rounds), an eat in
+isolation, all 5984 (block, cell, bit) single-bit errors repaired by
+the partner within a pass at 2 fuel cells, 7 corrections in one pass
+survived and 8 not, errors on the partner's executing cell and walls,
+200 passes at 300/1M and at 200/1M with free food (no missed single-bit
+error, 86 and 60 eats, 12 and 8 refills), a 40-pass noisy run with
+eats reversed exactly, and starvation without the cheat at the
+predicted pass (76 = 30 zeros + 4 runs of 15 - 14).
+
+Decisions:
+
+- **Two new bracket families, `a1[ ]a1` (`? !`) and `b1[ ]b1`
+  (`% &`)**, which enter on nonzero and repeat while zero.  The same
+  reversibility argument as `[ ]` (skip condition at the opener equals
+  the repeat condition at the closer), own matching stacks, barriers
+  empty them, fb2d opcode numbers of the same characters.  fb1d has 24
+  ops; `fb1d.py --test` covers them (exhaustive bijectivity, walks, the
+  compress loop).  They were anticipated by the `a0[` naming.  Without
+  them every walk over zeros needed a flag and a witness cell; with
+  them a walk starts on a nonzero cell and stops on the next one.  `#`
+  could not be an op because it starts a comment in program text.
+- **Hunger is a lookahead, not a countdown.**  The pass end tests the
+  cell `d` ahead of `b` (`}×d %+& {×d`): nonzero means fewer than `d`
+  zeros remain.  A countdown would need a period constant and a reset
+  XOR, but `,` pairs `a` with `b`, which is away in the fuel, and `m`
+  pairs it with `ix`, which is away on the partner's wall; `+` × period
+  costs `period` ops.  The lookahead has no constant and senses the
+  reserve itself.  Cost `2d + 3` ops.
+- **An eat zeroes one whole run of `K` cells and costs no fuel cell.**
+  `b` walks to the first nonzero cell `F` (`%}&`), the run value goes
+  into stomach cell `r` (`,`), `%}.&` zeroes `F+1..F+K-1` and stops on
+  the next run's first cell `M` (restored with `.`), `%{&` walks back
+  to `F`, `.` zeroes it, `}×K` lands on `M`, `%{&` walks back to `L`.
+  The eat flag `g` is uncomputed from `r` (`?<->!`), and the moult
+  `}.,P` dumps `r` into the moult cell, so the new `L` is `v+1` after an
+  eat and `1` otherwise.  No witness cell: the "did I eat" bit rides on
+  the moult cell a clean pass writes anyway.
+- **Runs must be exactly `K` long.**  After `F` is zeroed, `b` stands
+  on a zero amid zeros and no bracket walk can start there; `K`
+  unconditional moves reach `M` because the run was `K` long.  The
+  alternative, leaving `F` nonzero, plants a landmine for the
+  correction path `}.,}`, which needs two fresh zeros and has no test.
+  Merging the old zeros with the new ones by dumping `F`'s value behind
+  `b` is impossible without recording how many old zeros there were
+  (the reverse computation would need it); `F = M - K` records it for
+  free.  So the food must be bite-regular, which fb2d's A/B/C/D food
+  already is, and the free-food cheat keeps it so.
+- **Safety margin.**  At every pass start at least `min(d, K) - 1 = 14`
+  zeros lie ahead of `b`, so up to 7 corrections in one pass are safe
+  and 8 are not (verified).  At 300/1M a gadget corrects about one error
+  per pass (passes are 7135 rounds now), so 8 in one pass is a 1e-5
+  event per pass.  Options in reserve: test hunger after each sweep
+  (halves the window), or eat an extra run when a correction happened.
+- **Free food is a conveyor.**  `b` only moves right, so fb2d's
+  "replace the garbage behind EX with food" on a torus becomes: when
+  fewer than `2K` food cells lie ahead of `b` at a pass start, shift
+  `tape[b..hi]` down so `b`'s cell is the first fuel cell again, drop
+  the garbage trail, and fill the freed tail with food continuing the
+  rotation (completing a partial run first).  `a`, `ix`, the IP and
+  the code do not move and the gadget is position-relative to `b`, so
+  the shift is invisible to it.  Not reversible, as fb2d's cheat.
+  Applied by the harness and the workbench at each IP's pass start,
+  never by the gadget.
+- **Sizes.**  185 code cells per gadget (M2's 106 + 79: `2d + K + 36`
+  with `K = d = 15`), stomach 3 cells, a 150-cell fuel region (30 zeros
+  + 8 runs) with the cheat; 682 cells for the pair.  A clean pass is
+  7135 rounds (2L+3 = 373 WORK visits at ~19 rounds).
+
+**MTTF** (`programs/fb1d-mttf.py`, now defaulting to the M4 agent with
+free food; `--agent m3` for the old pair), 10 seeds, 10M-round budget,
+noise over both `~ code ~` blocks (374 cells); `programs/fb1d-mttf-m4-food.csv`:
+
+| flips per 1M rounds | mean rounds to failure | median | survived 10M | causes | eats, refills per trial |
+|---|---|---|---|---|---|
+| 100 | 9.13M (censored) | 10M | 9/10 | 1 stomach_dirty | 289, 40 |
+| 200 | 5.88M | 5.77M | 3/10 | 3 stomach_dirty, 2 a_escaped, 1 b_escaped, 1 ip_escaped | 262, 36 |
+| 300 | 2.84M | 2.13M | 0/10 | 7 stomach_dirty, 2 a_escaped, 1 cycle_timeout | 162, 22 |
+
+Against the M3 pair at the same system-wide rates (8.25M, 5.23M, 2.52M
+with a 216-cell region) the eating agent lives as long or slightly
+longer, because the per-cell rate is 1.7 times lower while passes are
+1.7 times longer, which cancel in the pair-of-flips-in-a-window model
+(see the M3 findings).  Metabolism itself cost nothing measurable: no
+failure was a starvation, and 17 of the 18 failures were preceded by a
+second flip on an already-flipped cell (9 data-data, 8 data-parity),
+the same mechanism as M3.  Of the 18, 11 ended as `stomach_dirty`,
+9 of them with `r` nonzero: a damaged op in the pass end leaves the run
+value in `r`, which is now the most sensitive part of the gadget
+(the eat block is 31 ops on a path taken once per 15 passes, so a NOP'd
+op there is only noticed when the gadget is hungry).
+
+Without the cheat (`--no-free-food --fuel 150`, 200/1M,
+`programs/fb1d-mttf-m4-nofood.csv`): all 10 trials starve at 387k ±
+25k rounds, i.e. after eating all 8 runs, 54 passes and ~42
+corrections per gadget (30 + 120 cells consumed), reported as
+`stomach_dirty` because the "eat" of the wall leaves `0xFFFF` in `r`.
+With a budget-sized region and no cheat the curve is the one above.
+That is the milestone criterion: runs indefinitely with free food at
+200/1M (3 of 10 survive 10M rounds, the rest die of 2-bit errors as
+M3 does), starves without it.
+
 ## Recommended model and effort per stage
 
 Written 2026-09-25 as budget guidance: spend on the strongest model
@@ -445,8 +559,8 @@ cheaper models where a strong test suite catches mistakes.
 | M2 single gadget | novel bracket-nested reversible gadget, uncompute bookkeeping | Fable 5.1 | high (done) |
 | M3 dual gadgets | cross-IP interaction | Opus 5.5 | high |
 | M3 MTTF harness | port of `compare-agents-mttf.py` | Sonnet 5 | medium |
-| M4 metabolism + hunger | loop-polarity redesign, same difficulty as M2 | Fable 5.1 | high |
-| M4 GUI + free food | extend `fb1d8.html` | Sonnet 5 | medium |
+| M4 metabolism + hunger | loop-polarity redesign, same difficulty as M2 | Fable 5.1 | high (done) |
+| M4 GUI + free food | extend `fb1d8.html` | Sonnet 5 | medium (done) |
 | M5 2-bit copy-over | builds on M2 idioms | Opus 5.5 | high |
 | docs / renames | mechanical | Haiku 4.5 or Sonnet 5 | low |
 
@@ -462,7 +576,7 @@ and debug it against the tests.
 | M1 ✓ | `fb1d.py` core, tests, noise hook, boundary-barrier decision | bijectivity tests pass; 2M-step multi-IP round trip with noise gives zero diffs |
 | M2 ✓ | Single gadget correcting a static partner block (no partner IP) | corrects injected 1-bit errors anywhere in the block; garbage per correction measured |
 | M3 ✓ | Dual gadgets, mutual correction, MTTF harness | MTTF curves at 100/200/300 flips per 1M, compared to fb2d narrow agent |
-| M4 | Metabolism + hunger + free-food cheat + GUI | agent runs indefinitely with free food at 200 flips per 1M; starves without it, as fb2d does |
+| M4 ✓ | Metabolism + hunger + free-food cheat + GUI | agent runs indefinitely with free food at 200 flips per 1M; starves without it, as fb2d does |
 | M5 | 2-bit copy-over, boundary tweak if adopted, notes | MTTF gain measured; `docs/` updated |
 
 M1 is mostly transplant work.  M2 is where the idioms get stress-tested

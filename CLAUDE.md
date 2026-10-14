@@ -68,39 +68,59 @@ fb2d is a 2D reversible esoteric language where:
   seed-based noise (rate-tunable flips per 1M rounds). Both are fully
   reversible for `step_back()`. Run tests: `python3 test_pools.py`
 - **`fb1d.py`** — fb1d: the 16-bit Hamming extension of fb1d8 that
-  hosts the 1D Wikivore (M1, M2 and M3 of `docs/fb1d-port-plan.md` done).
+  hosts the 1D Wikivore (M1 to M4 of `docs/fb1d-port-plan.md` done).
   fb2d's cells and raw-payload fetch, heads a/b/ix/p per IP, ops
-  `< > { } B A - + . , m I V j [ ] ( ) P Q` (`( )` test tape[b] and
-  `P Q` count on it, added in M2), boundary cells as bracket-matching
+  `< > { } B A - + . , m I V j [ ] ( ) P Q ? ! % &` (`( )` test tape[b]
+  and `P Q` count on it, added in M2; `? !` and `% &` are the
+  `a1[ ]a1` / `b1[ ]b1` families that enter on nonzero and repeat while
+  zero, added in M4), boundary cells as bracket-matching
   barriers, multi-IP, NoisePool noise over one address range or several
   equal-length blocks (`set_noise(..., blocks=[(lo, hi), ...])`, M3).
   The bracket match table is cached incrementally (sorted list of
   bracket and barrier addresses); edit the tape via `set_cell` / `flip`
   / `poke` or call `invalidate()`. Program text may also spell ops by
   readable names (`a< a>` `b< b>` `i< i>` `a- a+` `b- b+` `b^=a a^=b`
-  `a^=i i^=a` `syn mask` `a0[ ]a0` `b0[ ]b0`, space separated) with `#`
-  comments; the cells are identical either way. REPL: `python3 fb1d.py`
-  (`load immunity` for the M2 gadget, `load dual` for the M3 pair;
-  `names` lists the names).
+  `a^=i i^=a` `syn mask` `a0[ ]a0` `b0[ ]b0` `a1[ ]a1` `b1[ ]b1`, space
+  separated) with `#` comments; the cells are identical either way.
+  REPL: `python3 fb1d.py` (`load immunity` for the M2 gadget, `load
+  dual` for the M3 pair, `load agent` for the M4 agent; `names` lists
+  the names).
   Tests: `python3 fb1d.py --test [--long]`. Decisions and per-milestone
   model recommendations are in the port plan.
+- **`programs/fb1d-agent-m4.py`** — M4: the M3 pair plus metabolism
+  and hunger (★ current 1D flagship). Stomach `[s g r]`; after `L` the
+  fuel region holds zeros and then food in runs of K=15 identical cells
+  (payloads 189/250/380/639). At every pass end the gadget looks d=15
+  cells ahead of `b` and, if that cell is nonzero, eats one run: `b`
+  walks to it, the run's value is copied into `r`, the run is XORed to
+  zeros, the value is dumped into the moult cell (no extra fuel cell,
+  no witness: the eat flag is uncomputed from `r`). One pass costs one
+  zero, one correction two, one eat gives K. Free-food conveyor cheat
+  (`free_food`): shifts the region so `b` is back at its first cell and
+  refills the tail. Design: `docs/fb1d-m4-metabolism-design.md`. Tests
+  (clean passes, an eat, every single-bit error, 7 vs 8 corrections in
+  one pass, live partner cell, noise with free food at 200 and 300,
+  exact reversal, starvation without the cheat):
+  `python3 programs/fb1d-agent-m4.py [--quick]`.
 - **`programs/fb1d-immunity-m3.py`** — M3: two M2 gadgets on two IPs
-  correcting each other (★ current 1D flagship). Each IP's `ix` scans
+  correcting each other (immunity only). Each IP's `ix` scans
   the other's `~ code ~` block; the gadget code is M2's, unchanged.
   Layout `~ A ~ sA gA LA fuelA ~ B ~ sB gB LB fuelB`. Tests (clean
   lockstep passes, every single-bit error in both blocks, errors in
   both blocks at once, errors on the partner's executing cell mid-pass,
   300/1M noise over both blocks, exact reversal):
   `python3 programs/fb1d-immunity-m3.py [--quick]`.
-- **`programs/fb1d-mttf.py`** — MTTF harness for the M3 pair, ported
-  from `compare-agents-mttf.py`: invariant-based failure detection
-  (ip/a/b/ix escaped, cycle timeout, stomach dirty, L wrong, ix not
-  home, zero starved), first persistent code damage, and the
+- **`programs/fb1d-mttf.py`** — MTTF harness for the M4 agent (default,
+  free food on; `--no-free-food` starves it) or the M3 pair (`--agent
+  m3`), ported from `compare-agents-mttf.py`: invariant-based failure
+  detection (ip/a/b/ix escaped, cycle timeout, stomach dirty, L wrong,
+  ix not home, zero starved), first persistent code damage, and the
   "coincidence" diagnostic (a second flip on an already-flipped cell
   within two passes before the failure). `--fb2d-narrow` runs the fb2d
   narrow agent in the same pool for a side-by-side table;
-  `--no-barriers` turns the wall rule off. Results in
-  `programs/fb1d-mttf-results.csv`.
+  `--no-barriers` turns the wall rule off. Recorded runs:
+  `programs/fb1d-mttf-results.csv` (M3 vs fb2d, 2026-10-12),
+  `programs/fb1d-mttf-m4-food.csv` and `-nofood.csv` (M4, 2026-10-13).
   Run: `python3 programs/fb1d-mttf.py --help`
 - **`programs/fb1d-immunity-m2.py`** — M2: one fb1d gadget (106 cells)
   correcting a static partner block. fb2d layout: fixed stomach `[s g]`
@@ -113,11 +133,14 @@ fb2d is a 2D reversible esoteric language where:
 - **`fb1d.html`** — Browser workbench for fb1d (self-contained, open
   the file directly). Own JS interpreter verified against `fb1d.py`,
   with several IPs as in `fb1d.py` (round-robin step, reverse-order
-  back). Examples "immunity" (the M2 gadget, loaded by default) and
+  back). Examples "immunity" (the M2 gadget, loaded by default),
   "dual" (the M3 pair on two IPs; the IP box picks which IP the status
   line, inspector, "one pass" and "next cell" follow, its heads filled
-  and the other IP's hollow). Color-coded ops, red for
-  nonzero syndrome, heads a/b/ix/IP, stomach cells labelled s/g, hover
+  and the other IP's hollow) and "agent" (M4: food cells orange, a
+  "food" button for the free-food conveyor, which is not reversible so
+  back stops at the last refill, and per-IP counts of passes, eats,
+  corrections and refills in the status line). Color-coded ops, red for
+  nonzero syndrome, heads a/b/ix/IP, stomach cells labelled s/g/r, hover
   inspector with the raw bits (parity bits and a flipped bit marked),
   Hamming diagnosis and jump prediction, click a cell to
   edit or flip a bit, "next cell" / "one pass", reversible noise (over
@@ -564,9 +587,19 @@ open fb1d.html                                # browser workbench, loads the gad
 python3 programs/fb1d-immunity-m3.py          # ~40 s
 python3 programs/fb1d-immunity-m3.py --quick  # ~9 s
 
-# fb1d M3 MTTF curve (fast) and side by side with the fb2d narrow agent (slow):
-python3 programs/fb1d-mttf.py --rates 100,200,300 --seeds 10               # ~1 min
-python3 programs/fb1d-mttf.py --rates 100,200,300 --seeds 10 --fb2d-narrow # ~45 min
+# fb1d M4 agent (two gadgets, metabolism, hunger): clean passes, an eat,
+# every single-bit error, 7 vs 8 corrections per pass, noise with free
+# food, exact reversal, starvation without the cheat:
+python3 programs/fb1d-agent-m4.py          # ~2.5 min
+python3 programs/fb1d-agent-m4.py --quick  # ~40 s
+open fb1d.html                             # workbench: example "agent", "food" button
+
+# fb1d MTTF curves: M4 with free food (default), M4 starving, M3, and
+# side by side with the fb2d narrow agent (slow):
+python3 programs/fb1d-mttf.py --rates 100,200,300 --seeds 10               # M4, ~10 min
+python3 programs/fb1d-mttf.py --rates 200 --seeds 10 --no-free-food        # M4 starves
+python3 programs/fb1d-mttf.py --agent m3 --rates 100,200,300 --seeds 10    # M3, ~1 min
+python3 programs/fb1d-mttf.py --rates 100,200,300 --seeds 10 --fb2d-narrow # + fb2d, ~45 min
 
 # fb1d8 (8-bit 1D language, formerly RBFF): bijectivity + round-trips:
 python3 fb1d8.py --test

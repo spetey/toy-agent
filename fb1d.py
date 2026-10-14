@@ -5,6 +5,8 @@ Authored or modified by Claude
 Version: 2026-09-30 v0.3 (M1 + M2 `( )` and `P Q` extensions, docs/fb1d-port-plan.md)
          2026-10-12 v0.4: readable op names and `#` comments in program text
          2026-10-12 v0.5: multi-block noise, incremental match cache (M3)
+         2026-10-13 v0.6: `a1[ ]a1` and `b1[ ]b1` brackets that enter on
+                          nonzero and repeat while zero (M4)
 
 fb1d is fb1d8 (formerly RBFF; see fb1d8.py, docs/fb1d8_notes.md) with
 fb2d's cells and interoceptor transplanted in, so that the Wikivore can
@@ -37,6 +39,10 @@ the op at tape[p], then p += 1 (a jump lands one past the partner).
   (  if payload(tape[b]) != 0: p = matching )   (same, testing b's cell)
   )  if payload(tape[b]) != 0: p = matching (
   P  tape[b] payload += 1   Q  tape[b] payload -= 1   (fb2d's P/Q)
+  ?  if payload(tape[a]) == 0: p = matching !   (enter body only when nonzero)
+  !  if payload(tape[a]) == 0: p = matching ?   (repeat while zero)
+  %  if payload(tape[b]) == 0: p = matching &   (same, testing b's cell)
+  &  if payload(tape[b]) == 0: p = matching %
   anything else: no-op
 
 "payload != 0" means tape[a] & DATA_MASK != 0, as in fb2d's mirrors.
@@ -47,6 +53,13 @@ bracket families are matched independently (own stacks); barriers
 empty both.  `P` / `Q` (v0.3) let b be a roaming garbage pointer with
 a fixed stomach under a, as fb2d's EX; the gadget's clean-path trace
 is then `P` on b's cell instead of moving the whole working frame.
+`? ! % &` (v0.6, M4) are the opposite-polarity families `a1[ ]a1` and
+`b1[ ]b1`: a block that is entered when the tested cell is nonzero and
+repeated while it is zero.  Reversible for the same reason as `[ ]`
+(the skip condition at the opener equals the repeat condition at the
+closer); matched on their own stacks.  They let a walk start from a
+nonzero cell and stop on the first nonzero cell, which the metabolism
+needs (docs/fb1d-m4-metabolism-design.md).  fb1d has 24 ops.
 
 Readable names (v0.4).  Program text may spell each op by its symbol
 above or by a readable name, separated from its neighbours by
@@ -61,8 +74,10 @@ opcode numbers shared with fb2d, are the same either way.
   syn    mask             a ^= syndrome5 / correction mask of ix's cell (I V)
   a0[ ]a0  b0[ ]b0        brackets testing a / b ([ ] ( )); the 0 is the
                           value that lets the IP in at a0[ and out at ]a0
-                          (any nonzero value sends it round again), so a
-                          later zero-jumping family would be a1[ ]a1
+                          (any nonzero value sends it round again)
+  a1[ ]a1  b1[ ]b1        the zero-jumping families (? ! % &): the IP gets
+                          in at a1[ and out at ]a1 on any nonzero value,
+                          and zero sends it round again
 
 Every name contains a character that is not a symbol, so a token is a
 name if it is in the table and otherwise a run of symbols (`[>+<]`
@@ -122,10 +137,15 @@ import fb1d8
 
 # ─── Opcodes ────────────────────────────────────────────────────────
 
-OP_CHARS = '<>{}BA-+.,mIVj[]()PQ'
+OP_CHARS = '<>{}BA-+.,mIVj[]()PQ?!%&'
 (OP_AL, OP_AR, OP_BL, OP_BR, OP_XL, OP_XR, OP_DEC, OP_INC, OP_DOT,
  OP_COMMA, OP_M, OP_I, OP_V, OP_J, OP_LB, OP_RB, OP_LP, OP_RP,
- OP_P, OP_Q) = range(1, 21)
+ OP_P, OP_Q, OP_LB1, OP_RB1, OP_LP1, OP_RP1) = range(1, 25)
+# bracket op -> (tests b?, jumps on zero?)
+BRACKETS = {OP_LB: (False, False), OP_RB: (False, False),
+            OP_LP: (True, False), OP_RP: (True, False),
+            OP_LB1: (False, True), OP_RB1: (False, True),
+            OP_LP1: (True, True), OP_RP1: (True, True)}
 OP_DOC = [
     ('<', 'a -= 1'), ('>', 'a += 1'),
     ('{', 'b -= 1'), ('}', 'b += 1'),
@@ -143,6 +163,10 @@ OP_DOC = [
     (')', 'if payload(tape[b]) != 0: jump to matching (   (M2: b-tested bracket)'),
     ('P', 'payload(tape[b]) += 1   (M2: fb2d P, for a roaming garbage pointer)'),
     ('Q', 'payload(tape[b]) -= 1   (inverse of P)'),
+    ('?', 'if payload(tape[a]) == 0: jump to matching !   (M4: a1[, enter on nonzero)'),
+    ('!', 'if payload(tape[a]) == 0: jump to matching ?   (M4: ]a1, repeat while zero)'),
+    ('%', 'if payload(tape[b]) == 0: jump to matching &   (M4: b1[, enter on nonzero)'),
+    ('&', 'if payload(tape[b]) == 0: jump to matching %   (M4: ]b1, repeat while zero)'),
     ('other', 'no-op (NOP filler `_` = payload 1017, boundary `~` = 0xFFFF)'),
 ]
 
@@ -160,11 +184,14 @@ for _op, _num in FB2D_NUM.items():
     _FB2D_TO_OP[_num] = _op
 CELL_OP = [_FB2D_TO_OP[_PAYLOAD_TO_OPCODE[_CELL_TO_PAYLOAD_RAW[v]]]
            for v in range(65536)]
-# bracket-matching class: 1 = '[', 2 = ']', 4 = '(', 5 = ')', 3 = barrier,
-# 0 = other.  The two bracket families are matched independently.
-CELL_CLASS = [1 if CELL_OP[v] == OP_LB else 2 if CELL_OP[v] == OP_RB else
-              4 if CELL_OP[v] == OP_LP else 5 if CELL_OP[v] == OP_RP else
-              3 if _CELL_TO_PAYLOAD_RAW[v] == 2047 else 0
+# bracket-matching class: 1 = '[', 2 = ']', 4 = '(', 5 = ')', 6 = '?',
+# 7 = '!', 8 = '%', 9 = '&', 3 = barrier, 0 = other.  The four bracket
+# families are matched independently (each closer's class is its
+# opener's plus one).
+_OPENERS = {OP_LB: 1, OP_LP: 4, OP_LB1: 6, OP_LP1: 8}
+_CLOSERS = {OP_RB: 2, OP_RP: 5, OP_RB1: 7, OP_RP1: 9}
+CELL_CLASS = [_OPENERS.get(CELL_OP[v]) or _CLOSERS.get(CELL_OP[v]) or
+              (3 if _CELL_TO_PAYLOAD_RAW[v] == 2047 else 0)
               for v in range(65536)]
 del _op, _num
 
@@ -197,7 +224,8 @@ OP_NAMES = {'<': 'a<', '>': 'a>', '{': 'b<', '}': 'b>', 'B': 'i<', 'A': 'i>',
             '-': 'a-', '+': 'a+', 'Q': 'b-', 'P': 'b+',
             '.': 'b^=a', ',': 'a^=b', 'm': 'a^=i', 'j': 'i^=a',
             'I': 'syn', 'V': 'mask',
-            '[': 'a0[', ']': ']a0', '(': 'b0[', ')': ']b0'}
+            '[': 'a0[', ']': ']a0', '(': 'b0[', ')': ']b0',
+            '?': 'a1[', '!': ']a1', '%': 'b1[', '&': ']b1'}
 NAME_TO_OP = {name: ch for ch, name in OP_NAMES.items()}
 assert set(OP_NAMES) == set(OP_CHARS)
 SYMBOL_CELL = dict(OP_CELL, **{'~': BOUNDARY, '_': NOP_FILLER, '0': 0})
@@ -237,30 +265,31 @@ def disassemble(cells, names=True):
 
 def match_table(tape, barriers=True, special=None):
     """Stack matching over linear order, one stack per bracket family
-    (`[ ]` on a, `( )` on b).  Returns dict pos -> partner.  A barrier
-    empties both stacks.  `special`, if given, is the sorted list of the
-    addresses whose CELL_CLASS is nonzero (brackets and barriers); the
-    Machine keeps it up to date so a rebuild costs O(brackets), not O(N)."""
-    st_a, st_b, mt = [], [], {}
+    (`[ ]` and `? !` on a, `( )` and `% &` on b).  Returns dict pos ->
+    partner.  A barrier empties every stack.  `special`, if given, is
+    the sorted list of the addresses whose CELL_CLASS is nonzero
+    (brackets and barriers); the Machine keeps it up to date so a
+    rebuild costs O(brackets), not O(N)."""
+    stacks = {1: [], 4: [], 6: [], 8: []}
+    mt = {}
     if special is None:
         special = range(len(tape))
     for i in special:
         c = CELL_CLASS[tape[i]]
         if not c:
             continue
-        if c == 1:
-            st_a.append(i)
-        elif c == 4:
-            st_b.append(i)
-        elif c == 2 or c == 5:
-            st = st_a if c == 2 else st_b
+        if c == 3:
+            if barriers:
+                for st in stacks.values():
+                    st.clear()
+        elif c in stacks:
+            stacks[c].append(i)
+        else:
+            st = stacks[c - 1]
             if st:
                 j = st.pop()
                 mt[i] = j
                 mt[j] = i
-        elif barriers:
-            st_a.clear()
-            st_b.clear()
     return mt
 
 
@@ -385,13 +414,10 @@ class Machine:
                 self._write(ip, a, t[a] ^ CORRECTION_XOR_MASK[t[x]])
             else:
                 self._write(ip, x, t[x] ^ t[a])
-        elif op <= OP_RB:                    # [ ]  test tape[a]
-            if t[a] & DATA_MASK:
-                mt = self.matches()
-                if ip.p in mt:
-                    ip.p = mt[ip.p]
-        else:                                # ( )  test tape[b]
-            if t[ip.b] & DATA_MASK:
+        else:                                # brackets
+            on_b, on_zero = BRACKETS[op]
+            nz = t[ip.b if on_b else a] & DATA_MASK
+            if (not nz) if on_zero else nz:
                 mt = self.matches()
                 if ip.p in mt:
                     ip.p = mt[ip.p]
@@ -652,6 +678,30 @@ def ex_dual(m):
                      f"noise 300 (blocks: set via Machine.set_noise(..., blocks=))")
 
 
+@example('agent', "M4: the M3 pair plus metabolism and hunger (programs/fb1d-agent-m4.py)")
+def ex_agent(m):
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'programs', 'fb1d-agent-m4.py')
+    spec = importlib.util.spec_from_file_location('fb1d_agent_m4', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    built, lay = mod.build()
+    m.tape, m.ips, m.segments = built.tape, built.ips, built.segments
+    m.code_end, m.rounds, m.noise, m.noise_on = built.code_end, 0, None, False
+    m.loop_stop = lay.gadgets[0].p_start
+    m.invalidate()
+    ga, gb = lay.gadgets
+    return dict(lo=ga.s - 1, hi=ga.s + 47,
+                note=f"as `dual`, with a third stomach cell r and food after the zeros: "
+                     f"gadget A stomach s={ga.s} g={ga.g} r={ga.r}, b from {ga.L0}, "
+                     f"{lay.zeros} zeros then runs of {lay.K} food cells to {ga.fuel_hi}; "
+                     f"gadget B likewise from {gb.s}.\n"
+                     f"Each pass end tests the cell {lay.d} ahead of b and eats one run "
+                     f"when it is not zero.  `loop` = one pass (~{7135} rounds).  The free-food "
+                     f"cheat is in the harness and the browser workbench, not here.")
+
+
 @example('fact', "factorials via nested FOR (payloads mod 2048)")
 def ex_fact(m):
     m.load_program(fb1d8.fact_segments(), size=1400)
@@ -735,7 +785,7 @@ def test_bijectivity():
     # arbitrary (corrupted) data under the data-touching ops
     rng = random.Random(7)
     junk = [rng.randrange(65536) for _ in range(3)]
-    for group in ('+-.,', 'mIVj', '[]<>', '(){}', 'PQ{}'):
+    for group in ('+-.,', 'mIVj', '[]<>', '(){}', 'PQ{}', '?!<>', '%&{}', '[?!]'):
         alpha = [OP_CELL[c] for c in group] + junk
         ok &= _exhaustive(3, alpha, f"{group}+junk")
     # random single-IP self-modifying runs on larger tapes
@@ -804,8 +854,13 @@ def test_barriers():
     ok &= match_table(t) == {0: 2, 2: 0, 1: 3, 3: 1}
     t = assemble('([~)]')
     ok &= match_table(t) == {}
+    # four families, four stacks
+    t = assemble('[(?%]&)!')
+    ok &= match_table(t) == {0: 4, 4: 0, 1: 6, 6: 1, 2: 7, 7: 2, 3: 5, 5: 3}
+    t = assemble('?~!%~&')
+    ok &= match_table(t) == {} and match_table(t, False) == {0: 2, 2: 0, 3: 5, 5: 3}
     return _check(ok, "boundary barrier: brackets never pair across `~`; "
-                      "`[ ]` and `( )` match independently")
+                      "`[ ]`, `( )`, `? !` and `% &` match independently")
 
 
 def test_b_brackets():
@@ -855,6 +910,70 @@ def test_b_brackets():
     return _check(ok, "( ) brackets: enter on b==0, repeat while b!=0, "
                       "a free inside; [ ] leaves b untested; P/Q count on b's "
                       "cell and reverse exactly")
+
+
+def test_one_brackets():
+    """`? X !` runs X iff payload(tape[a]) != 0 and repeats while it is
+    zero; `% X &` the same on b.  Walks: `% } &` from a nonzero cell
+    stops on the next nonzero cell; `? < !` likewise with a."""
+    ok = True
+    # a nonzero: enter, bump b's cell, exit (a's cell still nonzero)
+    m = Machine(16)
+    m.tape[0:3] = assemble('?P!')
+    m.poke(8, 5)
+    m.ips[0].a, m.ips[0].b = 8, 9
+    m.run(3)
+    ok &= m.peek(9) == 1 and m.ips[0].p == 3
+    # a zero: skip in one step
+    m = Machine(16)
+    m.tape[0:3] = assemble('?P!')
+    m.ips[0].a, m.ips[0].b = 8, 9
+    m.run(1)
+    ok &= m.peek(9) == 0 and m.ips[0].p == 3
+    # a zero at the closer repeats: ? - ! from 1 runs the body twice (1 -> 0
+    # -> 2047) and exits on the nonzero
+    m = Machine(16)
+    m.tape[0:3] = assemble('?-!')
+    m.poke(8, 1)
+    m.ips[0].a = 8
+    n = m.run(10**5, stop_at=3)
+    ok &= m.peek(8) == 2047 and n == 5
+    # walk on b: % } & from a nonzero over three zeros lands on the next nonzero
+    m = Machine(16)
+    m.tape[0:3] = assemble('%}&')
+    m.poke(9, 7); m.poke(13, 2)
+    m.ips[0].b = 9
+    m.run(20, stop_at=3)
+    ok &= m.ips[0].b == 13
+    # walk back: % { & from 13 lands on 9
+    m.tape[0:3] = assemble('%{&'); m.invalidate()
+    m.ips[0].p = 0
+    m.run(20, stop_at=3)
+    ok &= m.ips[0].b == 9
+    # same on a
+    m = Machine(16)
+    m.tape[0:3] = assemble('?>!')
+    m.poke(9, 7); m.poke(13, 2)
+    m.ips[0].a = 9
+    m.run(20, stop_at=3)
+    ok &= m.ips[0].a == 13
+    # the compress loop of the metabolism: % } . & with a on a copy of v
+    m = Machine(32)
+    m.tape[0:4] = assemble('%}.&')
+    for i in range(5):
+        m.poke(10 + i, 300)
+    m.poke(15, 301)
+    m.poke(8, 300)
+    m.ips[0].a, m.ips[0].b = 8, 10
+    s0 = m.state()
+    n = m.run(100, stop_at=4)
+    ok &= [m.peek(10 + i) for i in range(6)] == [300, 0, 0, 0, 0, 300 ^ 301]
+    ok &= m.ips[0].b == 15 and _rev(m, n, s0)
+    # a1 IF-NONZERO on a zero-family loop's flag, mixed nesting: [ ? ] !
+    t = assemble('[?]!')
+    ok &= match_table(t) == {0: 2, 2: 0, 1: 3, 3: 1}
+    return _check(ok, "? ! and % &: enter on nonzero, repeat while zero; walks "
+                      "stop on the next nonzero cell; compress loop; reverse")
 
 
 def test_ix_ops():
@@ -951,7 +1070,8 @@ def test_names():
     ok &= assemble('b0[ a+ ]b0') == assemble('(+)')
     ok &= assemble('a+ # comment ~ [ \n  a+') == assemble('++')
     ok &= assemble('~_0') == [BOUNDARY, NOP_FILLER, 0]
-    for bad in ('a', 'x<', '[a+', 'a^b', 'abc', '[a', ']a', 'a1[', '0[a'):
+    ok &= assemble('a1[ b> ]a1 b1[ a< ]b1') == assemble('?}!%<&')
+    for bad in ('a', 'x<', '[a+', 'a^b', 'abc', '[a', ']a', 'a2[', '0[a'):
         try:
             assemble(bad)
             ok = False
@@ -988,6 +1108,7 @@ def run_tests(long=False):
     print("== brackets / ix ==")
     ok &= test_barriers()
     ok &= test_b_brackets()
+    ok &= test_one_brackets()
     ok &= test_ix_ops()
     print("== fb1d8 examples on 16-bit cells ==")
     ok &= test_examples()
