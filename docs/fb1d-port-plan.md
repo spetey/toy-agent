@@ -547,6 +547,122 @@ That is the milestone criterion: runs indefinitely with free food at
 200/1M (3 of 10 survive 10M rounds, the rest die of 2-bit errors as
 M3 does), starves without it.
 
+## Open question: two IPs, exploration and reproduction on a line (2026-10-15)
+
+Raised by Steve while reviewing the any-length-runs design: two IPs
+cannot both explore an endless environment on a line, and if each took
+one direction there would be no room for a third gadget, so what is
+the 1D project for in the long run?  This section states what is true
+today, what a line constrains, the layouts that could work, and the
+decision to take before M5.  Nothing below is settled.
+
+### What is true today
+
+- **Neither agent explores.**  fb2d's EX roams one torus row of width
+  W and never leaves it; fb1d's `b` roams the fuel region between its
+  own stomach and the next wall.  In both, food appears by the
+  free-food cheat, which overwrites garbage with fresh food.  The cheat
+  is the one irreversible step in either simulation; it is where the
+  environment's entropy is exported, and any open environment on a
+  finite tape or torus needs such a sink somewhere.  fb1d is therefore
+  not worse than fb2d here; both agents live in a box of their own
+  width.
+- **The box is per gadget.**  Layout today:
+  `~ A ~ [sA gA rA] LA fuelA→ ~ B ~ [sB gB rB] LB fuelB→`.  A's food is
+  bounded by B's leading wall, B's by the end of the tape.  Each
+  gadget's trail grows rightward from its stomach; the invariant
+  "everything behind `b` is nonzero, zeros ahead, then food" is what
+  every walk in WORK and the eat relies on.
+- **What a head can cross.**  `b1[ b> ]b1` walks from a nonzero cell to
+  the next nonzero cell; `b0[ b> ]b0` from a zero to the next zero.  So
+  a head can traverse any tape by alternating the two walks, at any
+  distance, with no count; what it cannot do is write on the way and
+  keep the trail invariant, and it cannot stop at a cell it has no
+  local test for (a code block looks like a run of nonzero cells).
+  The any-length eat (design doc, "check before every consumption") is
+  distance-agnostic: it walks to the first nonzero cell wherever that
+  is, and leaves its garbage at the front of what it ate.  It does not
+  assume the food is near, and it does not care which side of the
+  stomach the fuel lies on.
+
+### What a line constrains
+
+- Two gadgets that eat in the same direction past each other would put
+  one head's garbage in the other's path; the per-head trail invariant
+  does not survive a second writer in the same region.  Facing them
+  outward (`←fuelA sA ~ A ~ ~ B ~ sB fuelB→`) gives each an unbounded
+  side, and the two IPs still correct each other's blocks across the
+  middle, but it uses up both directions: a third gadget has nowhere
+  to face.  A chain `A fuelA B fuelB C fuelC` keeps the mutual
+  correction (A↔B, B↔C) and gives every gadget a pocket, but every
+  pocket is bounded by the next gadget and the environment cannot flow
+  in.  On a torus the two outward-facing regions are one region met
+  from both ends, which is the fb2d EX row again.
+- In 2D the same question exists and is unsolved; the torus just has
+  more rooms (rows) in which to postpone it.  Neither project has an
+  agent that leaves home.
+
+### Layouts that could work
+
+1. **A train.**  Gadgets move.  A gadget eats the food ahead of it into
+   zeros, copies its code (and stomach) forward into those zeros, and
+   abandons the old copy, which becomes trail.  Then "the fuel pocket
+   ahead" is the environment itself, every gadget faces the same way,
+   a line of gadgets is a train each eating what the one in front
+   left, and reproduction is the same operation as moving: copy
+   forward without abandoning the original.  Copying in fb1d can only
+   XOR into zero cells (`docs/fb1d8_notes.md`, caveats), and the eat
+   is precisely what makes zero cells, so metabolism and replication
+   are one resource loop.  The pair's mutual correction has to survive
+   a move: A copies itself past B, then B past A, or the pair copies
+   as a unit.  This is the natural 1D ecology and it is a big
+   milestone, not an M5 tweak.
+2. **Organs.**  Keep the gadgets fixed and separate the roles: one
+   metabolism IP that faces the open side and produces zeros, and
+   correction IPs that consume them.  Zeros have positions, so sharing
+   them means moving them (swap chains or a shared trail with one
+   writer), which is what the per-head trail avoids.  Cheaper than a
+   train, but it does not give reproduction and it only moves the box
+   boundary outward by one gadget.
+3. **Accept the box.**  fb1d's job is the mechanisms (correction,
+   metabolism, hunger, the reversibility arguments, the workbench) in
+   the simplest geometry, measured against fb2d; ecology and
+   reproduction are taken up in 2D, or in 1D as a new project with the
+   train model from the start.  Everything built so far keeps its
+   value under this reading.
+
+### The decision to take before M5
+
+Whether fb1d continues as (3), the mechanisms project with a box
+environment, or turns toward (1), the train.  Points that bear on it:
+
+- (1) changes what the agent is: a gadget that eats forward and copies
+  forward has no fixed home, so "position-relative to the stomach"
+  becomes "position-relative to the copy", and the 2-bit copy-over
+  (M5) would read from a partner that is itself moving.
+- The immune pair is the unit that would have to reproduce; copying
+  one gadget's 220 cells into zeros ahead costs 220 zeros, i.e. about
+  220 cells of eaten food, plus the walk to carry each cell (there is
+  no block copy; each cell is `a^=b`-style moved with both heads
+  present, as the `copy` example does).  The cost is large but it is
+  the same resource the eat already produces, so the accounting is
+  natural.
+- Under (3) the any-length eat is still worth building: it removes the
+  one food convention (fixed K) that does not fit learned
+  compressions, and it is distance-agnostic, so it is the right eat
+  under (1) as well.  The free-food cheat stays a cheat under every
+  reading until something moves.
+- fb1d's advantages over fb2d for the ecology question: the geometry is
+  trivial (two directions), copying is a single idiom, and the
+  workbench can show a whole train on one screen.  Its disadvantage is
+  the one raised: two directions is all there is, so a population is a
+  train or nothing.
+
+Until this is decided, M5 (2-bit copy-over) is still the next
+mechanism and is independent of the choice.  The metabolism rework is
+designed (design doc, 2026-10-15) and paused by Steve's choice pending
+this question; building it is a day's work when wanted.
+
 ## Recommended model and effort per stage
 
 Written 2026-09-25 as budget guidance: spend on the strongest model
@@ -577,6 +693,7 @@ and debug it against the tests.
 | M2 ✓ | Single gadget correcting a static partner block (no partner IP) | corrects injected 1-bit errors anywhere in the block; garbage per correction measured |
 | M3 ✓ | Dual gadgets, mutual correction, MTTF harness | MTTF curves at 100/200/300 flips per 1M, compared to fb2d narrow agent |
 | M4 ✓ | Metabolism + hunger + free-food cheat + GUI | agent runs indefinitely with free food at 200 flips per 1M; starves without it, as fb2d does |
+| M4b | Runs of any length: check for food before every consumption, no `K` (designed 2026-10-15, see `docs/fb1d-m4-metabolism-design.md`; build paused pending the open question above) | M4's tests pass with runs of random length ≥ 4; MTTF re-measured |
 | M5 | 2-bit copy-over, boundary tweak if adopted, notes | MTTF gain measured; `docs/` updated |
 
 M1 is mostly transplant work.  M2 is where the idioms get stress-tested

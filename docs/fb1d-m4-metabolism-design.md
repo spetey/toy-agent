@@ -214,3 +214,197 @@ to failure at 100 / 200 / 300 flips per 1M over both blocks, against
 all trials starve at ~387k rounds without it on a 150-cell region.
 Details and the reading of the failure causes: the M4 status section
 of `docs/fb1d-port-plan.md`.
+
+## Next: runs of any length (written 2026-10-14, design settled, not yet implemented)
+
+The `K`-run convention above is the one thing in M4 that does not fit
+the longer plan (learned compressions, abstractly compressible
+sequences).  This section records what was tried in the M4 thread,
+what does not work, and the fix to implement: the stranding theorem
+(correct), a first fix that turned out unsound when checked against
+the bracket rules, and the per-consumption check that replaces it.
+
+### The stranding theorem
+
+Every fb1d loop is "enter iff P, then repeat while not P" (the opener's
+skip condition must equal the closer's repeat condition, or the step
+back is ambiguous).  So a walk over zeros must begin on a nonzero cell
+and ends on the next nonzero cell; from a zero amid zeros no bracket
+walk can start.  The compress loop `%}.&` therefore never XORs its
+entry cell `E` (the run's first cell `F`): it enters on `E` nonzero,
+and each iteration moves first and XORs second.  After the walk back
+from `M`, `E` is the one nonzero cell in a sea of zeros, and *the head
+that zeroes `E` is left standing on a zero*.  It can only leave by a
+known number of unconditional moves, and the only nonzero cells are
+`L` (behind, at the unknown distance `z_old + 1`) and `M` (ahead, at
+distance `k`, the run length).  The `K` convention makes `k` known.
+
+**A second roaming head does not help.**  The thread's first idea was
+a tail head `t` one cell behind the eater `h`, so that `t` zeroes `E`
+while `h` stands on a nonzero cell and `t` comes home by arithmetic.
+Written out, every ordering fails on the same point: at the moment `E`
+is zeroed the other head must be on a nonzero cell at a *known offset*
+from `E`, and `E`'s neighbours on both sides are zeros (old zeros to
+the left, compressed zeros to the right), so the only such cells are
+again `L` and `M`.  Whichever head writes last is stranded, with or
+without tests of its own, with or without a flag.  The same holds for
+any number of heads.  (Counting the walk or the run into a stomach
+counter does work, but costs the FOR idiom, ~40 ops, a third garbage
+cell per eat, and the counter wraps at 2048.)
+
+### A first fix that does not work: leave `E` alone and walk over it
+
+The M4 thread's first proposal was: do not zero `E`, and make every
+move of `b` that expects a fresh zero a walk `%}&` instead of a plain
+`}`, so that `b` steps over `E`.  Checked against the bracket rules
+(2026-10-14) it fails three times over:
+
+1. **`%}&` is a walk to the next *nonzero* cell.**  `%` enters iff
+   `tape[b] != 0` and `&` repeats while `tape[b] == 0`, so from `L`
+   (nonzero) the walk passes over every zero and stops on `E` or on the
+   food.  The walk to the next zero is `(})`, which can only be entered
+   from a zero.  There is no loop that moves a head from a nonzero cell
+   to the next zero: the entry condition of a loop is the negation of
+   its repeat condition, so a loop entered on a nonzero cell always
+   ends on a nonzero cell.  "If this cell is nonzero, move once" cannot
+   be written either, for the same reason.
+2. **WORK needs `b` on a zero at the merge.**  The dirty path's second
+   fresh cell is tested by `(+)` (M2: `g += 1` iff `tape[b] == 0`) to
+   merge with the clean path; an `E` there, or in the mask cell under
+   `.,`, breaks the gadget.
+3. **A spurious eat of `E` strands `b`.**  When `E` lies within `d` of
+   `L` and the lookahead fires on food beyond it, the walk stops on
+   `E`; the compress loop then XORs `E+1` (a compressed zero) to `v`
+   and exits, the restore makes it zero again, and `b` stands on a zero
+   with no bracket walk able to start.  Only runs longer than `d`
+   avoid it, which is not "any length".
+
+### The fix: check for food before every consumption
+
+The stranding theorem says the cell that is zeroed last must be at a
+known offset from a nonzero cell.  M4 uses `F = M - K`.  The other
+known offset is **the first food cell itself, if the gadget only ever
+walks to it when it is the very next thing ahead of `b`**, i.e. when
+there is no reserve of zeros at all.  Then the eat need not zero `F`:
+`F` stays nonzero and becomes the last trail cell, `b` rests on it,
+and the run's remaining cells are the new zeros.  No `K`, no `d`, no
+margin, no walk back to `L`.
+
+What makes this safe is to test for food **before every move onto a
+fresh cell**, not once per pass.  Each such move is then guaranteed a
+zero (while food lasts), so there is no limit on corrections per
+pass.  The consumptions are the two cells of a correction (`}.,}` in
+WORK's dirty block) and the moult (`}P`), so the check goes into the
+dirty block, once per correction, and before the moult.
+
+Food format: as M4, runs of identical cells with neighbouring runs
+different (the compress stops at the first cell `!= v`), of **any
+length `k >= 4`**, no separators.  The bound is the price of the
+consumption the check precedes: one eat nets `k - 2` zeros (below),
+and the correction path needs two, so `k >= 4`; the moult needs one,
+so the pass-end check would be content with `k >= 3`.  "Eat until
+satisfied" cannot be written as a loop (enter iff hungry, repeat while
+hungry has the same polarity at both ends, which the bracket rule
+forbids), so one check is one eat.  A 1-cell run is fatal whatever the
+check: after the compress `F+1` is the next run's first cell, not a
+zero, and the flag test below misfires; a separator cell between runs
+would be such a run, so there are none.  (A single corrupted run cell
+splits a run and usually leaves a piece shorter than 4, so food
+corruption is fatal, as it is in M4 where the compress stops early and
+`}×K` lands wrong.)
+
+The block CHK, with `a` on `g` (which is 0), `b` on `L` (nonzero),
+`r = 0`; readable names on the right:
+
+```
+TEST                                              a on g, b on L
+  }            b to L+1                           b>
+  b1[ + ]b1    g += 1 iff tape[L+1] != 0          b1[ a+ ]b1
+  {            b to L                             b<
+
+EAT (skipped when g == 0)
+  a1[          enter iff g != 0                   a1[
+    >          a to r                             a>
+    b1[ } ]b1  walk b to F, the first nonzero cell
+    ,          r = v                              a^=b
+    b1[ } . ]b1  compress: b += 1, tape[b] ^= v; repeat while the
+               result is 0.  F+1 .. M-1 were v and are now 0; stops
+               on M (w ^ v != 0, w != v)
+    .          tape[M] ^= v: M restored to w      b^=a
+    b1[ { ]b1  walk b left over the zeros back to F (still v)
+    ,          r ^= v: r = 0                      a^=b
+    }          b to F+1, a zero (k >= 2)          b>
+    <          a to g                             a<
+  ]a1          g still 1: falls through
+
+UNFLAG AND REST                                   a on g
+  b0[ - ]b0    g -= 1 iff tape[b] == 0: true after an eat (b on F+1,
+               a zero), false otherwise (b on L, nonzero)
+  P            tape[b] += 1: after an eat F+1 becomes 1, the new L;
+               otherwise a harmless trace increment of L (as M2's P)
+```
+
+27 ops.  The flag is uncomputed from where `b` stands, not from `r`
+(which the eat already cleared against `F`, the cell it came from, so
+no `r` dump cell and no dependence on any constant).  Both paths end
+with `b` on a nonzero cell, `r = 0`, `g = 0`, `a` on `g`.
+
+What an eat leaves: `F = v` and `F+1 = 1` as trail cells, zeros
+`F+2 .. M-1` ahead (`k - 2` of them), `M` intact.  Cost one fuel cell
+(`F+1`), gain `k - 1`, net `k - 2`.
+
+**Two-cell variant CHK2** for the correction path, which consumes two
+fresh cells: test `L+2` instead of `L+1` (`}} b1[ + ]b1 {{`, 29 ops).
+If `L+1` is zero and `L+2` is food the walk goes to `L+2` and the zero
+at `L+1` is abandoned behind `b` (at most one per correction; the
+walks back never reach it, so a zero in the trail is harmless).  If
+`L+1` is already food the test sees the run's second cell and fires.
+Using CHK twice per correction instead would cost 54 ops.
+
+Placement.  M2's dirty block `[ <IVj+ }.,} > ]` becomes
+`[ <IVj+ > CHK2 < }.,} > ]` (CHK2 starts and ends with `a` on `g`,
+the block's `g == 0` is its flag cell and comes back to 0).  The pass
+end becomes `> CHK < }P` (a on `s` after the rewind, as in M2).  M4's
+hunger test, eat block, unflag and dump moult are all gone.
+
+Sizes: M2's 106 + 3 × 29 + 27 = 220 code cells per gadget (M4: 185).
+The clean path of WORK is unchanged, so a clean pass costs about what
+M2's does plus 27 ops at the pass end; a correction costs about 30 ops
+more than in M4.
+
+Invariants for the harness: `L = 1` at every pass start (the eat's new
+`L` is a `P`'d zero, as the moult's), `r = 0`, stomach zero; an eat is
+counted when the IP passes the eat block's first op.  Starvation looks
+as in M4: the walk to the food finds the partner's wall and then its
+code; the compress zeroes the partner's first code cell (a multi-bit
+change the partner's gadget cannot repair).
+
+Why not keep the lookahead and the pass-end eat and only drop the
+walk back to `L`?  Then `b` would rest on `F` with the `z_old <= d-1`
+zeros between the old `L` and `F` abandoned at every eat: with
+`d = 15` an eat of a 15-run would net nothing.  The per-consumption
+check has `z_old = 0` by construction.
+
+Why no margin is needed: in M4 the lookahead `d` bought `(d-1)/2`
+corrections per pass; here every consumption is preceded by its own
+check, so the only way to run out is to run out of food.  The price is
+code size (`+35` cells over M4) and the three copies of CHK2 inside
+WORK, which are on the dirty path only.
+
+Prototype (2026-10-14, scratch script, one IP, a loop of `CHK2 }.,}
+P CHK }P` over random runs of length 4 to 12): every consumption lands
+on a zero until the last run is eaten, then the walk finds the wall
+and the gadget dies as described; a 28-iteration run (84 consumptions)
+reversed exactly.  With runs of length 2 the first correction after a
+2-run lands on food, which is how the `k >= 4` bound was found.
+
+### A tail head, if wanted anyway
+
+Steve likes the idea of a second roaming head and the names *head*
+(`h`: leads, tests, eats, writes the trail) and *tail* (`t`: follows).
+It is not needed for the fix above, and it does not remove the
+stranding problem (a tail tied to `h` by unconditional moves is on a
+zero whenever `h` is, and no bracket tests it), so add it when a use
+appears (for instance a compression that compares two cells at a known
+offset).  Three ops would do (`t<`, `t>`, `tape[t] ^= tape[a]`), with
+`b` renamed to `h` as its own commit.
